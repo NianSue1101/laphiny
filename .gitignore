@@ -1,0 +1,16 @@
+node_modules/
+.expo/
+dist/
+*.tsbuildinfo
+android/.gradle/
+android/app/build/
+android/build/
+*.apk
+*.aab
+*.hprof
+.env
+.env.*
+!.env.example
+local.properties
+*.log
+.DS_Store
