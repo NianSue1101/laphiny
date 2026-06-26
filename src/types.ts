@@ -24,7 +24,40 @@ export interface Room {
   members: RoomMember[];
   sessionIds: Record<string, string>;
   sessionKey: string;
+  contextLimit?: number;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface SyncConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  lastPulledAt?: string;
+  lastPushedAt?: string;
+  lastEventPulledAt?: string;
+  updatedAt: string;
+}
+
+export type SquareEventKind = 'message' | 'system' | 'task' | 'health';
+
+export interface SquareEvent {
+  id: string;
+  kind: SquareEventKind;
+  source: string;
+  target?: string;
+  roomId?: string;
+  roomName?: string;
+  title: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface SyncSnapshot {
+  connections: HermesConnection[];
+  rooms: Room[];
+  messagesByRoom: Record<string, ChatMessage[]>;
+  squareEvents: SquareEvent[];
   updatedAt: string;
 }
 
@@ -39,7 +72,7 @@ export interface Attachment {
   kind: 'image' | 'text' | 'file';
 }
 
-export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'error';
+export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopped' | 'error';
 
 export interface ChatMessage {
   id: string;

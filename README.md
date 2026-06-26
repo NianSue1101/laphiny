@@ -35,6 +35,7 @@ npm run start
 npm run web
 npm run typecheck
 npm test
+npm run sync:server
 ```
 
 ## Web 构建

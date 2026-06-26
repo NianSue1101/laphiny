@@ -65,6 +65,11 @@ export class HermesClient {
       signal: options?.signal,
     });
 
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+    }
+
     const reader = response.body?.getReader();
     if (!reader) {
       throw new Error('Response body is not readable');
@@ -72,6 +77,10 @@ export class HermesClient {
 
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    const abortReader = () => {
+      void reader.cancel().catch(() => undefined);
+    };
+    options?.signal?.addEventListener('abort', abortReader, { once: true });
 
     try {
       while (true) {
@@ -101,8 +110,17 @@ export class HermesClient {
           }
         }
       }
+
+      if (options?.signal?.aborted) {
+        throw new Error('aborted');
+      }
     } finally {
-      reader.cancel();
+      options?.signal?.removeEventListener('abort', abortReader);
+      try {
+        await reader.cancel();
+      } catch {
+        // The reader may already be closed or canceled.
+      }
     }
   }
 
