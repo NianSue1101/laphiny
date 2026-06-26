@@ -24,6 +24,7 @@ export interface Room {
   members: RoomMember[];
   sessionIds: Record<string, string>;
   sessionKey: string;
+  contextLimit?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,7 +40,7 @@ export interface Attachment {
   kind: 'image' | 'text' | 'file';
 }
 
-export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'error';
+export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopped' | 'error';
 
 export interface ChatMessage {
   id: string;
