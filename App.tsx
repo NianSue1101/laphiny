@@ -1673,7 +1673,7 @@ function buildChatHistory(
   contextLimit = DEFAULT_CONTEXT_LIMIT,
 ): HermesChatMessage[] {
   const systemPrefix: HermesChatMessage[] = room.kind === 'group'
-    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，当前被 @ 的 Hermes 成员名是「${member.alias}」。请只代表自己回复。` }]
+    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，当前被 @ 的 Hermes 成员名是「${member.alias}」。请只代表自己回复。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。` }]
     : [];
 
   const history = previousMessages
@@ -1705,7 +1705,7 @@ function buildChatHistoryForDelegation(
   return [
     {
       role: 'system',
-      content: `你正在 Laphiny 群聊「${room.name}」中，${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复。`,
+      content: `你正在 Laphiny 群聊「${room.name}」中，${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。`,
     },
     ...previousMessages
       .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
