@@ -24,7 +24,7 @@ import * as Clipboard from 'expo-clipboard';
 
 import { pickDocuments, pickImages } from './src/lib/attachments';
 import { HermesClient } from './src/lib/hermes_client';
-import { resolveMentionTargets } from './src/lib/mentions';
+import { resolveAssistantMentions, resolveMentionTargets } from './src/lib/mentions';
 import { buildHermesUserContent } from './src/lib/payload';
 import { LaphinySyncClient } from './src/lib/sync_client';
 import {
@@ -766,17 +766,45 @@ export default function App() {
     const assistantPlaceholders = targets.map((member) => makeAssistantPlaceholder(room.id, member));
     appendMessagesToRoom(room.id, assistantPlaceholders);
 
+    const firstRoundResponses = new Map<string, { content: string; member: RoomMember }>();
+
     await Promise.all(assistantPlaceholders.map(async (placeholder, index) => {
       const member = targets[index];
       if (!member) return;
-      await streamHermesReply({
-        room,
-        member,
-        placeholderId: placeholder.id,
-        text: textForHermes,
-        attachments,
-        previousMessages,
-      });
+      const connection = connectionById.get(member.connectionId);
+      if (!connection) {
+        updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
+        return;
+      }
+
+      try {
+        const client = new HermesClient(connection);
+        updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'running', content: '' });
+
+        let accumulated = '';
+        for await (const chunk of client.chatCompletionStream({
+          model: connection.model,
+          messages: buildChatHistory(selectedMessages, selectedRoom, member, textForHermes, pendingAttachments),
+          stream: true,
+        }, {
+          sessionId: selectedRoom.sessionIds[connection.id],
+          sessionKey: selectedRoom.sessionKey,
+          timeoutMs: 120_000,
+        })) {
+          accumulated += chunk;
+          updateMessageInRoom(selectedRoom.id, placeholder.id, { content: accumulated });
+        }
+
+        const answer = accumulated.trim() || '[Hermes 没有返回内容]';
+        firstRoundResponses.set(placeholder.id, { content: answer, member });
+        updateMessageInRoom(selectedRoom.id, placeholder.id, { content: answer, status: 'sent' });
+      } catch (error) {
+        updateMessageInRoom(selectedRoom.id, placeholder.id, {
+          status: 'error',
+          error: getErrorMessage(error),
+          content: '发送失败',
+        });
+      }
     }));
   }
 
@@ -813,18 +841,69 @@ export default function App() {
       return;
     }
 
-    const previousMessages = selectedMessages.slice(0, userMessageIndex);
-    const rawText = userMessage.content === '[附件]' ? '' : userMessage.content;
-    const resolution = resolveMentionTargets(selectedRoom, rawText);
+    // Auto-forward: check if any agent delegated to another via @mention
+    if (selectedRoom.kind === 'group') {
+      for (const [, { content, member }] of firstRoundResponses) {
+        const forwardResolution = resolveAssistantMentions(selectedRoom, content, member.connectionId);
+        if (forwardResolution.targets.length === 0) continue;
 
-    await streamHermesReply({
-      room: selectedRoom,
-      member,
-      placeholderId: message.id,
-      text: resolution.strippedText || rawText,
-      attachments: userMessage.attachments ?? [],
-      previousMessages,
-    });
+        const forwardPlaceholders = forwardResolution.targets.map((target) => {
+          const placeholder = makeAssistantPlaceholder(selectedRoom.id, target);
+          placeholder.delegatedFrom = member.alias;
+          return placeholder;
+        });
+        appendMessagesToRoom(selectedRoom.id, forwardPlaceholders);
+
+        await Promise.all(forwardPlaceholders.map(async (placeholder, idx) => {
+          const target = forwardResolution.targets[idx];
+          if (!target) return;
+          const connection = connectionById.get(target.connectionId);
+          if (!connection) {
+            updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
+            return;
+          }
+
+          try {
+            const client = new HermesClient(connection);
+            updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'running', content: '' });
+
+            const historyMsgs = buildChatHistoryForDelegation(
+              selectedMessages,
+              selectedRoom,
+              target,
+              forwardResolution.strippedText,
+              member.alias,
+              content,
+            );
+
+            let accumulated = '';
+            for await (const chunk of client.chatCompletionStream({
+              model: connection.model,
+              messages: historyMsgs,
+              stream: true,
+            }, {
+              sessionId: selectedRoom.sessionIds[connection.id],
+              sessionKey: selectedRoom.sessionKey,
+              timeoutMs: 120_000,
+            })) {
+              accumulated += chunk;
+              updateMessageInRoom(selectedRoom.id, placeholder.id, { content: accumulated });
+            }
+
+            const answer = accumulated.trim() || '[Hermes 没有返回内容]';
+            updateMessageInRoom(selectedRoom.id, placeholder.id, { content: answer, status: 'sent' });
+          } catch (error) {
+            updateMessageInRoom(selectedRoom.id, placeholder.id, {
+              status: 'error',
+              error: getErrorMessage(error),
+              content: '转发失败',
+            });
+          }
+        }));
+      }
+    }
+
+    setSending(false);
   }
 
   function insertMention(token: string) {
@@ -1131,6 +1210,12 @@ export default function App() {
                 isWideLayout && styles.messageBubbleWide,
               ]}
             >
+              {message.delegatedFrom ? (
+                <View style={styles.delegationBadge}>
+                  <Ionicons name="git-branch-outline" size={12} color="#6b7280" />
+                  <Text style={styles.delegationText}>↳ {message.delegatedFrom} 委托</Text>
+                </View>
+              ) : null}
               <View style={styles.messageMeta}>
                 <Text style={styles.author}>{message.authorName}</Text>
                 <Text style={[styles.status, message.status === 'error' && styles.statusError]}>
@@ -1602,6 +1687,31 @@ function buildChatHistory(
       role: 'user',
       content: buildHermesUserContent(text, attachments),
     },
+  ];
+}
+
+function buildChatHistoryForDelegation(
+  previousMessages: ChatMessage[],
+  room: Room,
+  member: RoomMember,
+  taskText: string,
+  delegatedFrom: string,
+  delegatorMessage: string,
+): HermesChatMessage[] {
+  return [
+    {
+      role: 'system',
+      content: `你正在 Laphiny 群聊「${room.name}」中，${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复。`,
+    },
+    ...previousMessages
+      .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
+      .slice(-20)
+      .map<HermesChatMessage>((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    { role: 'assistant', content: delegatorMessage },
+    { role: 'user', content: taskText },
   ];
 }
 
@@ -2669,6 +2779,22 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     borderColor: '#fde68a',
     backgroundColor: '#fffbeb',
+  },
+  delegationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: '#f3f4f6',
+    alignSelf: 'flex-start',
+  },
+  delegationText: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '700',
   },
   messageBubbleWide: {
     maxWidth: 760,
