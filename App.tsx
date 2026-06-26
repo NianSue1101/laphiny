@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -820,10 +821,7 @@ export default function App() {
               {message.attachments?.length ? (
                 <View style={styles.attachments}>
                   {message.attachments.map((attachment) => (
-                    <View key={attachment.id} style={styles.attachment}>
-                      <Ionicons name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={14} color="#0f766e" />
-                      <Text style={styles.attachmentText}>{attachment.name}</Text>
-                    </View>
+                    <AttachmentPreview key={attachment.id} attachment={attachment} />
                   ))}
                 </View>
               ) : null}
@@ -872,14 +870,11 @@ export default function App() {
           {pendingAttachments.length ? (
             <View style={styles.pendingAttachments}>
               {pendingAttachments.map((attachment) => (
-                <TouchableOpacity
+                <AttachmentPreview
                   key={attachment.id}
-                  style={styles.pendingAttachment}
+                  attachment={attachment}
                   onPress={() => setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id))}
-                >
-                  <Ionicons name="close-circle" size={14} color="#0f766e" />
-                  <Text style={styles.pendingAttachmentText}>{attachment.name}</Text>
-                </TouchableOpacity>
+                />
               ))}
             </View>
           ) : null}
@@ -1250,6 +1245,37 @@ function SecondaryButton({ icon, label, onPress, disabled = false }: { icon?: Ic
   );
 }
 
+function AttachmentPreview({ attachment, onPress }: { attachment: Attachment; onPress?: () => void }) {
+  const summary = getAttachmentSummary(attachment);
+  const isImage = attachment.kind === 'image' && Boolean(attachment.dataUrl || attachment.uri);
+  const content = (
+    <>
+      {isImage ? (
+        <Image source={{ uri: attachment.dataUrl ?? attachment.uri }} style={styles.attachmentThumb} />
+      ) : (
+        <View style={styles.attachmentIcon}>
+          <Ionicons name={attachment.kind === 'text' ? 'document-text-outline' : 'document-outline'} size={18} color="#0f766e" />
+        </View>
+      )}
+      <View style={styles.attachmentInfo}>
+        <Text style={styles.attachmentName} numberOfLines={1}>{attachment.name}</Text>
+        <Text style={styles.attachmentSummary} numberOfLines={2}>{summary}</Text>
+      </View>
+      {onPress ? <Ionicons name="close-circle" size={16} color="#0f766e" /> : null}
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <TouchableOpacity style={styles.attachmentPreview} onPress={onPress}>
+        {content}
+      </TouchableOpacity>
+    );
+  }
+
+  return <View style={styles.attachmentPreview}>{content}</View>;
+}
+
 function MiniButton({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
   return (
     <TouchableOpacity style={styles.miniButton} onPress={onPress}>
@@ -1522,6 +1548,25 @@ function buildMarkdownExport(room: Room, messages: ChatMessage[]): string {
   }
 
   return lines.join('\n');
+}
+
+function getAttachmentSummary(attachment: Attachment): string {
+  const size = formatBytes(attachment.size);
+  if (attachment.kind === 'image') {
+    return ['图片上下文', size].filter(Boolean).join(' · ');
+  }
+  if (attachment.kind === 'text') {
+    const chars = attachment.text?.length ?? 0;
+    return [`文本上下文 ${chars.toLocaleString('zh-CN')} 字符`, size].filter(Boolean).join(' · ');
+  }
+  return ['文件引用，不会直接注入上下文', size, attachment.mimeType].filter(Boolean).join(' · ');
+}
+
+function formatBytes(size?: number): string {
+  if (!size || size <= 0) return '';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function isMarkdownTable(lines: string[], index: number): boolean {
@@ -2094,6 +2139,46 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     marginTop: 8,
     gap: 6,
+  },
+  attachmentPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    maxWidth: 320,
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ccfbf1',
+    backgroundColor: '#f0fdfa',
+  },
+  attachmentThumb: {
+    width: 42,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: '#ccfbf1',
+  },
+  attachmentIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: '#ccfbf1',
+  },
+  attachmentInfo: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  attachmentName: {
+    color: '#0f172a',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  attachmentSummary: {
+    color: '#0f766e',
+    fontSize: 11,
+    lineHeight: 15,
   },
   attachment: {
     flexDirection: 'row',
