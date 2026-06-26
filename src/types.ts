@@ -39,7 +39,7 @@ export interface Attachment {
   kind: 'image' | 'text' | 'file';
 }
 
-export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'error';
+export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopped' | 'error';
 
 export interface ChatMessage {
   id: string;

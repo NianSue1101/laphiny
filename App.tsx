@@ -1,6 +1,6 @@
 import 'react-native-url-polyfill/auto';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -39,6 +39,7 @@ const STATUS_LABELS: Record<ChatMessage['status'], string> = {
   queued: '排队',
   running: '思考中',
   sent: '已发送',
+  stopped: '已停止',
   error: '失败',
 };
 
@@ -84,13 +85,15 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('chat');
   const [draft, setDraft] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
-  const [sending, setSending] = useState(false);
+  const [activeStreamIds, setActiveStreamIds] = useState<Record<string, true>>({});
+  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
   const [testingConnectionId, setTestingConnectionId] = useState<string | null>(null);
   const [connectionForm, setConnectionForm] = useState({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
   const [jsonPaste, setJsonPaste] = useState('');
   const [groupName, setGroupName] = useState('Hermes 群聊');
   const hydratedRef = useRef(false);
   const messageScrollRef = useRef<ScrollView | null>(null);
+  const streamControllersRef = useRef<Record<string, AbortController>>({});
   const { width } = useWindowDimensions();
 
   useEffect(() => {
@@ -139,6 +142,12 @@ export default function App() {
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
   const selectedMessages = selectedRoom ? messagesByRoom[selectedRoom.id] ?? [] : [];
   const isWideLayout = width >= 900;
+  const sending = Object.keys(activeStreamIds).length > 0;
+  const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
+
+  useEffect(() => {
+    setSelectedTargetIds([]);
+  }, [selectedRoomId]);
 
   function addConnection() {
     const name = connectionForm.name.trim();
@@ -346,6 +355,120 @@ export default function App() {
     }));
   }
 
+  function setStreamActive(messageId: string, active: boolean) {
+    setActiveStreamIds((current) => {
+      if (active) return { ...current, [messageId]: true };
+      const next = { ...current };
+      delete next[messageId];
+      return next;
+    });
+  }
+
+  function toggleTargetSelection(connectionId: string) {
+    setSelectedTargetIds((current) => (
+      current.includes(connectionId)
+        ? current.filter((id) => id !== connectionId)
+        : [...current, connectionId]
+    ));
+  }
+
+  function selectAllTargets() {
+    if (!selectedRoom) return;
+    const enabledMemberIds = selectedRoom.members.filter((member) => member.enabled).map((member) => member.connectionId);
+    setSelectedTargetIds((current) => (current.length === enabledMemberIds.length ? [] : enabledMemberIds));
+  }
+
+  function stopMessage(messageId: string) {
+    streamControllersRef.current[messageId]?.abort();
+  }
+
+  function getSendTargets(room: Room, rawText: string): { targets: RoomMember[]; textForHermes: string } {
+    const resolution = resolveMentionTargets(room, rawText);
+    const manuallySelectedTargets = room.members.filter((member) => (
+      member.enabled && selectedTargetSet.has(member.connectionId)
+    ));
+
+    if (room.kind === 'group' && manuallySelectedTargets.length > 0) {
+      return {
+        targets: manuallySelectedTargets,
+        textForHermes: resolution.strippedText || rawText,
+      };
+    }
+
+    return {
+      targets: resolution.targets,
+      textForHermes: resolution.strippedText || rawText,
+    };
+  }
+
+  async function streamHermesReply({
+    room,
+    member,
+    placeholderId,
+    text,
+    attachments,
+    previousMessages,
+  }: {
+    room: Room;
+    member: RoomMember;
+    placeholderId: string;
+    text: string;
+    attachments: Attachment[];
+    previousMessages: ChatMessage[];
+  }) {
+    const connection = connectionById.get(member.connectionId);
+    if (!connection) {
+      updateMessageInRoom(room.id, placeholderId, { status: 'error', error: 'Hermes 连接不存在', content: '发送失败' });
+      return;
+    }
+
+    const controller = new AbortController();
+    streamControllersRef.current[placeholderId] = controller;
+    setStreamActive(placeholderId, true);
+
+    let streamedText = '';
+    updateMessageInRoom(room.id, placeholderId, { content: '', status: 'running', error: undefined });
+
+    try {
+      const client = new HermesClient(connection);
+      for await (const chunk of client.chatCompletionStream({
+        model: connection.model,
+        messages: buildChatHistory(previousMessages, room, member, text, attachments),
+        stream: true,
+      }, {
+        sessionId: room.sessionIds[connection.id],
+        sessionKey: room.sessionKey,
+        timeoutMs: 120_000,
+        signal: controller.signal,
+      })) {
+        streamedText += chunk;
+        updateMessageInRoom(room.id, placeholderId, { content: streamedText });
+      }
+
+      updateMessageInRoom(room.id, placeholderId, {
+        content: streamedText.trim() || '[Hermes 没有返回内容]',
+        status: 'sent',
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        updateMessageInRoom(room.id, placeholderId, {
+          content: streamedText.trim() || '已停止生成',
+          status: 'stopped',
+        });
+        return;
+      }
+
+      updateMessageInRoom(room.id, placeholderId, {
+        status: 'error',
+        error: getErrorMessage(error),
+        content: streamedText.trim() || '发送失败',
+      });
+    } finally {
+      delete streamControllersRef.current[placeholderId];
+      setStreamActive(placeholderId, false);
+    }
+  }
+
   async function sendMessage() {
     if (!selectedRoom) {
       showNotice('请先创建或选择房间');
@@ -357,9 +480,10 @@ export default function App() {
       return;
     }
 
-    const resolution = resolveMentionTargets(selectedRoom, rawText);
+    const previousMessages = selectedMessages;
+    const attachments = pendingAttachments;
+    const { targets, textForHermes } = getSendTargets(selectedRoom, rawText);
     const now = new Date().toISOString();
-    const textForHermes = resolution.strippedText || rawText;
     const userMessage: ChatMessage = {
       id: makeId('msg'),
       roomId: selectedRoom.id,
@@ -367,59 +491,76 @@ export default function App() {
       authorId: 'user',
       authorName: '你',
       content: rawText || '[附件]',
-      attachments: pendingAttachments,
+      attachments,
       status: 'sent',
       createdAt: now,
     };
 
     setDraft('');
     setPendingAttachments([]);
+    setSelectedTargetIds([]);
     appendMessagesToRoom(selectedRoom.id, [userMessage]);
 
-    if (resolution.targets.length === 0) {
+    if (targets.length === 0) {
       const errorText = selectedRoom.kind === 'group'
-        ? '群聊消息需要 @成员名 或 @all 才会触发 Hermes 回复。'
+        ? '请选择本次回复成员，或使用 @成员名 / @all 触发 Hermes 回复。'
         : '这个房间没有可用的 Hermes 成员。';
       appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, errorText)]);
       return;
     }
 
-    const assistantPlaceholders = resolution.targets.map((member) => makeAssistantPlaceholder(selectedRoom.id, member));
+    const assistantPlaceholders = targets.map((member) => makeAssistantPlaceholder(selectedRoom.id, member));
     appendMessagesToRoom(selectedRoom.id, assistantPlaceholders);
-    setSending(true);
 
     await Promise.all(assistantPlaceholders.map(async (placeholder, index) => {
-      const member = resolution.targets[index];
+      const member = targets[index];
       if (!member) return;
-      const connection = connectionById.get(member.connectionId);
-      if (!connection) {
-        updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
-        return;
-      }
-
-      try {
-        const client = new HermesClient(connection);
-        const response = await client.chatCompletion({
-          model: connection.model,
-          messages: buildChatHistory(selectedMessages, selectedRoom, member, textForHermes, pendingAttachments),
-          stream: false,
-        }, {
-          sessionId: selectedRoom.sessionIds[connection.id],
-          sessionKey: selectedRoom.sessionKey,
-          timeoutMs: 120_000,
-        });
-        const answer = response.choices[0]?.message.content?.trim() || '[Hermes 没有返回内容]';
-        updateMessageInRoom(selectedRoom.id, placeholder.id, { content: answer, status: 'sent' });
-      } catch (error) {
-        updateMessageInRoom(selectedRoom.id, placeholder.id, {
-          status: 'error',
-          error: getErrorMessage(error),
-          content: '发送失败',
-        });
-      }
+      await streamHermesReply({
+        room: selectedRoom,
+        member,
+        placeholderId: placeholder.id,
+        text: textForHermes,
+        attachments,
+        previousMessages,
+      });
     }));
+  }
 
-    setSending(false);
+  async function retryMessage(message: ChatMessage) {
+    if (!selectedRoom || message.authorId === 'user' || message.authorId === 'system') return;
+    if (activeStreamIds[message.id]) return;
+
+    const member = selectedRoom.members.find((item) => item.connectionId === message.authorId);
+    if (!member) {
+      showNotice('无法重试', '这个 Hermes 成员不在当前房间中。');
+      return;
+    }
+
+    const messageIndex = selectedMessages.findIndex((item) => item.id === message.id);
+    const userMessageIndex = findPreviousUserMessageIndex(selectedMessages, messageIndex);
+    if (userMessageIndex < 0) {
+      showNotice('无法重试', '没有找到这条回复对应的用户消息。');
+      return;
+    }
+
+    const userMessage = selectedMessages[userMessageIndex];
+    if (!userMessage) {
+      showNotice('无法重试', '这条回复对应的用户消息已不存在。');
+      return;
+    }
+
+    const previousMessages = selectedMessages.slice(0, userMessageIndex);
+    const rawText = userMessage.content === '[附件]' ? '' : userMessage.content;
+    const resolution = resolveMentionTargets(selectedRoom, rawText);
+
+    await streamHermesReply({
+      room: selectedRoom,
+      member,
+      placeholderId: message.id,
+      text: resolution.strippedText || rawText,
+      attachments: userMessage.attachments ?? [],
+      previousMessages,
+    });
   }
 
   function insertMention(token: string) {
@@ -506,13 +647,25 @@ export default function App() {
             </View>
             <View style={styles.memberChips}>
               {selectedRoom.kind === 'group' ? (
-                <TouchableOpacity style={styles.memberChip} onPress={() => insertMention('@all')}>
+                <TouchableOpacity
+                  style={[
+                    styles.memberChip,
+                    selectedTargetIds.length === selectedRoom.members.filter((member) => member.enabled).length && styles.memberChipSelected,
+                  ]}
+                  onPress={selectAllTargets}
+                >
                   <Text style={styles.memberChipText}>@all</Text>
                 </TouchableOpacity>
               ) : null}
               {selectedRoom.members.map((member) => (
-                <TouchableOpacity key={member.connectionId} style={styles.memberChip} onPress={() => insertMention(`@${member.alias}`)}>
-                  <Text style={styles.memberChipText}>@{member.alias}</Text>
+                <TouchableOpacity
+                  key={member.connectionId}
+                  style={[styles.memberChip, selectedTargetSet.has(member.connectionId) && styles.memberChipSelected]}
+                  onPress={() => selectedRoom.kind === 'group' ? toggleTargetSelection(member.connectionId) : insertMention(`@${member.alias}`)}
+                >
+                  <Text style={[styles.memberChipText, selectedTargetSet.has(member.connectionId) && styles.memberChipTextSelected]}>
+                    @{member.alias}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -558,7 +711,7 @@ export default function App() {
                   {message.error ? ` · ${message.error}` : ''}
                 </Text>
               </View>
-              <Text style={styles.messageText}>{message.content}</Text>
+              <MarkdownText content={message.content} />
               {message.attachments?.length ? (
                 <View style={styles.attachments}>
                   {message.attachments.map((attachment) => (
@@ -569,6 +722,15 @@ export default function App() {
                   ))}
                 </View>
               ) : null}
+              {message.authorId !== 'user' && message.authorId !== 'system' ? (
+                <View style={styles.messageActions}>
+                  {message.status === 'running' ? (
+                    <MiniButton icon="stop-circle-outline" label="停止" onPress={() => stopMessage(message.id)} />
+                  ) : (
+                    <MiniButton icon="refresh-outline" label="重试" onPress={() => retryMessage(message)} />
+                  )}
+                </View>
+              ) : null}
             </View>
           ))}
         </ScrollView>
@@ -576,14 +738,26 @@ export default function App() {
         <View style={styles.composer}>
           {selectedRoom?.kind === 'group' ? (
             <View style={styles.mentionBar}>
-              <Text style={styles.mentionHint}>快速 @</Text>
+              <Text style={styles.mentionHint}>本次回复</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mentionList}>
-                <TouchableOpacity style={styles.mentionChip} onPress={() => insertMention('@all')}>
+                <TouchableOpacity
+                  style={[
+                    styles.mentionChip,
+                    selectedTargetIds.length === selectedRoom.members.filter((member) => member.enabled).length && styles.mentionChipSelected,
+                  ]}
+                  onPress={selectAllTargets}
+                >
                   <Text style={styles.mentionChipText}>@all</Text>
                 </TouchableOpacity>
                 {selectedRoom.members.map((member) => (
-                  <TouchableOpacity key={member.connectionId} style={styles.mentionChip} onPress={() => insertMention(`@${member.alias}`)}>
-                    <Text style={styles.mentionChipText}>@{member.alias}</Text>
+                  <TouchableOpacity
+                    key={member.connectionId}
+                    style={[styles.mentionChip, selectedTargetSet.has(member.connectionId) && styles.mentionChipSelected]}
+                    onPress={() => toggleTargetSelection(member.connectionId)}
+                  >
+                    <Text style={[styles.mentionChipText, selectedTargetSet.has(member.connectionId) && styles.mentionChipTextSelected]}>
+                      @{member.alias}
+                    </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -833,6 +1007,15 @@ function SecondaryButton({ icon, label, onPress, disabled = false }: { icon?: Ic
   );
 }
 
+function MiniButton({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.miniButton} onPress={onPress}>
+      <Ionicons name={icon} size={13} color="#4b5563" />
+      <Text style={styles.miniButtonText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function IconButton({
   icon,
   label,
@@ -856,6 +1039,132 @@ function IconButton({
     >
       <Ionicons name={icon} size={20} color={isPrimary ? '#ffffff' : '#4b5563'} />
     </TouchableOpacity>
+  );
+}
+
+function MarkdownText({ content }: { content: string }) {
+  if (!content) {
+    return (
+      <View style={styles.streamingLine}>
+        <ActivityIndicator size="small" color="#2563eb" />
+        <Text style={styles.streamingText}>正在生成...</Text>
+      </View>
+    );
+  }
+
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index] ?? '';
+
+    if (line.trim().startsWith('```')) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !(lines[index] ?? '').trim().startsWith('```')) {
+        codeLines.push(lines[index] ?? '');
+        index += 1;
+      }
+      index += 1;
+      blocks.push(
+        <View key={`code-${index}`} style={styles.markdownCodeBlock}>
+          <Text style={styles.markdownCodeText}>{codeLines.join('\n')}</Text>
+        </View>,
+      );
+      continue;
+    }
+
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    if (isMarkdownTable(lines, index)) {
+      const tableLines: string[] = [];
+      tableLines.push(lines[index] ?? '');
+      index += 2;
+      while (index < lines.length && (lines[index] ?? '').includes('|') && (lines[index] ?? '').trim()) {
+        tableLines.push(lines[index] ?? '');
+        index += 1;
+      }
+      blocks.push(<MarkdownTable key={`table-${index}`} lines={tableLines} />);
+      continue;
+    }
+
+    const headingMatch = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      blocks.push(
+        <Text key={`heading-${index}`} style={[styles.markdownText, styles.markdownHeading]}>
+          {renderInlineMarkdown(headingMatch[2] ?? '')}
+        </Text>,
+      );
+      index += 1;
+      continue;
+    }
+
+    const listMatch = /^(\s*)([-*]|\d+\.)\s+(.+)$/.exec(line);
+    if (listMatch) {
+      blocks.push(
+        <View key={`list-${index}`} style={styles.markdownListRow}>
+          <Text style={styles.markdownBullet}>{listMatch[2]}</Text>
+          <Text style={[styles.markdownText, styles.markdownListText]}>{renderInlineMarkdown(listMatch[3] ?? '')}</Text>
+        </View>,
+      );
+      index += 1;
+      continue;
+    }
+
+    const quoteMatch = /^>\s?(.+)$/.exec(line);
+    if (quoteMatch) {
+      blocks.push(
+        <View key={`quote-${index}`} style={styles.markdownQuote}>
+          <Text style={styles.markdownText}>{renderInlineMarkdown(quoteMatch[1] ?? '')}</Text>
+        </View>,
+      );
+      index += 1;
+      continue;
+    }
+
+    const paragraphLines = [line.trim()];
+    index += 1;
+    while (
+      index < lines.length
+      && (lines[index] ?? '').trim()
+      && !(lines[index] ?? '').trim().startsWith('```')
+      && !/^(#{1,3})\s+/.test(lines[index] ?? '')
+      && !/^(\s*)([-*]|\d+\.)\s+/.test(lines[index] ?? '')
+      && !/^>\s?/.test(lines[index] ?? '')
+      && !isMarkdownTable(lines, index)
+    ) {
+      paragraphLines.push((lines[index] ?? '').trim());
+      index += 1;
+    }
+
+    blocks.push(
+      <Text key={`p-${index}`} style={styles.markdownText}>
+        {renderInlineMarkdown(paragraphLines.join('\n'))}
+      </Text>,
+    );
+  }
+
+  return <View style={styles.markdown}>{blocks}</View>;
+}
+
+function MarkdownTable({ lines }: { lines: string[] }) {
+  const rows = lines.map((line) => splitTableRow(line));
+  return (
+    <View style={styles.markdownTable}>
+      {rows.map((row, rowIndex) => (
+        <View key={`row-${rowIndex}`} style={[styles.markdownTableRow, rowIndex === 0 && styles.markdownTableHeader]}>
+          {row.map((cell, cellIndex) => (
+            <Text key={`cell-${cellIndex}`} style={styles.markdownTableCell}>
+              {renderInlineMarkdown(cell)}
+            </Text>
+          ))}
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -904,6 +1213,17 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted'));
+}
+
+function findPreviousUserMessageIndex(messages: ChatMessage[], startIndex: number): number {
+  for (let index = startIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.authorId === 'user') return index;
+  }
+  return -1;
+}
+
 function getStatusLabel(status: ChatMessage['status']): string {
   return STATUS_LABELS[status] ?? status;
 }
@@ -920,6 +1240,56 @@ function showNotice(title: string, message?: string) {
     return;
   }
   Alert.alert(title, message);
+}
+
+function isMarkdownTable(lines: string[], index: number): boolean {
+  const current = lines[index] ?? '';
+  const next = lines[index + 1] ?? '';
+  return current.includes('|') && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(next);
+}
+
+function splitTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      nodes.push(text.slice(cursor, match.index));
+    }
+
+    const token = match[0];
+    if (token.startsWith('`')) {
+      nodes.push(
+        <Text key={`code-${match.index}`} style={styles.inlineCode}>
+          {token.slice(1, -1)}
+        </Text>,
+      );
+    } else {
+      nodes.push(
+        <Text key={`bold-${match.index}`} style={styles.inlineBold}>
+          {token.slice(2, -2)}
+        </Text>,
+      );
+    }
+    cursor = match.index + token.length;
+  }
+
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor));
+  }
+
+  return nodes;
 }
 
 const styles = StyleSheet.create({
@@ -1101,10 +1471,16 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#f0fdfa',
   },
+  memberChipSelected: {
+    backgroundColor: '#0f766e',
+  },
   memberChipText: {
     color: '#0f766e',
     fontSize: 12,
     fontWeight: '800',
+  },
+  memberChipTextSelected: {
+    color: '#ffffff',
   },
   messages: {
     flex: 1,
@@ -1161,6 +1537,100 @@ const styles = StyleSheet.create({
     color: '#1f2937',
     lineHeight: 22,
   },
+  markdown: {
+    gap: 8,
+  },
+  markdownText: {
+    color: '#1f2937',
+    lineHeight: 22,
+  },
+  markdownHeading: {
+    marginTop: 2,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  markdownListRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  markdownBullet: {
+    minWidth: 18,
+    color: '#4b5563',
+    fontWeight: '800',
+    lineHeight: 22,
+  },
+  markdownListText: {
+    flex: 1,
+  },
+  markdownQuote: {
+    paddingLeft: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#bfdbfe',
+  },
+  markdownCodeBlock: {
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#111827',
+  },
+  markdownCodeText: {
+    color: '#e5e7eb',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  markdownTable: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  markdownTableRow: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  markdownTableHeader: {
+    borderTopWidth: 0,
+    backgroundColor: '#f9fafb',
+  },
+  markdownTableCell: {
+    flex: 1,
+    minWidth: 80,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    color: '#1f2937',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  inlineCode: {
+    borderRadius: 4,
+    backgroundColor: '#eef2ff',
+    color: '#3730a3',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 12,
+  },
+  inlineBold: {
+    fontWeight: '800',
+    color: '#111827',
+  },
+  streamingLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  streamingText: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  messageActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 10,
+    gap: 8,
+  },
   attachments: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1209,10 +1679,16 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#eef2ff',
   },
+  mentionChipSelected: {
+    backgroundColor: '#3730a3',
+  },
   mentionChipText: {
     color: '#3730a3',
     fontSize: 12,
     fontWeight: '800',
+  },
+  mentionChipTextSelected: {
+    color: '#ffffff',
   },
   input: {
     minHeight: 44,
@@ -1318,6 +1794,22 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     color: '#2563eb',
+    fontWeight: '800',
+  },
+  miniButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    minHeight: 28,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#f9fafb',
+  },
+  miniButtonText: {
+    color: '#4b5563',
+    fontSize: 12,
     fontWeight: '800',
   },
   disabledButton: {
