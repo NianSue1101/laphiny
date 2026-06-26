@@ -12,6 +12,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "web:build": "expo export --platform web && python3 -c \"html=open('dist/index.html').read();html=html.replace('/_expo','/laphiny/_expo').replace('/favicon.ico','/laphiny/favicon.ico');open('dist/index.html','w').write(html);print('paths fixed')\"",
+    "sync:server": "node scripts/sync-server.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx tests/*.test.ts"
   },
