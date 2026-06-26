@@ -245,13 +245,6 @@ export default function App() {
     }
   }
 
-  function handlePasteImport() {
-    const text = jsonPaste.trim();
-    if (!text) return;
-    importConnectionsFromText(text);
-    setJsonPaste('');
-  }
-
   async function testConnection(connection: HermesConnection) {
     setTestingConnectionId(connection.id);
     try {
@@ -582,10 +575,13 @@ export default function App() {
           autoCapitalize="none"
         />
         <PrimaryButton label="添加连接" onPress={addConnection} />
-        <View style={styles.importRow}>
-          <SecondaryButton label="导入 JSON" onPress={importConnections} />
+        <View style={styles.importSection}>
+          <View style={styles.importRow}>
+            <SecondaryButton label="导入 JSON" onPress={importConnections} />
+            <SecondaryButton label="粘贴导入" onPress={handlePasteImport} disabled={!jsonPaste.trim()} />
+          </View>
           <TextInput
-            style={[styles.input, styles.importTextInput]}
+            style={[styles.input, styles.jsonPasteInput]}
             multiline
             value={jsonPaste}
             onChangeText={setJsonPaste}
@@ -593,7 +589,6 @@ export default function App() {
             autoCapitalize="none"
             textAlignVertical="top"
           />
-          <SecondaryButton label="粘贴导入" onPress={handlePasteImport} disabled={!jsonPaste.trim()} />
         </View>
 
         <Text style={styles.sectionTitle}>连接列表</Text>
@@ -894,19 +889,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#fffaf4',
     color: '#271a38',
   },
-  jsonPasteInput: {
-    minHeight: 80,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 11,
+  importSection: {
+    gap: 8,
+    marginTop: 4,
   },
   importRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  importTextInput: {
-    flex: 1,
-    minHeight: 44,
+  jsonPasteInput: {
+    minHeight: 120,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     fontSize: 11,
   },
