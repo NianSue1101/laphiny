@@ -11,9 +11,11 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
 
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -26,10 +28,19 @@ import { loadConnections, loadMessages, loadRooms, saveConnections, saveMessages
 import { Attachment, ChatMessage, HermesChatMessage, HermesConnection, Room, RoomMember } from './src/types';
 
 type Tab = 'chat' | 'connections' | 'rooms';
+type IconName = keyof typeof Ionicons.glyphMap;
 
 const DEFAULT_MODEL = 'hermes-agent';
 
 const DEFAULT_API_KEY = '24a799bdc0ad4c0d73235ee83aae435a2e5b2cae4d7494abb120f7e15a0ba377';
+
+const STATUS_LABELS: Record<ChatMessage['status'], string> = {
+  local: '提示',
+  queued: '排队',
+  running: '思考中',
+  sent: '已发送',
+  error: '失败',
+};
 
 const DEFAULT_CONNECTIONS: HermesConnection[] = [
   {
@@ -79,6 +90,8 @@ export default function App() {
   const [jsonPaste, setJsonPaste] = useState('');
   const [groupName, setGroupName] = useState('Hermes 群聊');
   const hydratedRef = useRef(false);
+  const messageScrollRef = useRef<ScrollView | null>(null);
+  const { width } = useWindowDimensions();
 
   useEffect(() => {
     let mounted = true;
@@ -125,6 +138,7 @@ export default function App() {
   const enabledConnections = useMemo(() => connections.filter((connection) => connection.enabled), [connections]);
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
   const selectedMessages = selectedRoom ? messagesByRoom[selectedRoom.id] ?? [] : [];
+  const isWideLayout = width >= 900;
 
   function addConnection() {
     const name = connectionForm.name.trim();
@@ -408,10 +422,17 @@ export default function App() {
     setSending(false);
   }
 
+  function insertMention(token: string) {
+    setDraft((current) => {
+      const spacer = current.length === 0 || /\s$/.test(current) ? '' : ' ';
+      return `${current}${spacer}${token} `;
+    });
+  }
+
   if (!hydrated) {
     return (
       <SafeAreaView style={styles.centered}>
-        <ActivityIndicator size="large" color="#7c3aed" />
+        <ActivityIndicator size="large" color="#2563eb" />
         <Text style={styles.muted}>正在加载 Laphiny...</Text>
       </SafeAreaView>
     );
@@ -421,16 +442,26 @@ export default function App() {
     <SafeAreaView style={styles.shell}>
       <StatusBar style="dark" />
       <View style={styles.header}>
-        <View>
+        <View style={styles.brandBlock}>
           <Text style={styles.title}>Laphiny</Text>
-          <Text style={styles.subtitle}>多 Hermes 群聊 · @ 控制回复 · 图片/文件上下文</Text>
+          <Text style={styles.subtitle}>多 Hermes 协作聊天</Text>
+        </View>
+        <View style={styles.headerStats}>
+          <View style={styles.statPill}>
+            <Ionicons name="chatbubbles-outline" size={14} color="#1f2937" />
+            <Text style={styles.statText}>{rooms.length} 房间</Text>
+          </View>
+          <View style={[styles.statPill, styles.statPillAccent]}>
+            <Ionicons name="radio-outline" size={14} color="#065f46" />
+            <Text style={[styles.statText, styles.statTextAccent]}>{enabledConnections.length} 可用</Text>
+          </View>
         </View>
       </View>
 
       <View style={styles.tabs}>
-        <TabButton label="聊天" active={tab === 'chat'} onPress={() => setTab('chat')} />
-        <TabButton label="房间" active={tab === 'rooms'} onPress={() => setTab('rooms')} />
-        <TabButton label="连接" active={tab === 'connections'} onPress={() => setTab('connections')} />
+        <TabButton icon="chatbubble-ellipses-outline" label="聊天" active={tab === 'chat'} onPress={() => setTab('chat')} />
+        <TabButton icon="albums-outline" label="房间" active={tab === 'rooms'} onPress={() => setTab('rooms')} />
+        <TabButton icon="git-network-outline" label="连接" active={tab === 'connections'} onPress={() => setTab('connections')} />
       </View>
 
       {tab === 'chat' ? renderChat() : null}
@@ -442,34 +473,99 @@ export default function App() {
   function renderChat() {
     return (
       <View style={styles.content}>
-        <View style={styles.roomStrip}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {rooms.length === 0 ? <Text style={styles.muted}>先添加连接并创建房间</Text> : null}
+        <View style={styles.roomRail}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.roomRailContent}>
             {rooms.map((room) => (
               <TouchableOpacity
                 key={room.id}
                 style={[styles.roomPill, room.id === selectedRoomId && styles.roomPillActive]}
                 onPress={() => setSelectedRoomId(room.id)}
               >
+                <Ionicons
+                  name={room.kind === 'group' ? 'people-outline' : 'person-outline'}
+                  size={14}
+                  color={room.id === selectedRoomId ? '#ffffff' : '#4b5563'}
+                />
                 <Text style={[styles.roomPillText, room.id === selectedRoomId && styles.roomPillTextActive]}>{room.name}</Text>
               </TouchableOpacity>
             ))}
+            <TouchableOpacity style={styles.roomCreatePill} onPress={() => setTab('rooms')}>
+              <Ionicons name="add" size={16} color="#2563eb" />
+              <Text style={styles.roomCreateText}>新房间</Text>
+            </TouchableOpacity>
           </ScrollView>
         </View>
 
-        <ScrollView style={styles.messages} contentContainerStyle={styles.messagesContent}>
-          {selectedRoom ? <RoomHint room={selectedRoom} /> : null}
+        {selectedRoom ? (
+          <View style={styles.chatHeader}>
+            <View style={styles.roomTitleBlock}>
+              <Text style={styles.roomTitle}>{selectedRoom.name}</Text>
+              <Text style={styles.roomSummary}>
+                {selectedRoom.kind === 'group' ? '群聊' : '单聊'} · {selectedRoom.members.length} 位 Hermes
+              </Text>
+            </View>
+            <View style={styles.memberChips}>
+              {selectedRoom.kind === 'group' ? (
+                <TouchableOpacity style={styles.memberChip} onPress={() => insertMention('@all')}>
+                  <Text style={styles.memberChipText}>@all</Text>
+                </TouchableOpacity>
+              ) : null}
+              {selectedRoom.members.map((member) => (
+                <TouchableOpacity key={member.connectionId} style={styles.memberChip} onPress={() => insertMention(`@${member.alias}`)}>
+                  <Text style={styles.memberChipText}>@{member.alias}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        <ScrollView
+          ref={messageScrollRef}
+          style={styles.messages}
+          contentContainerStyle={styles.messagesContent}
+          onContentSizeChange={() => messageScrollRef.current?.scrollToEnd({ animated: true })}
+        >
+          {!selectedRoom ? (
+            <EmptyState
+              icon="albums-outline"
+              title="还没有可聊天的房间"
+              body="先在房间页创建单聊或群聊，再回到这里开始对话。"
+              actionLabel="去创建"
+              onAction={() => setTab('rooms')}
+            />
+          ) : null}
+          {selectedRoom && selectedMessages.length === 0 ? (
+            <EmptyState
+              icon="sparkles-outline"
+              title="新的对话已经就绪"
+              body={selectedRoom.kind === 'group' ? '点一下成员标签插入 @，或使用 @all 让全部 Hermes 回复。' : '输入消息后发送，Laphiny 会保留最近上下文。'}
+            />
+          ) : null}
           {selectedMessages.map((message) => (
-            <View key={message.id} style={[styles.messageCard, message.authorId === 'user' && styles.userMessage]}>
+            <View
+              key={message.id}
+              style={[
+                styles.messageBubble,
+                message.authorId === 'user' && styles.userMessage,
+                message.authorId === 'system' && styles.systemMessage,
+                isWideLayout && styles.messageBubbleWide,
+              ]}
+            >
               <View style={styles.messageMeta}>
                 <Text style={styles.author}>{message.authorName}</Text>
-                <Text style={styles.status}>{message.status}{message.error ? ` · ${message.error}` : ''}</Text>
+                <Text style={[styles.status, message.status === 'error' && styles.statusError]}>
+                  {getStatusLabel(message.status)} · {formatTime(message.createdAt)}
+                  {message.error ? ` · ${message.error}` : ''}
+                </Text>
               </View>
               <Text style={styles.messageText}>{message.content}</Text>
               {message.attachments?.length ? (
                 <View style={styles.attachments}>
                   {message.attachments.map((attachment) => (
-                    <Text key={attachment.id} style={styles.attachment}>📎 {attachment.name}</Text>
+                    <View key={attachment.id} style={styles.attachment}>
+                      <Ionicons name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={14} color="#0f766e" />
+                      <Text style={styles.attachmentText}>{attachment.name}</Text>
+                    </View>
                   ))}
                 </View>
               ) : null}
@@ -478,6 +574,22 @@ export default function App() {
         </ScrollView>
 
         <View style={styles.composer}>
+          {selectedRoom?.kind === 'group' ? (
+            <View style={styles.mentionBar}>
+              <Text style={styles.mentionHint}>快速 @</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mentionList}>
+                <TouchableOpacity style={styles.mentionChip} onPress={() => insertMention('@all')}>
+                  <Text style={styles.mentionChipText}>@all</Text>
+                </TouchableOpacity>
+                {selectedRoom.members.map((member) => (
+                  <TouchableOpacity key={member.connectionId} style={styles.mentionChip} onPress={() => insertMention(`@${member.alias}`)}>
+                    <Text style={styles.mentionChipText}>@{member.alias}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
           {pendingAttachments.length ? (
             <View style={styles.pendingAttachments}>
               {pendingAttachments.map((attachment) => (
@@ -486,24 +598,26 @@ export default function App() {
                   style={styles.pendingAttachment}
                   onPress={() => setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id))}
                 >
-                  <Text style={styles.pendingAttachmentText}>{attachment.name} ×</Text>
+                  <Ionicons name="close-circle" size={14} color="#0f766e" />
+                  <Text style={styles.pendingAttachmentText}>{attachment.name}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           ) : null}
 
-          <TextInput
-            style={styles.input}
-            placeholder={selectedRoom?.kind === 'group' ? '@成员名 或 @all 后输入消息' : '输入消息'}
-            multiline
-            value={draft}
-            onChangeText={setDraft}
-          />
-
-          <View style={styles.composerActions}>
-            <SecondaryButton label="图片" onPress={attachImages} />
-            <SecondaryButton label="文件" onPress={attachDocuments} />
-            <PrimaryButton label={sending ? '发送中...' : '发送'} onPress={sendMessage} disabled={sending || !selectedRoom} />
+          <View style={styles.composerInputRow}>
+            <IconButton icon="image-outline" label="添加图片" onPress={attachImages} disabled={!selectedRoom || sending} />
+            <IconButton icon="document-attach-outline" label="添加文件" onPress={attachDocuments} disabled={!selectedRoom || sending} />
+            <TextInput
+              style={styles.composerInput}
+              placeholder={selectedRoom?.kind === 'group' ? '@成员名 或 @all 后输入消息' : '输入消息'}
+              placeholderTextColor="#9ca3af"
+              multiline
+              value={draft}
+              onChangeText={setDraft}
+              textAlignVertical="top"
+            />
+            <IconButton icon={sending ? 'hourglass-outline' : 'send'} label="发送" onPress={sendMessage} disabled={sending || !selectedRoom} variant="primary" />
           </View>
         </View>
       </View>
@@ -521,14 +635,14 @@ export default function App() {
               <Text style={styles.cardTitle}>{connection.name}</Text>
               <Text style={styles.muted}>{connection.baseUrl}</Text>
             </View>
-            <SecondaryButton label="单聊" onPress={() => createDirectRoom(connection)} />
+            <SecondaryButton icon="chatbubble-outline" label="单聊" onPress={() => createDirectRoom(connection)} />
           </View>
         ))}
 
         <Text style={styles.sectionTitle}>创建群聊</Text>
         <TextInput style={styles.input} value={groupName} onChangeText={setGroupName} placeholder="群聊名称" />
         <Text style={styles.help}>群聊会加入全部已启用连接。发送时必须使用 @成员名 或 @all。</Text>
-        <PrimaryButton label="创建群聊" onPress={createGroupRoom} disabled={enabledConnections.length < 2} />
+        <PrimaryButton icon="people-outline" label="创建群聊" onPress={createGroupRoom} disabled={enabledConnections.length < 2} />
 
         <Text style={styles.sectionTitle}>已有房间</Text>
         {rooms.map((room) => (
@@ -549,7 +663,7 @@ export default function App() {
           style={styles.input}
           value={connectionForm.name}
           onChangeText={(name) => setConnectionForm((current) => ({ ...current, name }))}
-          placeholder="名称，例如 猫娘"
+          placeholder="名称，例如 Flor"
         />
         <TextInput
           style={styles.input}
@@ -574,11 +688,11 @@ export default function App() {
           placeholder="模型名"
           autoCapitalize="none"
         />
-        <PrimaryButton label="添加连接" onPress={addConnection} />
+        <PrimaryButton icon="add-circle-outline" label="添加连接" onPress={addConnection} />
         <View style={styles.importSection}>
           <View style={styles.importRow}>
-            <SecondaryButton label="导入 JSON" onPress={importConnections} />
-            <SecondaryButton label="粘贴导入" onPress={handlePasteImport} disabled={!jsonPaste.trim()} />
+            <SecondaryButton icon="cloud-upload-outline" label="导入 JSON" onPress={importConnections} />
+            <SecondaryButton icon="clipboard-outline" label="粘贴导入" onPress={handlePasteImport} disabled={!jsonPaste.trim()} />
           </View>
           <TextInput
             style={[styles.input, styles.jsonPasteInput]}
@@ -606,13 +720,14 @@ export default function App() {
               </Text>
             </View>
             <View style={styles.buttonRow}>
-              <SecondaryButton label={connection.enabled ? '停用' : '启用'} onPress={() => toggleConnection(connection.id)} />
+              <SecondaryButton icon={connection.enabled ? 'pause-circle-outline' : 'play-circle-outline'} label={connection.enabled ? '停用' : '启用'} onPress={() => toggleConnection(connection.id)} />
               <SecondaryButton
+                icon="pulse-outline"
                 label={testingConnectionId === connection.id ? '测试中...' : '测试'}
                 onPress={() => testConnection(connection)}
                 disabled={testingConnectionId === connection.id}
               />
-              <SecondaryButton label="单聊" onPress={() => createDirectRoom(connection)} disabled={!connection.enabled} />
+              <SecondaryButton icon="chatbubble-outline" label="单聊" onPress={() => createDirectRoom(connection)} disabled={!connection.enabled} />
             </View>
           </View>
         ))}
@@ -691,27 +806,81 @@ function makeLocalNotice(roomId: string, content: string): ChatMessage {
   };
 }
 
-function TabButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function TabButton({ icon, label, active, onPress }: { icon: IconName; label: string; active: boolean; onPress: () => void }) {
   return (
     <TouchableOpacity style={[styles.tab, active && styles.tabActive]} onPress={onPress}>
+      <Ionicons name={icon} size={16} color={active ? '#ffffff' : '#4b5563'} />
       <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
-function PrimaryButton({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
+function PrimaryButton({ icon, label, onPress, disabled = false }: { icon?: IconName; label: string; onPress: () => void; disabled?: boolean }) {
   return (
     <TouchableOpacity style={[styles.primaryButton, disabled && styles.disabledButton]} onPress={onPress} disabled={disabled}>
+      {icon ? <Ionicons name={icon} size={16} color="#fff" /> : null}
       <Text style={styles.primaryButtonText}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
-function SecondaryButton({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
+function SecondaryButton({ icon, label, onPress, disabled = false }: { icon?: IconName; label: string; onPress: () => void; disabled?: boolean }) {
   return (
     <TouchableOpacity style={[styles.secondaryButton, disabled && styles.disabledButton]} onPress={onPress} disabled={disabled}>
+      {icon ? <Ionicons name={icon} size={15} color="#2563eb" /> : null}
       <Text style={styles.secondaryButtonText}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+function IconButton({
+  icon,
+  label,
+  onPress,
+  disabled = false,
+  variant = 'ghost',
+}: {
+  icon: IconName;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  variant?: 'ghost' | 'primary';
+}) {
+  const isPrimary = variant === 'primary';
+  return (
+    <TouchableOpacity
+      accessibilityLabel={label}
+      style={[styles.iconButton, isPrimary && styles.iconButtonPrimary, disabled && styles.disabledButton]}
+      onPress={onPress}
+      disabled={disabled}
+    >
+      <Ionicons name={icon} size={20} color={isPrimary ? '#ffffff' : '#4b5563'} />
+    </TouchableOpacity>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  body,
+  actionLabel,
+  onAction,
+}: {
+  icon: IconName;
+  title: string;
+  body: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIcon}>
+        <Ionicons name={icon} size={22} color="#2563eb" />
+      </View>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyBody}>{body}</Text>
+      {actionLabel && onAction ? <SecondaryButton icon="arrow-forward-outline" label={actionLabel} onPress={onAction} /> : null}
+    </View>
   );
 }
 
@@ -735,6 +904,16 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function getStatusLabel(status: ChatMessage['status']): string {
+  return STATUS_LABELS[status] ?? status;
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
 function showNotice(title: string, message?: string) {
   if (Platform.OS === 'web') {
     globalThis.alert?.(message ? `${title}\n${message}` : title);
@@ -746,28 +925,64 @@ function showNotice(title: string, message?: string) {
 const styles = StyleSheet.create({
   shell: {
     flex: 1,
-    backgroundColor: '#f8efe4',
+    backgroundColor: '#f5f7fb',
   },
   centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
-    backgroundColor: '#f8efe4',
+    backgroundColor: '#f5f7fb',
   },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
     paddingHorizontal: 20,
-    paddingTop: 18,
+    paddingTop: 16,
     paddingBottom: 12,
   },
+  brandBlock: {
+    flex: 1,
+  },
   title: {
-    fontSize: 30,
+    fontSize: 28,
     fontWeight: '800',
-    color: '#271a38',
+    color: '#111827',
   },
   subtitle: {
     marginTop: 4,
-    color: '#6b5f73',
+    color: '#6b7280',
+  },
+  headerStats: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  statPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  statPillAccent: {
+    borderColor: '#a7f3d0',
+    backgroundColor: '#ecfdf5',
+  },
+  statText: {
+    color: '#1f2937',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  statTextAccent: {
+    color: '#065f46',
   },
   tabs: {
     flexDirection: 'row',
@@ -776,16 +991,24 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   tab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 40,
     paddingHorizontal: 16,
-    paddingVertical: 9,
+    paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: '#fffaf4',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
   },
   tabActive: {
-    backgroundColor: '#7c3aed',
+    borderColor: '#2563eb',
+    backgroundColor: '#2563eb',
   },
   tabText: {
-    color: '#5f5270',
+    color: '#4b5563',
     fontWeight: '700',
   },
   tabTextActive: {
@@ -798,26 +1021,90 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 12,
   },
-  roomStrip: {
+  roomRail: {
     paddingHorizontal: 20,
-    paddingBottom: 10,
+    paddingBottom: 8,
+  },
+  roomRailContent: {
+    alignItems: 'center',
+    gap: 8,
   },
   roomPill: {
-    marginRight: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 36,
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: '#fffaf4',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
   },
   roomPillActive: {
-    backgroundColor: '#271a38',
+    borderColor: '#111827',
+    backgroundColor: '#111827',
   },
   roomPillText: {
-    color: '#5f5270',
+    color: '#4b5563',
     fontWeight: '700',
   },
   roomPillTextActive: {
     color: '#fff',
+  },
+  roomCreatePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  roomCreateText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  chatHeader: {
+    marginHorizontal: 20,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+    gap: 10,
+  },
+  roomTitleBlock: {
+    gap: 2,
+  },
+  roomTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  roomSummary: {
+    color: '#6b7280',
+    fontSize: 12,
+  },
+  memberChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  memberChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#f0fdfa',
+  },
+  memberChipText: {
+    color: '#0f766e',
+    fontSize: 12,
+    fontWeight: '800',
   },
   messages: {
     flex: 1,
@@ -825,69 +1112,118 @@ const styles = StyleSheet.create({
   },
   messagesContent: {
     gap: 10,
-    paddingBottom: 16,
+    paddingBottom: 18,
   },
-  messageCard: {
-    padding: 14,
-    borderRadius: 18,
-    backgroundColor: '#fffaf4',
+  messageBubble: {
+    alignSelf: 'flex-start',
+    maxWidth: '92%',
+    padding: 13,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#eadccc',
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
   },
   userMessage: {
-    backgroundColor: '#efe7ff',
-    borderColor: '#d8c8ff',
+    alignSelf: 'flex-end',
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  systemMessage: {
+    alignSelf: 'center',
+    maxWidth: '100%',
+    borderColor: '#fde68a',
+    backgroundColor: '#fffbeb',
+  },
+  messageBubbleWide: {
+    maxWidth: 760,
   },
   messageMeta: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     gap: 12,
     marginBottom: 6,
   },
   author: {
-    color: '#271a38',
+    color: '#111827',
     fontWeight: '800',
   },
   status: {
     flexShrink: 1,
-    color: '#8d7d99',
+    color: '#6b7280',
     fontSize: 12,
+    textAlign: 'right',
+  },
+  statusError: {
+    color: '#b91c1c',
   },
   messageText: {
-    color: '#271a38',
-    lineHeight: 21,
+    color: '#1f2937',
+    lineHeight: 22,
   },
   attachments: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     marginTop: 8,
-    gap: 4,
+    gap: 6,
   },
   attachment: {
-    color: '#6d28d9',
-    fontSize: 12,
-  },
-  composer: {
-    padding: 14,
-    gap: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#eadccc',
-    backgroundColor: '#f8efe4',
-  },
-  composerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#f0fdfa',
+  },
+  attachmentText: {
+    color: '#0f766e',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  composer: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 14,
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  mentionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
+  },
+  mentionHint: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  mentionList: {
+    gap: 6,
+  },
+  mentionChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#eef2ff',
+  },
+  mentionChipText: {
+    color: '#3730a3',
+    fontSize: 12,
+    fontWeight: '800',
   },
   input: {
     minHeight: 44,
     maxHeight: 140,
     paddingHorizontal: 13,
     paddingVertical: 10,
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#d8caba',
-    backgroundColor: '#fffaf4',
-    color: '#271a38',
+    borderColor: '#d1d5db',
+    backgroundColor: '#ffffff',
+    color: '#111827',
   },
   importSection: {
     gap: 8,
@@ -909,40 +1245,79 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   pendingAttachment: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#ede9fe',
+    borderRadius: 8,
+    backgroundColor: '#f0fdfa',
   },
   pendingAttachmentText: {
-    color: '#5b21b6',
+    color: '#0f766e',
     fontSize: 12,
     fontWeight: '700',
   },
-  primaryButton: {
+  composerInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  iconButton: {
     alignItems: 'center',
     justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    backgroundColor: '#f9fafb',
+  },
+  iconButtonPrimary: {
+    borderColor: '#2563eb',
+    backgroundColor: '#2563eb',
+  },
+  composerInput: {
+    flex: 1,
+    minHeight: 42,
+    maxHeight: 128,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    backgroundColor: '#f9fafb',
+    color: '#111827',
+    lineHeight: 20,
+  },
+  primaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
     minHeight: 42,
     paddingHorizontal: 16,
-    borderRadius: 14,
-    backgroundColor: '#7c3aed',
+    borderRadius: 8,
+    backgroundColor: '#2563eb',
   },
   primaryButtonText: {
     color: '#fff',
     fontWeight: '800',
   },
   secondaryButton: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
     minHeight: 38,
     paddingHorizontal: 13,
-    borderRadius: 13,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#cbb7e8',
-    backgroundColor: '#fffaf4',
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
   },
   secondaryButtonText: {
-    color: '#5b21b6',
+    color: '#2563eb',
     fontWeight: '800',
   },
   disabledButton: {
@@ -953,14 +1328,14 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     fontSize: 18,
     fontWeight: '800',
-    color: '#271a38',
+    color: '#111827',
   },
   card: {
     padding: 14,
-    borderRadius: 18,
-    backgroundColor: '#fffaf4',
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#eadccc',
+    borderColor: '#e5e7eb',
     gap: 10,
   },
   rowCard: {
@@ -968,32 +1343,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     padding: 14,
-    borderRadius: 18,
-    backgroundColor: '#fffaf4',
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#eadccc',
+    borderColor: '#e5e7eb',
   },
   rowMain: {
     flex: 1,
     gap: 3,
   },
   cardTitle: {
-    color: '#271a38',
+    color: '#111827',
     fontWeight: '800',
     fontSize: 16,
   },
   muted: {
-    color: '#7b6d85',
+    color: '#6b7280',
   },
   help: {
-    color: '#7b6d85',
+    color: '#6b7280',
     fontSize: 12,
     lineHeight: 18,
   },
   hint: {
     padding: 10,
-    borderRadius: 14,
-    backgroundColor: '#fff6d7',
+    borderRadius: 8,
+    backgroundColor: '#fffbeb',
   },
   connectionHeader: {
     flexDirection: 'row',
@@ -1020,5 +1395,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  emptyState: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 440,
+    gap: 10,
+    paddingVertical: 34,
+    paddingHorizontal: 20,
+  },
+  emptyIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+  },
+  emptyTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  emptyBody: {
+    color: '#6b7280',
+    lineHeight: 20,
+    textAlign: 'center',
   },
 });
