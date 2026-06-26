@@ -1,6 +1,22 @@
 # Laphiny Sync API
 
 This is the lightweight contract for a future SQLite-backed sync service running on Laper's tablet or another trusted device.
+The reference implementation lives in `scripts/sync-server.mjs`.
+
+## Run The Reference Server
+
+```bash
+LAPHINY_SYNC_DB=./laphiny-sync.sqlite \
+LAPHINY_SYNC_HOST=0.0.0.0 \
+LAPHINY_SYNC_PORT=8787 \
+LAPHINY_SYNC_API_KEY='<a-long-random-secret>' \
+npm run sync:server
+```
+
+Then configure Laphiny's Square tab with:
+
+- Base URL: `http://<laper-tablet-ip>:8787`
+- API Key: the same `LAPHINY_SYNC_API_KEY`
 
 ## Authentication
 
