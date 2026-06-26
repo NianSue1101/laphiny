@@ -38,6 +38,13 @@ type QuickCommand = {
   targetAlias: string;
   prompt: string;
 };
+type ConnectionHealth = {
+  status: 'unknown' | 'checking' | 'ok' | 'error';
+  latencyMs?: number;
+  modelsCount?: number;
+  checkedAt?: string;
+  error?: string;
+};
 
 const DEFAULT_MODEL = 'hermes-agent';
 
@@ -123,6 +130,7 @@ export default function App() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [messagesByRoom, setMessagesByRoom] = useState<Record<string, ChatMessage[]>>({});
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [unreadByRoom, setUnreadByRoom] = useState<Record<string, number>>({});
   const [tab, setTab] = useState<Tab>('chat');
   const [draft, setDraft] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
@@ -131,6 +139,7 @@ export default function App() {
   const [quickCommandsOpen, setQuickCommandsOpen] = useState(false);
   const [roomToolsOpen, setRoomToolsOpen] = useState(false);
   const [testingConnectionId, setTestingConnectionId] = useState<string | null>(null);
+  const [connectionHealth, setConnectionHealth] = useState<Record<string, ConnectionHealth>>({});
   const [connectionForm, setConnectionForm] = useState({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
   const [jsonPaste, setJsonPaste] = useState('');
   const [groupName, setGroupName] = useState('Hermes 群聊');
@@ -186,11 +195,41 @@ export default function App() {
   const selectedMessages = selectedRoom ? messagesByRoom[selectedRoom.id] ?? [] : [];
   const isWideLayout = width >= 900;
   const sending = Object.keys(activeStreamIds).length > 0;
+  const totalUnread = Object.values(unreadByRoom).reduce((total, count) => total + count, 0);
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
+  const healthSummary = useMemo(() => {
+    let ok = 0;
+    let error = 0;
+    let checking = 0;
+    for (const connection of connections) {
+      const status = connectionHealth[connection.id]?.status ?? 'unknown';
+      if (status === 'ok') ok += 1;
+      if (status === 'error') error += 1;
+      if (status === 'checking') checking += 1;
+    }
+    return { ok, error, checking, unknown: Math.max(0, connections.length - ok - error - checking) };
+  }, [connections, connectionHealth]);
 
   useEffect(() => {
     setSelectedTargetIds([]);
   }, [selectedRoomId]);
+
+  useEffect(() => {
+    if (selectedRoomId && tab === 'chat') {
+      setUnreadByRoom((current) => {
+        if (!current[selectedRoomId]) return current;
+        const next = { ...current };
+        delete next[selectedRoomId];
+        return next;
+      });
+    }
+  }, [selectedRoomId, tab]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      document.title = totalUnread > 0 ? `(${totalUnread}) Laphiny` : 'Laphiny';
+    }
+  }, [totalUnread]);
 
   function addConnection() {
     const name = connectionForm.name.trim();
@@ -313,14 +352,93 @@ export default function App() {
 
   async function testConnection(connection: HermesConnection) {
     setTestingConnectionId(connection.id);
+    setConnectionHealth((current) => ({
+      ...current,
+      [connection.id]: { ...current[connection.id], status: 'checking' },
+    }));
+    const startedAt = Date.now();
     try {
       const client = new HermesClient(connection);
       const [health, models] = await Promise.all([client.health({ timeoutMs: 8_000 }), client.models({ timeoutMs: 8_000 })]);
+      const latencyMs = Date.now() - startedAt;
+      setConnectionHealth((current) => ({
+        ...current,
+        [connection.id]: {
+          status: 'ok',
+          latencyMs,
+          modelsCount: models.length,
+          checkedAt: new Date().toISOString(),
+        },
+      }));
       showNotice('连接成功', `状态：${health.status ?? 'ok'}\n模型数：${models.length}`);
     } catch (error) {
+      setConnectionHealth((current) => ({
+        ...current,
+        [connection.id]: {
+          status: 'error',
+          error: getErrorMessage(error),
+          checkedAt: new Date().toISOString(),
+        },
+      }));
       showNotice('连接失败', getErrorMessage(error));
     } finally {
       setTestingConnectionId(null);
+    }
+  }
+
+  async function refreshConnectionHealth(showResult = false) {
+    const targets = connections.filter((connection) => connection.enabled);
+    if (targets.length === 0) {
+      if (showResult) showNotice('没有可检查的连接', '请先启用至少一个 Hermes Gateway。');
+      return;
+    }
+
+    setConnectionHealth((current) => {
+      const next = { ...current };
+      for (const connection of targets) {
+        next[connection.id] = { ...next[connection.id], status: 'checking' };
+      }
+      return next;
+    });
+
+    const results = await Promise.all(targets.map(async (connection) => {
+      const startedAt = Date.now();
+      try {
+        const client = new HermesClient(connection);
+        const [health, models] = await Promise.all([client.health({ timeoutMs: 8_000 }), client.models({ timeoutMs: 8_000 })]);
+        return {
+          id: connection.id,
+          health: {
+            status: 'ok' as const,
+            latencyMs: Date.now() - startedAt,
+            modelsCount: models.length,
+            checkedAt: new Date().toISOString(),
+            error: health.status && health.status !== 'ok' ? `状态：${health.status}` : undefined,
+          },
+        };
+      } catch (error) {
+        return {
+          id: connection.id,
+          health: {
+            status: 'error' as const,
+            error: getErrorMessage(error),
+            checkedAt: new Date().toISOString(),
+          },
+        };
+      }
+    }));
+
+    setConnectionHealth((current) => {
+      const next = { ...current };
+      for (const result of results) {
+        next[result.id] = result.health;
+      }
+      return next;
+    });
+
+    if (showResult) {
+      const okCount = results.filter((result) => result.health.status === 'ok').length;
+      showNotice('健康检查完成', `${okCount}/${results.length} 个连接可用。`);
     }
   }
 
@@ -387,6 +505,13 @@ export default function App() {
       ...current,
       [roomId]: [...(current[roomId] ?? []), ...messages],
     }));
+    const incomingCount = messages.filter((message) => message.authorId !== 'user').length;
+    if (incomingCount > 0 && (roomId !== selectedRoomId || tab !== 'chat')) {
+      setUnreadByRoom((current) => ({
+        ...current,
+        [roomId]: (current[roomId] ?? 0) + incomingCount,
+      }));
+    }
   }
 
   function updateMessageInRoom(roomId: string, messageId: string, patch: Partial<ChatMessage>) {
@@ -708,6 +833,12 @@ export default function App() {
             <Ionicons name="radio-outline" size={14} color="#065f46" />
             <Text style={[styles.statText, styles.statTextAccent]}>{enabledConnections.length} 可用</Text>
           </View>
+          {totalUnread > 0 ? (
+            <View style={styles.unreadPill}>
+              <Ionicons name="notifications" size={14} color="#991b1b" />
+              <Text style={styles.unreadPillText}>{totalUnread} 未读</Text>
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -915,6 +1046,7 @@ export default function App() {
                 color={room.id === selectedRoomId ? '#ffffff' : '#4b5563'}
               />
               <Text style={[styles.roomPillText, room.id === selectedRoomId && styles.roomPillTextActive]}>{room.name}</Text>
+              {unreadByRoom[room.id] ? <Text style={styles.roomUnreadBadge}>{unreadByRoom[room.id]}</Text> : null}
             </TouchableOpacity>
           ))}
           <TouchableOpacity style={styles.roomCreatePill} onPress={() => setTab('rooms')}>
@@ -941,6 +1073,7 @@ export default function App() {
             const roomMessages = messagesByRoom[room.id] ?? [];
             const lastMessage = roomMessages[roomMessages.length - 1];
             const active = room.id === selectedRoomId;
+            const unread = unreadByRoom[room.id] ?? 0;
             return (
               <TouchableOpacity
                 key={room.id}
@@ -949,7 +1082,7 @@ export default function App() {
               >
                 <View style={styles.sidebarRoomTop}>
                   <Text style={[styles.sidebarRoomTitle, active && styles.sidebarRoomTitleActive]}>{room.name}</Text>
-                  <Text style={styles.sidebarRoomMeta}>{room.members.length}</Text>
+                  {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : <Text style={styles.sidebarRoomMeta}>{room.members.length}</Text>}
                 </View>
                 <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
                   {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
@@ -1116,6 +1249,26 @@ export default function App() {
         </View>
 
         <Text style={styles.sectionTitle}>连接列表</Text>
+        <View style={styles.healthPanel}>
+          <View style={styles.healthPanelHeader}>
+            <View>
+              <Text style={styles.healthTitle}>连接健康</Text>
+              <Text style={styles.help}>延迟、模型列表和最近错误会记录在这里。</Text>
+            </View>
+            <SecondaryButton
+              icon="pulse-outline"
+              label={healthSummary.checking > 0 ? '检查中...' : '刷新全部'}
+              onPress={() => refreshConnectionHealth(true)}
+              disabled={healthSummary.checking > 0}
+            />
+          </View>
+          <View style={styles.healthMetricRow}>
+            <HealthMetric label="可用" value={healthSummary.ok} tone="ok" />
+            <HealthMetric label="失败" value={healthSummary.error} tone="error" />
+            <HealthMetric label="检查中" value={healthSummary.checking} tone="checking" />
+            <HealthMetric label="未知" value={healthSummary.unknown} tone="unknown" />
+          </View>
+        </View>
         {connections.length === 0 ? <Text style={styles.muted}>暂无连接。</Text> : null}
         {connections.map((connection) => (
           <View key={connection.id} style={styles.card}>
@@ -1125,10 +1278,14 @@ export default function App() {
                 <Text style={styles.muted}>{connection.baseUrl}</Text>
                 <Text style={styles.help}>模型：{connection.model}</Text>
               </View>
-              <Text style={[styles.badge, connection.enabled ? styles.badgeOn : styles.badgeOff]}>
-                {connection.enabled ? '启用' : '停用'}
-              </Text>
+              <View style={styles.connectionBadges}>
+                <Text style={[styles.badge, connection.enabled ? styles.badgeOn : styles.badgeOff]}>
+                  {connection.enabled ? '启用' : '停用'}
+                </Text>
+                <HealthBadge health={connectionHealth[connection.id]} />
+              </View>
             </View>
+            <ConnectionHealthDetails health={connectionHealth[connection.id]} />
             <View style={styles.buttonRow}>
               <SecondaryButton icon={connection.enabled ? 'pause-circle-outline' : 'play-circle-outline'} label={connection.enabled ? '停用' : '启用'} onPress={() => toggleConnection(connection.id)} />
               <SecondaryButton
@@ -1274,6 +1431,47 @@ function AttachmentPreview({ attachment, onPress }: { attachment: Attachment; on
   }
 
   return <View style={styles.attachmentPreview}>{content}</View>;
+}
+
+function HealthMetric({ label, value, tone }: { label: string; value: number; tone: 'ok' | 'error' | 'checking' | 'unknown' }) {
+  return (
+    <View style={[styles.healthMetric, getHealthMetricStyle(tone)]}>
+      <Text style={styles.healthMetricValue}>{value}</Text>
+      <Text style={styles.healthMetricLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function HealthBadge({ health }: { health?: ConnectionHealth }) {
+  const status = health?.status ?? 'unknown';
+  const label = status === 'ok' ? '健康' : status === 'error' ? '异常' : status === 'checking' ? '检查中' : '未知';
+  return <Text style={[styles.badge, getHealthBadgeStyle(status)]}>{label}</Text>;
+}
+
+function ConnectionHealthDetails({ health }: { health?: ConnectionHealth }) {
+  if (!health || health.status === 'unknown') {
+    return <Text style={styles.help}>尚未检查。点击“测试”或“刷新全部”获取状态。</Text>;
+  }
+
+  if (health.status === 'checking') {
+    return (
+      <View style={styles.healthDetails}>
+        <ActivityIndicator size="small" color="#2563eb" />
+        <Text style={styles.help}>正在检查健康状态...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.healthDetails}>
+      <Text style={styles.healthDetailText}>
+        {health.status === 'ok'
+          ? `延迟 ${health.latencyMs ?? '-'} ms · 模型 ${health.modelsCount ?? 0} 个`
+          : `最近错误：${health.error ?? '未知错误'}`}
+      </Text>
+      {health.checkedAt ? <Text style={styles.healthCheckedAt}>检查于 {formatDateTime(health.checkedAt)}</Text> : null}
+    </View>
+  );
 }
 
 function MiniButton({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
@@ -1503,6 +1701,26 @@ function formatTime(value: string): string {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function getHealthMetricStyle(tone: 'ok' | 'error' | 'checking' | 'unknown') {
+  if (tone === 'ok') return styles.healthMetricOk;
+  if (tone === 'error') return styles.healthMetricError;
+  if (tone === 'checking') return styles.healthMetricChecking;
+  return styles.healthMetricUnknown;
+}
+
+function getHealthBadgeStyle(status: ConnectionHealth['status']) {
+  if (status === 'ok') return styles.healthBadgeOk;
+  if (status === 'error') return styles.healthBadgeError;
+  if (status === 'checking') return styles.healthBadgeChecking;
+  return styles.healthBadgeUnknown;
+}
+
 function showNotice(title: string, message?: string) {
   if (Platform.OS === 'web') {
     globalThis.alert?.(message ? `${title}\n${message}` : title);
@@ -1681,6 +1899,22 @@ const styles = StyleSheet.create({
   statTextAccent: {
     color: '#065f46',
   },
+  unreadPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+  },
+  unreadPillText: {
+    color: '#991b1b',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   tabs: {
     flexDirection: 'row',
     gap: 8,
@@ -1788,6 +2022,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  sidebarUnreadBadge: {
+    overflow: 'hidden',
+    minWidth: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 999,
+    color: '#ffffff',
+    backgroundColor: '#dc2626',
+    fontSize: 11,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
   sidebarRoomPreview: {
     color: '#6b7280',
     fontSize: 12,
@@ -1831,6 +2077,18 @@ const styles = StyleSheet.create({
   },
   roomPillTextActive: {
     color: '#fff',
+  },
+  roomUnreadBadge: {
+    overflow: 'hidden',
+    minWidth: 20,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    color: '#ffffff',
+    backgroundColor: '#dc2626',
+    fontSize: 11,
+    fontWeight: '800',
+    textAlign: 'center',
   },
   roomCreatePill: {
     flexDirection: 'row',
@@ -2405,10 +2663,71 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#fffbeb',
   },
+  healthPanel: {
+    gap: 12,
+    padding: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  healthPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  healthTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  healthMetricRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  healthMetric: {
+    flex: 1,
+    minWidth: 86,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  healthMetricOk: {
+    borderColor: '#bbf7d0',
+    backgroundColor: '#f0fdf4',
+  },
+  healthMetricError: {
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+  },
+  healthMetricChecking: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  healthMetricUnknown: {
+    borderColor: '#e5e7eb',
+    backgroundColor: '#f9fafb',
+  },
+  healthMetricValue: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  healthMetricLabel: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   connectionHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
+  },
+  connectionBadges: {
+    alignItems: 'flex-end',
+    gap: 6,
   },
   badge: {
     overflow: 'hidden',
@@ -2425,6 +2744,40 @@ const styles = StyleSheet.create({
   badgeOff: {
     color: '#7f1d1d',
     backgroundColor: '#fee2e2',
+  },
+  healthBadgeOk: {
+    color: '#166534',
+    backgroundColor: '#dcfce7',
+  },
+  healthBadgeError: {
+    color: '#991b1b',
+    backgroundColor: '#fee2e2',
+  },
+  healthBadgeChecking: {
+    color: '#1d4ed8',
+    backgroundColor: '#dbeafe',
+  },
+  healthBadgeUnknown: {
+    color: '#4b5563',
+    backgroundColor: '#f3f4f6',
+  },
+  healthDetails: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#f9fafb',
+  },
+  healthDetailText: {
+    color: '#1f2937',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  healthCheckedAt: {
+    color: '#6b7280',
+    fontSize: 12,
   },
   buttonRow: {
     flexDirection: 'row',
