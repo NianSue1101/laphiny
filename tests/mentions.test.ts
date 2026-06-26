@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveMentionTargets } from '../src/lib/mentions';
+import { resolveAssistantDelegations, resolveMentionTargets } from '../src/lib/mentions';
 import { Room } from '../src/types';
 
 const room: Room = {
@@ -27,12 +27,28 @@ test('resolves @mention targets in a group room', () => {
   assert.equal(result.strippedText, '帮我看一下计划');
 });
 
+test('supports punctuation after user mentions', () => {
+  const result = resolveMentionTargets(room, '@猫娘，帮我看一下计划');
+
+  assert.equal(result.reason, 'mentions');
+  assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl']);
+  assert.equal(result.strippedText, '帮我看一下计划');
+});
+
 test('resolves full-width ＠all to every enabled member', () => {
   const result = resolveMentionTargets(room, '＠all 开大会');
 
   assert.equal(result.reason, 'all');
   assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl', 'fund']);
   assert.equal(result.strippedText, '开大会');
+});
+
+test('resolves @all-seq as sequential collaboration', () => {
+  const result = resolveMentionTargets(room, '@all-seq 接力讨论这个方案');
+
+  assert.equal(result.reason, 'all-seq');
+  assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl', 'fund']);
+  assert.equal(result.strippedText, '接力讨论这个方案');
 });
 
 test('does not dispatch group messages without mentions', () => {
@@ -54,4 +70,16 @@ test('direct room dispatches to its only enabled member without mention', () => 
   assert.equal(result.reason, 'direct');
   assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl']);
   assert.equal(result.strippedText, '你好');
+});
+
+test('assistant delegation only triggers from line-start mentions with task text', () => {
+  const delegations = resolveAssistantDelegations(
+    room,
+    '我可以先总结。\n@基金猫娘 请检查市场风险\n普通句子里提到 @猫娘 不应触发',
+    'catgirl',
+  );
+
+  assert.equal(delegations.length, 1);
+  assert.equal(delegations[0]?.target.connectionId, 'fund');
+  assert.equal(delegations[0]?.taskText, '请检查市场风险');
 });

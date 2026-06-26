@@ -21,6 +21,7 @@ export function migrate(db) {
       api_key TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL,
       enabled INTEGER NOT NULL,
+      profile_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -30,6 +31,8 @@ export function migrate(db) {
       name TEXT NOT NULL,
       kind TEXT NOT NULL,
       session_key TEXT NOT NULL,
+      session_ids TEXT NOT NULL DEFAULT '{}',
+      member_session_keys TEXT NOT NULL DEFAULT '{}',
       context_limit INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -80,7 +83,32 @@ export function migrate(db) {
       body TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS extra_state (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
+
+  ensureColumn(db, 'connections', 'profile_json', 'TEXT');
+  ensureColumn(db, 'rooms', 'session_ids', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(db, 'rooms', 'member_session_keys', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(db, 'rooms', 'room_mode', 'TEXT');
+  ensureColumn(db, 'rooms', 'default_mode', 'TEXT');
+  ensureColumn(db, 'rooms', 'summary_connection_id', 'TEXT');
+  ensureColumn(db, 'rooms', 'auto_delegation_enabled', 'INTEGER');
+  ensureColumn(db, 'rooms', 'max_delegation_depth', 'INTEGER');
+  ensureColumn(db, 'rooms', 'last_summary_json', 'TEXT');
+  ensureColumn(db, 'rooms', 'memory_capsule_json', 'TEXT');
+  ensureColumn(db, 'rooms', 'roleplay_json', 'TEXT');
+}
+
+
+function ensureColumn(db, tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (columns.some((column) => column.name === columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }
 
 export function createApp({ db, apiKey = process.env.LAPHINY_SYNC_API_KEY || '' }) {
@@ -158,6 +186,10 @@ export function mergeSnapshot(db, snapshot) {
       for (const message of messages) upsertMessage(db, { ...message, roomId: message.roomId ?? roomId });
     }
     for (const event of snapshot.squareEvents ?? []) upsertSquareEvent(db, event);
+    upsertExtraState(db, 'collaborationEvents', snapshot.collaborationEvents ?? []);
+    upsertExtraState(db, 'delegationTasks', snapshot.delegationTasks ?? []);
+    upsertExtraState(db, 'teamTemplates', snapshot.teamTemplates ?? []);
+    upsertExtraState(db, 'profileVersions', snapshot.profileVersions ?? []);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
@@ -171,6 +203,10 @@ export function readSnapshot(db) {
     rooms: readRooms(db),
     messagesByRoom: readMessagesByRoom(db),
     squareEvents: readEvents(db),
+    collaborationEvents: readExtraState(db, 'collaborationEvents', []),
+    delegationTasks: readExtraState(db, 'delegationTasks', []),
+    teamTemplates: readExtraState(db, 'teamTemplates', []),
+    profileVersions: readExtraState(db, 'profileVersions', []),
     updatedAt: latestUpdatedAt(db),
   };
 }
@@ -179,14 +215,15 @@ function upsertConnection(db, connection) {
   const existing = db.prepare('SELECT updated_at FROM connections WHERE id = ?').get(connection.id);
   if (existing && compareIso(existing.updated_at, connection.updatedAt) > 0) return;
   db.prepare(`
-    INSERT INTO connections (id, name, base_url, api_key, model, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO connections (id, name, base_url, api_key, model, enabled, profile_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       base_url = excluded.base_url,
       api_key = excluded.api_key,
       model = excluded.model,
       enabled = excluded.enabled,
+      profile_json = excluded.profile_json,
       created_at = excluded.created_at,
       updated_at = excluded.updated_at
   `).run(
@@ -196,6 +233,7 @@ function upsertConnection(db, connection) {
     connection.apiKey ?? '',
     connection.model,
     connection.enabled ? 1 : 0,
+    connection.profile ? JSON.stringify(connection.profile) : null,
     connection.createdAt,
     connection.updatedAt,
   );
@@ -205,13 +243,23 @@ function upsertRoom(db, room) {
   const existing = db.prepare('SELECT updated_at FROM rooms WHERE id = ?').get(room.id);
   if (existing && compareIso(existing.updated_at, room.updatedAt) > 0) return;
   db.prepare(`
-    INSERT INTO rooms (id, name, kind, session_key, context_limit, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO rooms (id, name, kind, session_key, session_ids, member_session_keys, context_limit, room_mode, default_mode, summary_connection_id, auto_delegation_enabled, max_delegation_depth, last_summary_json, memory_capsule_json, roleplay_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       kind = excluded.kind,
       session_key = excluded.session_key,
+      session_ids = excluded.session_ids,
+      member_session_keys = excluded.member_session_keys,
       context_limit = excluded.context_limit,
+      room_mode = excluded.room_mode,
+      default_mode = excluded.default_mode,
+      summary_connection_id = excluded.summary_connection_id,
+      auto_delegation_enabled = excluded.auto_delegation_enabled,
+      max_delegation_depth = excluded.max_delegation_depth,
+      last_summary_json = excluded.last_summary_json,
+      memory_capsule_json = excluded.memory_capsule_json,
+      roleplay_json = excluded.roleplay_json,
       created_at = excluded.created_at,
       updated_at = excluded.updated_at
   `).run(
@@ -219,7 +267,17 @@ function upsertRoom(db, room) {
     room.name,
     room.kind,
     room.sessionKey,
+    JSON.stringify(room.sessionIds ?? {}),
+    JSON.stringify(room.memberSessionKeys ?? {}),
     room.contextLimit ?? null,
+    room.mode ?? null,
+    room.defaultCollaborationMode ?? null,
+    room.summaryConnectionId ?? null,
+    room.autoDelegationEnabled == null ? null : room.autoDelegationEnabled ? 1 : 0,
+    room.maxDelegationDepth ?? null,
+    room.lastSummary ? JSON.stringify(room.lastSummary) : null,
+    room.memoryCapsule ? JSON.stringify(room.memoryCapsule) : null,
+    room.roleplay ? JSON.stringify(room.roleplay) : null,
     room.createdAt,
     room.updatedAt,
   );
@@ -301,6 +359,21 @@ function upsertSquareEvent(db, event) {
   );
 }
 
+function upsertExtraState(db, key, value) {
+  db.prepare(`
+    INSERT INTO extra_state (key, value_json, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_at = excluded.updated_at
+  `).run(key, JSON.stringify(value ?? []), new Date().toISOString());
+}
+
+function readExtraState(db, key, fallback) {
+  const row = db.prepare('SELECT value_json FROM extra_state WHERE key = ?').get(key);
+  return parseJsonObject(row?.value_json) ?? fallback;
+}
+
 function readConnections(db) {
   return db.prepare('SELECT * FROM connections ORDER BY updated_at ASC').all().map((row) => ({
     id: row.id,
@@ -309,6 +382,7 @@ function readConnections(db) {
     apiKey: row.api_key,
     model: row.model,
     enabled: Boolean(row.enabled),
+    profile: parseJsonObject(row.profile_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
@@ -331,9 +405,18 @@ function readRooms(db) {
     name: row.name,
     kind: row.kind,
     members: membersByRoom.get(row.id) ?? [],
-    sessionIds: {},
+    sessionIds: parseJsonObject(row.session_ids) ?? {},
     sessionKey: row.session_key,
+    memberSessionKeys: parseJsonObject(row.member_session_keys) ?? {},
     contextLimit: row.context_limit ?? undefined,
+    mode: row.room_mode ?? undefined,
+    defaultCollaborationMode: row.default_mode ?? undefined,
+    summaryConnectionId: row.summary_connection_id ?? undefined,
+    autoDelegationEnabled: row.auto_delegation_enabled == null ? undefined : Boolean(row.auto_delegation_enabled),
+    maxDelegationDepth: row.max_delegation_depth ?? undefined,
+    lastSummary: parseJsonObject(row.last_summary_json) ?? undefined,
+    memoryCapsule: parseJsonObject(row.memory_capsule_json) ?? undefined,
+    roleplay: parseJsonObject(row.roleplay_json) ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
@@ -392,6 +475,16 @@ function readEvents(db, since) {
     body: row.body,
     createdAt: row.created_at,
   }));
+}
+
+function parseJsonObject(text) {
+  if (!text) return undefined;
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function latestUpdatedAt(db) {
