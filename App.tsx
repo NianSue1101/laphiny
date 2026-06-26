@@ -735,6 +735,18 @@ export default function App() {
       return;
     }
 
+    // Auto-populate missing per-member sessionIds for old group rooms
+    if (room.kind === 'group' && Object.keys(room.sessionIds).length === 0) {
+      const sessionIds: Record<string, string> = {};
+      const memberSessionKeys: Record<string, string> = {};
+      for (const member of room.members) {
+        sessionIds[member.connectionId] = `laphiny-${room.id}-${member.connectionId}`;
+        memberSessionKeys[member.connectionId] = `laphiny-${room.id}-key`;
+      }
+      updateSelectedRoom({ sessionIds, memberSessionKeys });
+      room = { ...room, sessionIds, memberSessionKeys };
+    }
+
     const previousMessages = selectedMessages;
     const { targets, textForHermes } = getSendTargets(room, rawText, explicitTargetIds);
     const now = new Date().toISOString();
@@ -952,12 +964,20 @@ export default function App() {
 
   function resetRoomSession() {
     if (!selectedRoom) return;
-    requestConfirm('清空 Hermes 记忆', '将为当前房间生成新的 sessionKey，后续请求不会继续旧会话。', () => {
+    requestConfirm('清空 Hermes 记忆', '将为每个群成员生成新的 sessionKey，后续请求不会继续旧会话。', () => {
+      const now = Date.now().toString(36);
+      const sessionIds: Record<string, string> = {};
+      const memberSessionKeys: Record<string, string> = {};
+      for (const member of selectedRoom.members) {
+        sessionIds[member.connectionId] = `laphiny-${selectedRoom.id}-${member.connectionId}-${now}`;
+        memberSessionKeys[member.connectionId] = `laphiny-${selectedRoom.id}-key-${now}`;
+      }
       updateSelectedRoom({
-        sessionIds: {},
-        sessionKey: `laphiny-${selectedRoom.id}-${Date.now().toString(36)}`,
+        sessionIds,
+        sessionKey: `laphiny-${selectedRoom.id}-${now}`,
+        memberSessionKeys,
       });
-      appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, '已重置当前房间的 Hermes 会话。')]);
+      appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, '已重置当前房间所有成员的 Hermes 会话。')]);
     });
   }
 
@@ -1677,7 +1697,12 @@ function buildChatHistory(
     : [];
 
   const history = previousMessages
-    .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
+    .filter((message) => {
+      if (message.status !== 'sent') return false;
+      if (message.role === 'user') return true;
+      if (message.role === 'assistant' && message.authorId === member.connectionId) return true;
+      return false;
+    })
     .slice(-Math.max(1, contextLimit))
     .map<HermesChatMessage>((message) => ({
       role: message.role,
@@ -1705,10 +1730,15 @@ function buildChatHistoryForDelegation(
   return [
     {
       role: 'system',
-      content: `你正在 Laphiny 群聊「${room.name}」中，${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复。`,
+      content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复，不要模仿其他成员的语气。`,
     },
     ...previousMessages
-      .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
+      .filter((message) => {
+        if (message.status !== 'sent') return false;
+        if (message.role === 'user') return true;
+        if (message.role === 'assistant' && message.authorId === member.connectionId) return true;
+        return false;
+      })
       .slice(-20)
       .map<HermesChatMessage>((message) => ({
         role: message.role,
@@ -1722,13 +1752,20 @@ function buildChatHistoryForDelegation(
 function makeRoom(name: string, kind: Room['kind'], members: RoomMember[]): Room {
   const now = new Date().toISOString();
   const id = makeId('room');
+  const sessionIds: Record<string, string> = {};
+  const memberSessionKeys: Record<string, string> = {};
+  for (const member of members) {
+    sessionIds[member.connectionId] = `laphiny-${id}-${member.connectionId}`;
+    memberSessionKeys[member.connectionId] = `laphiny-${id}-key`;
+  }
   return {
     id,
     name,
     kind,
     members,
-    sessionIds: {},
+    sessionIds,
     sessionKey: `laphiny-${id}`,
+    memberSessionKeys,
     contextLimit: DEFAULT_CONTEXT_LIMIT,
     createdAt: now,
     updatedAt: now,
