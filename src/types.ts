@@ -84,6 +84,7 @@ export interface ChatMessage {
   attachments?: Attachment[];
   status: ChatMessageStatus;
   error?: string;
+  delegatedFrom?: string;
   createdAt: string;
 }
 
