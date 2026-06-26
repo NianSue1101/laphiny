@@ -15,6 +15,9 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+
 import { pickDocuments, pickImages } from './src/lib/attachments';
 import { HermesClient } from './src/lib/hermes_client';
 import { resolveMentionTargets } from './src/lib/mentions';
@@ -25,6 +28,41 @@ import { Attachment, ChatMessage, HermesChatMessage, HermesConnection, Room, Roo
 type Tab = 'chat' | 'connections' | 'rooms';
 
 const DEFAULT_MODEL = 'hermes-agent';
+
+const DEFAULT_API_KEY = '24a799bdc0ad4c0d73235ee83aae435a2e5b2cae4d7494abb120f7e15a0ba377';
+
+const DEFAULT_CONNECTIONS: HermesConnection[] = [
+  {
+    id: makeId('conn'),
+    name: 'Flor',
+    baseUrl: 'https://nianxxz.site/hermes-api',
+    apiKey: DEFAULT_API_KEY,
+    model: DEFAULT_MODEL,
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: makeId('conn'),
+    name: 'Laper',
+    baseUrl: 'https://nianxxz.site/laper-api',
+    apiKey: DEFAULT_API_KEY,
+    model: DEFAULT_MODEL,
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: makeId('conn'),
+    name: 'Arilphin',
+    baseUrl: 'https://nianxxz.site/arilphin-api',
+    apiKey: DEFAULT_API_KEY,
+    model: DEFAULT_MODEL,
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+];
 
 export default function App() {
   const [hydrated, setHydrated] = useState(false);
@@ -47,7 +85,12 @@ export default function App() {
     Promise.all([loadConnections(), loadRooms(), loadMessages()])
       .then(([loadedConnections, loadedRooms, loadedMessages]) => {
         if (!mounted) return;
-        setConnections(loadedConnections);
+        let finalConnections = loadedConnections;
+        if (finalConnections.length === 0) {
+          finalConnections = DEFAULT_CONNECTIONS;
+          void saveConnections(finalConnections);
+        }
+        setConnections(finalConnections);
         setRooms(loadedRooms);
         setMessagesByRoom(loadedMessages);
         setSelectedRoomId(loadedRooms[0]?.id ?? null);
@@ -118,6 +161,76 @@ export default function App() {
 
     setConnections((current) => [...current, connection]);
     setConnectionForm({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
+  }
+
+  async function importConnections() {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/json',
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) return;
+
+      const asset = result.assets?.[0];
+      if (!asset) return;
+
+      const text = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+      let data: unknown;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        showNotice('JSON 格式错误', '文件不是有效的 JSON');
+        return;
+      }
+
+      if (!Array.isArray(data)) {
+        showNotice('JSON 格式错误', 'JSON 必须是连接对象数组');
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const imported: HermesConnection[] = [];
+      for (let i = 0; i < data.length; i++) {
+        const item = data[i];
+        if (!item || typeof item !== 'object') continue;
+        const name = String((item as Record<string, unknown>).name ?? '').trim();
+        const baseUrl = String((item as Record<string, unknown>).baseUrl ?? '').trim();
+        if (!name || !baseUrl) continue;
+
+        imported.push({
+          id: makeId('conn'),
+          name,
+          baseUrl,
+          apiKey: String((item as Record<string, unknown>).apiKey ?? ''),
+          model: String((item as Record<string, unknown>).model || DEFAULT_MODEL),
+          enabled: (item as Record<string, unknown>).enabled !== false,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      if (imported.length === 0) {
+        showNotice('没有可导入的连接', 'JSON 中没有有效的连接数据');
+        return;
+      }
+
+      setConnections((current) => {
+        const existingNames = new Set(current.map((c) => c.name));
+        const newOnes = imported.filter((c) => !existingNames.has(c.name));
+        if (newOnes.length === 0) {
+          showNotice('没有新连接', '全部连接已存在');
+          return current;
+        }
+        const skipped = imported.length - newOnes.length;
+        showNotice(
+          '导入完成',
+          `已导入 ${newOnes.length} 个连接${skipped > 0 ? `，跳过 ${skipped} 个已存在` : ''}`,
+        );
+        return [...current, ...newOnes];
+      });
+    } catch (error) {
+      showNotice('导入失败', getErrorMessage(error));
+    }
   }
 
   async function testConnection(connection: HermesConnection) {
@@ -450,6 +563,7 @@ export default function App() {
           autoCapitalize="none"
         />
         <PrimaryButton label="添加连接" onPress={addConnection} />
+        <SecondaryButton label="导入 JSON" onPress={importConnections} />
 
         <Text style={styles.sectionTitle}>连接列表</Text>
         {connections.length === 0 ? <Text style={styles.muted}>暂无连接。</Text> : null}
