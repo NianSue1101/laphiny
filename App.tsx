@@ -698,9 +698,9 @@ export default function App() {
         stream: true,
       }, {
         sessionId: room.sessionIds[connection.id],
-          sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
-          timeoutMs: 120_000,
-          signal: controller.signal,
+        sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
+        timeoutMs: 120_000,
+        signal: controller.signal,
       })) {
         streamedText += chunk;
         updateMessageInRoom(room.id, placeholderId, { content: streamedText });
