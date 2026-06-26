@@ -1,8 +1,10 @@
 import 'react-native-url-polyfill/auto';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Image,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -170,7 +172,7 @@ export default function App() {
         if (!mounted) return;
         let finalConnections = loadedConnections;
         if (finalConnections.length === 0) {
-          finalConnections = makeDefaultConnections();
+          finalConnections = DEFAULT_CONNECTIONS;
           void saveConnections(finalConnections);
         }
         setConnections(finalConnections);
