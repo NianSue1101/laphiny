@@ -161,6 +161,7 @@ export default function App() {
   const hydratedRef = useRef(false);
   const messageScrollRef = useRef<ScrollView | null>(null);
   const streamControllersRef = useRef<Record<string, AbortController>>({});
+  const pollingSquareEventsRef = useRef(false);
   const { width } = useWindowDimensions();
 
   useEffect(() => {
@@ -248,6 +249,14 @@ export default function App() {
         return next;
       });
     }
+    if (tab === 'square') {
+      setUnreadByRoom((current) => {
+        if (!current.__square) return current;
+        const next = { ...current };
+        delete next.__square;
+        return next;
+      });
+    }
   }, [selectedRoomId, tab]);
 
   useEffect(() => {
@@ -255,6 +264,47 @@ export default function App() {
       document.title = totalUnread > 0 ? `(${totalUnread}) Laphiny` : 'Laphiny';
     }
   }, [totalUnread]);
+
+  useEffect(() => {
+    if (!hydrated || !syncConfig.enabled || !syncConfig.baseUrl.trim()) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      if (pollingSquareEventsRef.current) return;
+      pollingSquareEventsRef.current = true;
+      try {
+        const client = new LaphinySyncClient(syncConfig);
+        const since = syncConfig.lastEventPulledAt ?? latestSquareEventTime(squareEvents);
+        const events = await client.listEvents({ since, timeoutMs: 10_000 });
+        if (cancelled || events.length === 0) return;
+
+        setSquareEvents((current) => mergeSquareEvents([...current, ...events]).slice(-300));
+        const latest = latestSquareEventTime(events);
+        setSyncConfig((current) => ({
+          ...current,
+          lastEventPulledAt: latest || current.lastEventPulledAt,
+          updatedAt: new Date().toISOString(),
+        }));
+        if (tab !== 'square') {
+          setUnreadByRoom((current) => ({
+            ...current,
+            __square: (current.__square ?? 0) + events.length,
+          }));
+        }
+      } catch {
+        // Polling should stay quiet; manual sync actions surface errors.
+      } finally {
+        pollingSquareEventsRef.current = false;
+      }
+    };
+
+    void poll();
+    const intervalId = setInterval(() => void poll(), 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [hydrated, syncConfig.enabled, syncConfig.baseUrl, syncConfig.apiKey, syncConfig.lastEventPulledAt, squareEvents, tab]);
 
   function addConnection() {
     const name = connectionForm.name.trim();
@@ -1353,6 +1403,7 @@ export default function App() {
           <View style={styles.syncMetaRow}>
             <Text style={styles.help}>上次拉取：{syncConfig.lastPulledAt ? formatDateTime(syncConfig.lastPulledAt) : '无'}</Text>
             <Text style={styles.help}>上次推送：{syncConfig.lastPushedAt ? formatDateTime(syncConfig.lastPushedAt) : '无'}</Text>
+            <Text style={styles.help}>事件轮询：{syncConfig.lastEventPulledAt ? formatDateTime(syncConfig.lastEventPulledAt) : '无'}</Text>
           </View>
           <View style={styles.buttonRow}>
             <SecondaryButton icon="pulse-outline" label={syncing ? '检查中...' : '测试后端'} onPress={testSyncBackend} disabled={syncing} />
@@ -1969,6 +2020,10 @@ function mergeSquareEvents(events: SquareEvent[]): SquareEvent[] {
   const byId = new Map<string, SquareEvent>();
   for (const event of events) byId.set(event.id, event);
   return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function latestSquareEventTime(events: SquareEvent[]): string | undefined {
+  return events.map((event) => event.createdAt).sort().at(-1);
 }
 
 function getHealthMetricStyle(tone: 'ok' | 'error' | 'checking' | 'unknown') {

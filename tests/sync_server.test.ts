@@ -10,7 +10,7 @@ test('sync server merges snapshots into sqlite tables', () => {
   const db = openDatabase(':memory:');
   mergeSnapshot(db, makeSnapshot());
 
-  const snapshot = readSnapshot(db);
+  const snapshot: any = readSnapshot(db);
   assert.equal(snapshot.connections.length, 1);
   assert.equal(snapshot.rooms.length, 1);
   assert.equal(snapshot.rooms[0].members[0].alias, 'Flor');
@@ -27,7 +27,7 @@ test('sync server keeps newer connection records during merge', () => {
   mergeSnapshot(db, makeSnapshot({ connectionName: 'New', updatedAt: '2026-06-26T00:01:00.000Z' }));
   mergeSnapshot(db, makeSnapshot({ connectionName: 'Older again', updatedAt: '2026-06-25T23:59:00.000Z' }));
 
-  const snapshot = readSnapshot(db);
+  const snapshot: any = readSnapshot(db);
   assert.equal(snapshot.connections[0].name, 'New');
 
   db.close();

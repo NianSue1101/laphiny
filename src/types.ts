@@ -35,6 +35,7 @@ export interface SyncConfig {
   apiKey: string;
   lastPulledAt?: string;
   lastPushedAt?: string;
+  lastEventPulledAt?: string;
   updatedAt: string;
 }
 

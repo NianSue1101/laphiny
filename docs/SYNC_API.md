@@ -54,6 +54,7 @@ The backend should merge by `id` for connections, rooms, messages, and square ev
 ### `GET /v1/events?since=<iso-date>`
 
 Returns square events newer than `since`. If `since` is omitted, returns recent events.
+Laphiny polls this endpoint while sync is enabled, so backend-side events can appear in Sisters Square without a full snapshot pull.
 
 ### `POST /v1/events`
 
