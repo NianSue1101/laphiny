@@ -698,7 +698,7 @@ export default function App() {
         stream: true,
       }, {
         sessionId: room.sessionIds[connection.id],
-        sessionKey: room.sessionKey,
+        sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
         timeoutMs: 120_000,
         signal: controller.signal,
       })) {
@@ -788,7 +788,7 @@ export default function App() {
           stream: true,
         }, {
           sessionId: room.sessionIds[connection.id],
-          sessionKey: room.sessionKey,
+          sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: 120_000,
         })) {
           accumulated += chunk;
@@ -807,22 +807,41 @@ export default function App() {
       }
     }));
 
-    // Auto-forward: check if any agent delegated to another via @mention
+    // Auto-forward chain: recursively delegate through @mention.
+    // Depth-limited (3 layers) with cycle detection to prevent infinite loops.
     if (room.kind === 'group') {
-      for (const [, { content, member }] of firstRoundResponses) {
-        const forwardResolution = resolveAssistantMentions(room, content, member.connectionId);
-        if (forwardResolution.targets.length === 0) continue;
+      const MAX_FORWARD_DEPTH = 3;
 
-        const forwardPlaceholders = forwardResolution.targets.map((target) => {
-          const placeholder = makeAssistantPlaceholder(room.id, target);
-          placeholder.delegatedFrom = member.alias;
-          return placeholder;
+      const forwardChain = async (
+        delegatorAlias: string,
+        delegatorContent: string,
+        targets: RoomMember[],
+        taskText: string,
+        visited: Set<string>,
+        depth: number,
+      ): Promise<void> => {
+        if (depth > MAX_FORWARD_DEPTH) return;
+
+        const placeholders = targets.map((target) => {
+          const ph = makeAssistantPlaceholder(room.id, target);
+          ph.delegatedFrom = delegatorAlias;
+          return ph;
         });
-        appendMessagesToRoom(room.id, forwardPlaceholders);
+        appendMessagesToRoom(room.id, placeholders);
 
-        await Promise.all(forwardPlaceholders.map(async (placeholder, idx) => {
-          const target = forwardResolution.targets[idx];
+        await Promise.all(placeholders.map(async (placeholder, idx) => {
+          const target = targets[idx];
           if (!target) return;
+
+          if (visited.has(target.connectionId)) {
+            updateMessageInRoom(room.id, placeholder.id, {
+              status: 'error',
+              error: '委托链中出现循环，跳过',
+              content: '委托链中出现循环，跳过',
+            });
+            return;
+          }
+
           const connection = connectionById.get(target.connectionId);
           if (!connection) {
             updateMessageInRoom(room.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
@@ -834,12 +853,12 @@ export default function App() {
             updateMessageInRoom(room.id, placeholder.id, { status: 'running', content: '' });
 
             const historyMsgs = buildChatHistoryForDelegation(
-              selectedMessages,
+              previousMessages,
               room,
               target,
-              forwardResolution.strippedText,
-              member.alias,
-              content,
+              taskText,
+              delegatorAlias,
+              delegatorContent,
             );
 
             let accumulated = '';
@@ -849,7 +868,7 @@ export default function App() {
               stream: true,
             }, {
               sessionId: room.sessionIds[connection.id],
-              sessionKey: room.sessionKey,
+              sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
               timeoutMs: 120_000,
             })) {
               accumulated += chunk;
@@ -858,6 +877,21 @@ export default function App() {
 
             const answer = accumulated.trim() || '[Hermes 没有返回内容]';
             updateMessageInRoom(room.id, placeholder.id, { content: answer, status: 'sent' });
+
+            // Scan this agent's reply for further @mentions → recurse
+            const nextRes = resolveAssistantMentions(room, answer, target.connectionId);
+            if (nextRes.targets.length > 0) {
+              const nextVisited = new Set(visited);
+              nextVisited.add(target.connectionId);
+              await forwardChain(
+                target.alias,
+                answer,
+                nextRes.targets,
+                nextRes.strippedText,
+                nextVisited,
+                depth + 1,
+              );
+            }
           } catch (error) {
             updateMessageInRoom(room.id, placeholder.id, {
               status: 'error',
@@ -866,6 +900,21 @@ export default function App() {
             });
           }
         }));
+      };
+
+      for (const [, { content, member }] of firstRoundResponses) {
+        const forwardResolution = resolveAssistantMentions(room, content, member.connectionId);
+        if (forwardResolution.targets.length === 0) continue;
+
+        const visited = new Set<string>([member.connectionId]);
+        await forwardChain(
+          member.alias,
+          content,
+          forwardResolution.targets,
+          forwardResolution.strippedText,
+          visited,
+          1,
+        );
       }
     }
   }
@@ -956,6 +1005,7 @@ export default function App() {
       updateSelectedRoom({
         sessionIds: {},
         sessionKey: `laphiny-${selectedRoom.id}-${Date.now().toString(36)}`,
+        memberSessionKeys: {},
       });
       appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, '已重置当前房间的 Hermes 会话。')]);
     });
@@ -1673,15 +1723,17 @@ function buildChatHistory(
   contextLimit = DEFAULT_CONTEXT_LIMIT,
 ): HermesChatMessage[] {
   const systemPrefix: HermesChatMessage[] = room.kind === 'group'
-    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，当前被 @ 的 Hermes 成员名是「${member.alias}」。请只代表自己回复。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。` }]
+    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。你能看到群聊里所有人的发言（每条消息都会标注说话人）。请只代表自己回复，不要模仿其他成员的语气。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。复述或引用聊天记录时不要使用 @ 前缀（直接写名字即可），否则会误触发重复转发。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。@使用边界：仅在明确需要委托/通知/呼叫其他姐妹时才使用 @姐妹名。不需要对方行动时不要用 @。闲聊中提到姐妹名字、表达想法或自言自语时都不必 @。` }]
     : [];
 
   const history = previousMessages
-    .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
+    .filter((message) => message.status === 'sent')
     .slice(-Math.max(1, contextLimit))
     .map<HermesChatMessage>((message) => ({
       role: message.role,
-      content: message.content,
+      content: message.role === 'assistant' && message.authorName
+        ? `【${message.authorName}】：${message.content}`
+        : message.content,
     }));
 
   return [
@@ -1705,14 +1757,16 @@ function buildChatHistoryForDelegation(
   return [
     {
       role: 'system',
-      content: `你正在 Laphiny 群聊「${room.name}」中，${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。`,
+      content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。你能看到群聊里所有人的发言（每条消息都会标注说话人）。${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复，不要模仿其他成员的语气。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。复述或引用聊天记录时不要使用 @ 前缀（直接写名字即可），否则会误触发重复转发。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。@使用边界：仅在明确需要委托/通知/呼叫其他姐妹时才使用 @姐妹名。不需要对方行动时不要用 @。闲聊中提到姐妹名字、表达想法或自言自语时都不必 @。`,
     },
     ...previousMessages
-      .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
+      .filter((message) => message.status === 'sent')
       .slice(-20)
       .map<HermesChatMessage>((message) => ({
         role: message.role,
-        content: message.content,
+        content: message.role === 'assistant' && message.authorName
+          ? `【${message.authorName}】：${message.content}`
+          : message.content,
       })),
     { role: 'assistant', content: delegatorMessage },
     { role: 'user', content: taskText },
@@ -1722,13 +1776,20 @@ function buildChatHistoryForDelegation(
 function makeRoom(name: string, kind: Room['kind'], members: RoomMember[]): Room {
   const now = new Date().toISOString();
   const id = makeId('room');
+  const sessionIds: Record<string, string> = {};
+  const memberSessionKeys: Record<string, string> = {};
+  for (const member of members) {
+    sessionIds[member.connectionId] = `laphiny-${id}-${member.connectionId}`;
+    memberSessionKeys[member.connectionId] = `laphiny-${id}-key`;
+  }
   return {
     id,
     name,
     kind,
     members,
-    sessionIds: {},
+    sessionIds,
     sessionKey: `laphiny-${id}`,
+    memberSessionKeys,
     contextLimit: DEFAULT_CONTEXT_LIMIT,
     createdAt: now,
     updatedAt: now,
