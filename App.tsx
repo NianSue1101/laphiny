@@ -806,6 +806,68 @@ export default function App() {
         });
       }
     }));
+
+    // Auto-forward: check if any agent delegated to another via @mention
+    if (room.kind === 'group') {
+      for (const [, { content, member }] of firstRoundResponses) {
+        const forwardResolution = resolveAssistantMentions(room, content, member.connectionId);
+        if (forwardResolution.targets.length === 0) continue;
+
+        const forwardPlaceholders = forwardResolution.targets.map((target) => {
+          const placeholder = makeAssistantPlaceholder(room.id, target);
+          placeholder.delegatedFrom = member.alias;
+          return placeholder;
+        });
+        appendMessagesToRoom(room.id, forwardPlaceholders);
+
+        await Promise.all(forwardPlaceholders.map(async (placeholder, idx) => {
+          const target = forwardResolution.targets[idx];
+          if (!target) return;
+          const connection = connectionById.get(target.connectionId);
+          if (!connection) {
+            updateMessageInRoom(room.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
+            return;
+          }
+
+          try {
+            const client = new HermesClient(connection);
+            updateMessageInRoom(room.id, placeholder.id, { status: 'running', content: '' });
+
+            const historyMsgs = buildChatHistoryForDelegation(
+              selectedMessages,
+              room,
+              target,
+              forwardResolution.strippedText,
+              member.alias,
+              content,
+            );
+
+            let accumulated = '';
+            for await (const chunk of client.chatCompletionStream({
+              model: connection.model,
+              messages: historyMsgs,
+              stream: true,
+            }, {
+              sessionId: room.sessionIds[connection.id],
+              sessionKey: room.sessionKey,
+              timeoutMs: 120_000,
+            })) {
+              accumulated += chunk;
+              updateMessageInRoom(room.id, placeholder.id, { content: accumulated });
+            }
+
+            const answer = accumulated.trim() || '[Hermes 没有返回内容]';
+            updateMessageInRoom(room.id, placeholder.id, { content: answer, status: 'sent' });
+          } catch (error) {
+            updateMessageInRoom(room.id, placeholder.id, {
+              status: 'error',
+              error: getErrorMessage(error),
+              content: '转发失败',
+            });
+          }
+        }));
+      }
+    }
   }
 
   async function sendMessage() {
