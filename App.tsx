@@ -26,10 +26,22 @@ import { pickDocuments, pickImages } from './src/lib/attachments';
 import { HermesClient } from './src/lib/hermes_client';
 import { resolveMentionTargets } from './src/lib/mentions';
 import { buildHermesUserContent } from './src/lib/payload';
-import { loadConnections, loadMessages, loadRooms, saveConnections, saveMessages, saveRooms } from './src/storage/repository';
-import { Attachment, ChatMessage, HermesChatMessage, HermesConnection, Room, RoomMember } from './src/types';
+import { LaphinySyncClient } from './src/lib/sync_client';
+import {
+  loadConnections,
+  loadMessages,
+  loadRooms,
+  loadSquareEvents,
+  loadSyncConfig,
+  saveConnections,
+  saveMessages,
+  saveRooms,
+  saveSquareEvents,
+  saveSyncConfig,
+} from './src/storage/repository';
+import { Attachment, ChatMessage, HermesChatMessage, HermesConnection, Room, RoomMember, SquareEvent, SyncConfig, SyncSnapshot } from './src/types';
 
-type Tab = 'chat' | 'connections' | 'rooms';
+type Tab = 'chat' | 'connections' | 'rooms' | 'square';
 type IconName = keyof typeof Ionicons.glyphMap;
 type QuickCommand = {
   id: string;
@@ -129,6 +141,8 @@ export default function App() {
   const [connections, setConnections] = useState<HermesConnection[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [messagesByRoom, setMessagesByRoom] = useState<Record<string, ChatMessage[]>>({});
+  const [squareEvents, setSquareEvents] = useState<SquareEvent[]>([]);
+  const [syncConfig, setSyncConfig] = useState<SyncConfig>({ enabled: false, baseUrl: '', apiKey: '', updatedAt: new Date().toISOString() });
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [unreadByRoom, setUnreadByRoom] = useState<Record<string, number>>({});
   const [tab, setTab] = useState<Tab>('chat');
@@ -140,6 +154,7 @@ export default function App() {
   const [roomToolsOpen, setRoomToolsOpen] = useState(false);
   const [testingConnectionId, setTestingConnectionId] = useState<string | null>(null);
   const [connectionHealth, setConnectionHealth] = useState<Record<string, ConnectionHealth>>({});
+  const [syncing, setSyncing] = useState(false);
   const [connectionForm, setConnectionForm] = useState({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
   const [jsonPaste, setJsonPaste] = useState('');
   const [groupName, setGroupName] = useState('Hermes 群聊');
@@ -151,8 +166,8 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
 
-    Promise.all([loadConnections(), loadRooms(), loadMessages()])
-      .then(([loadedConnections, loadedRooms, loadedMessages]) => {
+    Promise.all([loadConnections(), loadRooms(), loadMessages(), loadSyncConfig(), loadSquareEvents()])
+      .then(([loadedConnections, loadedRooms, loadedMessages, loadedSyncConfig, loadedSquareEvents]) => {
         if (!mounted) return;
         let finalConnections = loadedConnections;
         if (finalConnections.length === 0) {
@@ -162,6 +177,8 @@ export default function App() {
         setConnections(finalConnections);
         setRooms(loadedRooms);
         setMessagesByRoom(loadedMessages);
+        setSyncConfig(loadedSyncConfig);
+        setSquareEvents(loadedSquareEvents);
         setSelectedRoomId(loadedRooms[0]?.id ?? null);
         hydratedRef.current = true;
         setHydrated(true);
@@ -188,6 +205,14 @@ export default function App() {
   useEffect(() => {
     if (hydratedRef.current) void saveMessages(messagesByRoom);
   }, [messagesByRoom]);
+
+  useEffect(() => {
+    if (hydratedRef.current) void saveSyncConfig(syncConfig);
+  }, [syncConfig]);
+
+  useEffect(() => {
+    if (hydratedRef.current) void saveSquareEvents(squareEvents);
+  }, [squareEvents]);
 
   const connectionById = useMemo(() => new Map(connections.map((connection) => [connection.id, connection])), [connections]);
   const enabledConnections = useMemo(() => connections.filter((connection) => connection.enabled), [connections]);
@@ -505,6 +530,11 @@ export default function App() {
       ...current,
       [roomId]: [...(current[roomId] ?? []), ...messages],
     }));
+    for (const message of messages) {
+      if (message.authorId === 'system') {
+        appendSquareEvent(makeSquareEventFromMessage(roomId, message));
+      }
+    }
     const incomingCount = messages.filter((message) => message.authorId !== 'user').length;
     if (incomingCount > 0 && (roomId !== selectedRoomId || tab !== 'chat')) {
       setUnreadByRoom((current) => ({
@@ -515,12 +545,24 @@ export default function App() {
   }
 
   function updateMessageInRoom(roomId: string, messageId: string, patch: Partial<ChatMessage>) {
+    let completedMessage: ChatMessage | null = null;
     setMessagesByRoom((current) => ({
       ...current,
       [roomId]: (current[roomId] ?? []).map((message) => (
-        message.id === messageId ? { ...message, ...patch } : message
+        message.id === messageId
+          ? (() => {
+              const next = { ...message, ...patch };
+              if (message.authorId !== 'user' && patch.status && patch.status !== 'running') {
+                completedMessage = next;
+              }
+              return next;
+            })()
+          : message
       )),
     }));
+    if (completedMessage) {
+      appendSquareEvent(makeSquareEventFromMessage(roomId, completedMessage));
+    }
   }
 
   function setStreamActive(messageId: string, active: boolean) {
@@ -807,6 +849,102 @@ export default function App() {
     showNotice(format === 'json' ? 'JSON 已复制' : 'Markdown 已复制', '当前房间记录已复制到剪贴板。');
   }
 
+  function appendSquareEvent(event: SquareEvent) {
+    setSquareEvents((current) => mergeSquareEvents([...current, event]).slice(-300));
+  }
+
+  function makeSquareEventFromMessage(roomId: string, message: ChatMessage): SquareEvent {
+    const room = rooms.find((item) => item.id === roomId);
+    const kind: SquareEvent['kind'] = message.authorId === 'system' ? 'system' : 'message';
+    return {
+      id: `evt_${message.id}_${message.status}`,
+      kind,
+      source: message.authorName,
+      roomId,
+      roomName: room?.name,
+      title: kind === 'system' ? '系统提示' : `${message.authorName} 更新`,
+      body: message.error ? `${message.content}\n\n${message.error}` : message.content,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  function makeSyncClient(): LaphinySyncClient | null {
+    if (!syncConfig.enabled || !syncConfig.baseUrl.trim()) return null;
+    return new LaphinySyncClient(syncConfig);
+  }
+
+  function buildSyncSnapshot(): SyncSnapshot {
+    return {
+      connections,
+      rooms,
+      messagesByRoom,
+      squareEvents,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  function applySyncSnapshot(snapshot: SyncSnapshot) {
+    setConnections((current) => mergeByUpdatedAt(current, snapshot.connections));
+    setRooms((current) => mergeByUpdatedAt(current, snapshot.rooms));
+    setMessagesByRoom((current) => mergeMessagesByRoom(current, snapshot.messagesByRoom));
+    setSquareEvents((current) => mergeSquareEvents([...current, ...(snapshot.squareEvents ?? [])]).slice(-300));
+  }
+
+  async function testSyncBackend() {
+    const client = makeSyncClient();
+    if (!client) {
+      showNotice('同步未启用', '请先启用同步并填写后端地址。');
+      return;
+    }
+    setSyncing(true);
+    try {
+      const health = await client.health({ timeoutMs: 8_000 });
+      showNotice('同步后端可用', `状态：${health.status ?? 'ok'}`);
+    } catch (error) {
+      showNotice('同步后端不可用', getErrorMessage(error));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function pushSyncSnapshot() {
+    const client = makeSyncClient();
+    if (!client) {
+      showNotice('同步未启用', '请先启用同步并填写后端地址。');
+      return;
+    }
+    setSyncing(true);
+    try {
+      const snapshot = await client.pushSnapshot(buildSyncSnapshot(), { timeoutMs: 20_000 });
+      applySyncSnapshot(snapshot);
+      setSyncConfig((current) => ({ ...current, lastPushedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }));
+      showNotice('已推送同步快照', '本机房间、消息和广场事件已发送到后端。');
+    } catch (error) {
+      showNotice('推送失败', getErrorMessage(error));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function pullSyncSnapshot() {
+    const client = makeSyncClient();
+    if (!client) {
+      showNotice('同步未启用', '请先启用同步并填写后端地址。');
+      return;
+    }
+    setSyncing(true);
+    try {
+      const snapshot = await client.pullSnapshot({ timeoutMs: 20_000 });
+      applySyncSnapshot(snapshot);
+      setSyncConfig((current) => ({ ...current, lastPulledAt: new Date().toISOString(), updatedAt: new Date().toISOString() }));
+      showNotice('已拉取同步快照', '远端数据已合并到本机。');
+    } catch (error) {
+      showNotice('拉取失败', getErrorMessage(error));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   if (!hydrated) {
     return (
       <SafeAreaView style={styles.centered}>
@@ -844,11 +982,13 @@ export default function App() {
 
       <View style={styles.tabs}>
         <TabButton icon="chatbubble-ellipses-outline" label="聊天" active={tab === 'chat'} onPress={() => setTab('chat')} />
+        <TabButton icon="planet-outline" label="广场" active={tab === 'square'} onPress={() => setTab('square')} />
         <TabButton icon="albums-outline" label="房间" active={tab === 'rooms'} onPress={() => setTab('rooms')} />
         <TabButton icon="git-network-outline" label="连接" active={tab === 'connections'} onPress={() => setTab('connections')} />
       </View>
 
       {tab === 'chat' ? renderChat() : null}
+      {tab === 'square' ? renderSquare() : null}
       {tab === 'rooms' ? renderRooms() : null}
       {tab === 'connections' ? renderConnections() : null}
     </SafeAreaView>
@@ -1164,6 +1304,87 @@ export default function App() {
           <MiniButton icon="trash-outline" label="清空记录" onPress={clearSelectedRoomMessages} />
         </View>
       </View>
+    );
+  }
+
+  function renderSquare() {
+    const events = [...squareEvents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return (
+      <ScrollView style={styles.content} contentContainerStyle={styles.panel}>
+        <View style={styles.squareHeader}>
+          <View>
+            <Text style={styles.sectionTitle}>姐妹广场</Text>
+            <Text style={styles.help}>观察 Hermes 回复、系统事件，以及后续从同步后端拉取的协作日志。</Text>
+          </View>
+          <Text style={styles.squareCount}>{events.length} 条事件</Text>
+        </View>
+
+        <View style={styles.syncPanel}>
+          <View style={styles.syncHeader}>
+            <View>
+              <Text style={styles.cardTitle}>SQLite 同步后端</Text>
+              <Text style={styles.help}>先按契约连接轻后端，后续设备可以共享房间、消息和广场事件。</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.syncToggle, syncConfig.enabled && styles.syncToggleOn]}
+              onPress={() => setSyncConfig((current) => ({ ...current, enabled: !current.enabled, updatedAt: new Date().toISOString() }))}
+            >
+              <Text style={[styles.syncToggleText, syncConfig.enabled && styles.syncToggleTextOn]}>
+                {syncConfig.enabled ? '已启用' : '未启用'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <TextInput
+            style={styles.input}
+            value={syncConfig.baseUrl}
+            onChangeText={(baseUrl) => setSyncConfig((current) => ({ ...current, baseUrl, updatedAt: new Date().toISOString() }))}
+            placeholder="https://laper.local/laphiny-sync"
+            autoCapitalize="none"
+            keyboardType="url"
+          />
+          <TextInput
+            style={styles.input}
+            value={syncConfig.apiKey}
+            onChangeText={(apiKey) => setSyncConfig((current) => ({ ...current, apiKey, updatedAt: new Date().toISOString() }))}
+            placeholder="同步 API Key，可留空"
+            autoCapitalize="none"
+            secureTextEntry
+          />
+          <View style={styles.syncMetaRow}>
+            <Text style={styles.help}>上次拉取：{syncConfig.lastPulledAt ? formatDateTime(syncConfig.lastPulledAt) : '无'}</Text>
+            <Text style={styles.help}>上次推送：{syncConfig.lastPushedAt ? formatDateTime(syncConfig.lastPushedAt) : '无'}</Text>
+          </View>
+          <View style={styles.buttonRow}>
+            <SecondaryButton icon="pulse-outline" label={syncing ? '检查中...' : '测试后端'} onPress={testSyncBackend} disabled={syncing} />
+            <SecondaryButton icon="cloud-download-outline" label="拉取快照" onPress={pullSyncSnapshot} disabled={syncing} />
+            <PrimaryButton icon="cloud-upload-outline" label="推送快照" onPress={pushSyncSnapshot} disabled={syncing} />
+          </View>
+        </View>
+
+        {events.length === 0 ? (
+          <EmptyState
+            icon="planet-outline"
+            title="广场还没有事件"
+            body="当 Hermes 回复、系统提示出现，或同步后端返回协作日志时，这里会形成观察时间线。"
+          />
+        ) : null}
+
+        {events.map((event) => (
+          <View key={event.id} style={styles.squareEvent}>
+            <View style={styles.squareEventHeader}>
+              <View style={styles.squareEventSource}>
+                <Ionicons name={getSquareEventIcon(event.kind)} size={16} color="#2563eb" />
+                <Text style={styles.squareEventTitle}>{event.title}</Text>
+              </View>
+              <Text style={styles.status}>{formatDateTime(event.createdAt)}</Text>
+            </View>
+            <Text style={styles.squareEventMeta}>
+              {event.source}{event.roomName ? ` · ${event.roomName}` : ''}{event.target ? ` → ${event.target}` : ''}
+            </Text>
+            <MarkdownText content={event.body} />
+          </View>
+        ))}
+      </ScrollView>
     );
   }
 
@@ -1707,6 +1928,49 @@ function formatDateTime(value: string): string {
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function getSquareEventIcon(kind: SquareEvent['kind']): IconName {
+  if (kind === 'system') return 'information-circle-outline';
+  if (kind === 'task') return 'checkbox-outline';
+  if (kind === 'health') return 'pulse-outline';
+  return 'chatbubbles-outline';
+}
+
+function mergeByUpdatedAt<T extends { id: string; updatedAt?: string }>(current: T[], incoming: T[] = []): T[] {
+  const byId = new Map<string, T>();
+  for (const item of current) byId.set(item.id, item);
+  for (const item of incoming) {
+    const existing = byId.get(item.id);
+    if (!existing) {
+      byId.set(item.id, item);
+      continue;
+    }
+    const existingTime = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
+    const incomingTime = item.updatedAt ? Date.parse(item.updatedAt) : 0;
+    if (incomingTime >= existingTime) byId.set(item.id, item);
+  }
+  return Array.from(byId.values()).sort((a, b) => (a.updatedAt ?? '').localeCompare(b.updatedAt ?? ''));
+}
+
+function mergeMessagesByRoom(
+  current: Record<string, ChatMessage[]>,
+  incoming: Record<string, ChatMessage[]> = {},
+): Record<string, ChatMessage[]> {
+  const merged: Record<string, ChatMessage[]> = { ...current };
+  for (const [roomId, messages] of Object.entries(incoming)) {
+    const byId = new Map<string, ChatMessage>();
+    for (const message of merged[roomId] ?? []) byId.set(message.id, message);
+    for (const message of messages) byId.set(message.id, message);
+    merged[roomId] = Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+  return merged;
+}
+
+function mergeSquareEvents(events: SquareEvent[]): SquareEvent[] {
+  const byId = new Map<string, SquareEvent>();
+  for (const event of events) byId.set(event.id, event);
+  return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
 function getHealthMetricStyle(tone: 'ok' | 'error' | 'checking' | 'unknown') {
   if (tone === 'ok') return styles.healthMetricOk;
   if (tone === 'error') return styles.healthMetricError;
@@ -2242,6 +2506,86 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  squareHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  squareCount: {
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    color: '#2563eb',
+    backgroundColor: '#eff6ff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  syncPanel: {
+    gap: 10,
+    padding: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  syncHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  syncToggle: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#f3f4f6',
+  },
+  syncToggleOn: {
+    backgroundColor: '#dcfce7',
+  },
+  syncToggleText: {
+    color: '#4b5563',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  syncToggleTextOn: {
+    color: '#166534',
+  },
+  syncMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  squareEvent: {
+    gap: 8,
+    padding: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  squareEventHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  squareEventSource: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  squareEventTitle: {
+    color: '#111827',
+    fontWeight: '800',
+  },
+  squareEventMeta: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '700',
   },
   messages: {
     flex: 1,
