@@ -27,6 +27,7 @@ import { HermesClient } from './src/lib/hermes_client';
 import { resolveAssistantMentions, resolveMentionTargets } from './src/lib/mentions';
 import { buildHermesUserContent } from './src/lib/payload';
 import { LaphinySyncClient } from './src/lib/sync_client';
+import { appendRoomLog, fetchRoomLogText } from './src/lib/room_log';
 import {
   loadConnections,
   loadMessages,
@@ -141,6 +142,7 @@ export default function App() {
   const [connections, setConnections] = useState<HermesConnection[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [messagesByRoom, setMessagesByRoom] = useState<Record<string, ChatMessage[]>>({});
+  const messagesByRoomRef = useRef(messagesByRoom);
   const [squareEvents, setSquareEvents] = useState<SquareEvent[]>([]);
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ enabled: false, baseUrl: '', apiKey: '', updatedAt: new Date().toISOString() });
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -158,6 +160,8 @@ export default function App() {
   const [connectionForm, setConnectionForm] = useState({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
   const [jsonPaste, setJsonPaste] = useState('');
   const [groupName, setGroupName] = useState('Hermes 群聊');
+  const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<Set<string>>(new Set());
   const hydratedRef = useRef(false);
   const messageScrollRef = useRef<ScrollView | null>(null);
   const streamControllersRef = useRef<Record<string, AbortController>>({});
@@ -205,6 +209,10 @@ export default function App() {
 
   useEffect(() => {
     if (hydratedRef.current) void saveMessages(messagesByRoom);
+  }, [messagesByRoom]);
+
+  useEffect(() => {
+    messagesByRoomRef.current = messagesByRoom;
   }, [messagesByRoom]);
 
   useEffect(() => {
@@ -342,6 +350,93 @@ export default function App() {
 
     setConnections((current) => [...current, connection]);
     setConnectionForm({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
+  }
+
+  function handleEditConnection(connection: HermesConnection) {
+    setEditingConnectionId(connection.id);
+    setConnectionForm({
+      name: connection.name,
+      baseUrl: connection.baseUrl,
+      apiKey: connection.apiKey,
+      model: connection.model,
+    });
+  }
+
+  function handleCancelEdit() {
+    setEditingConnectionId(null);
+    setConnectionForm({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
+  }
+
+  function handleUpdateConnection() {
+    if (!editingConnectionId) return;
+    const name = connectionForm.name.trim();
+    const baseUrl = connectionForm.baseUrl.trim().replace(/\/+$/, '');
+    const apiKey = connectionForm.apiKey.trim();
+    const model = connectionForm.model.trim() || DEFAULT_MODEL;
+
+    if (!name || !baseUrl) {
+      showNotice('请填写连接名称和 Hermes API 地址');
+      return;
+    }
+
+    try {
+      const url = new URL(baseUrl);
+      if (!['http:', 'https:'].includes(url.protocol)) {
+        showNotice('Hermes API 地址必须以 http:// 或 https:// 开头');
+        return;
+      }
+    } catch {
+      showNotice('Hermes API 地址格式不正确');
+      return;
+    }
+
+    setConnections((current) => current.map((conn) => (
+      conn.id === editingConnectionId
+        ? { ...conn, name, baseUrl, apiKey, model, updatedAt: new Date().toISOString() }
+        : conn
+    )));
+    handleCancelEdit();
+  }
+
+  function handleDeleteConnection(connectionId: string) {
+    const connection = connections.find((c) => c.id === connectionId);
+    if (!connection) return;
+
+    // Check if any room uses this connection as a member
+    const roomsUsing = rooms.filter((room) =>
+      room.members.some((m) => m.connectionId === connectionId)
+    );
+
+    if (roomsUsing.length > 0) {
+      showNotice(
+        `无法删除「${connection.name}」`,
+        `该连接仍在 ${roomsUsing.length} 个房间中被使用。请先删除相关房间。`
+      );
+      return;
+    }
+
+    requestConfirm(
+      `删除「${connection.name}」`,
+      '确定要删除此连接吗？此操作不可撤销。',
+      () => {
+        setConnections((current) => current.filter((c) => c.id !== connectionId));
+        if (editingConnectionId === connectionId) {
+          handleCancelEdit();
+        }
+      },
+    );
+  }
+
+  function toggleGroupMemberSelection(connectionId: string) {
+    setSelectedGroupMembers((current) => {
+      const next = new Set(current);
+      if (next.has(connectionId)) {
+        next.delete(connectionId);
+      } else {
+        next.add(connectionId);
+      }
+      return next;
+    });
   }
 
   function handlePasteImport() {
@@ -540,14 +635,16 @@ export default function App() {
   }
 
   function createGroupRoom() {
-    const members = enabledConnections.map<RoomMember>((connection) => ({
-      connectionId: connection.id,
-      alias: connection.name,
-      enabled: true,
-    }));
+    const members = enabledConnections
+      .filter((connection) => selectedGroupMembers.has(connection.id))
+      .map<RoomMember>((connection) => ({
+        connectionId: connection.id,
+        alias: connection.name,
+        enabled: true,
+      }));
 
     if (members.length < 2) {
-      showNotice('群聊至少需要两个已启用 Hermes 连接');
+      showNotice('群聊至少需要选择两个 Hermes AI');
       return;
     }
 
@@ -555,6 +652,7 @@ export default function App() {
     setRooms((current) => [...current, room]);
     setSelectedRoomId(room.id);
     setTab('chat');
+    setSelectedGroupMembers(new Set());
   }
 
   async function attachImages() {
@@ -735,7 +833,6 @@ export default function App() {
       return;
     }
 
-    const previousMessages = selectedMessages;
     const { targets, textForHermes } = getSendTargets(room, rawText, explicitTargetIds);
     const now = new Date().toISOString();
     const userMessage: ChatMessage = {
@@ -766,6 +863,12 @@ export default function App() {
     const assistantPlaceholders = targets.map((member) => makeAssistantPlaceholder(room.id, member));
     appendMessagesToRoom(room.id, assistantPlaceholders);
 
+    // Write user message to persistent room log
+    appendRoomLog(room.id, { role: 'user', author: '你', content: rawText, timestamp: now });
+
+    // Fetch persistent room log for context injection
+    const roomLogText = room.kind === 'group' ? await fetchRoomLogText(room.id) : '';
+
     const firstRoundResponses = new Map<string, { content: string; member: RoomMember }>();
 
     await Promise.all(assistantPlaceholders.map(async (placeholder, index) => {
@@ -784,7 +887,7 @@ export default function App() {
         let accumulated = '';
         for await (const chunk of client.chatCompletionStream({
           model: connection.model,
-          messages: buildChatHistory(selectedMessages, room, member, textForHermes, pendingAttachments),
+          messages: buildChatHistory(messagesByRoomRef.current[room.id] ?? [], room, member, textForHermes, pendingAttachments, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT, roomLogText),
           stream: true,
         }, {
           sessionId: room.sessionIds[connection.id],
@@ -798,6 +901,11 @@ export default function App() {
         const answer = accumulated.trim() || '[Hermes 没有返回内容]';
         firstRoundResponses.set(placeholder.id, { content: answer, member });
         updateMessageInRoom(room.id, placeholder.id, { content: answer, status: 'sent' });
+
+        // Write agent reply to persistent room log
+        if (room.kind === 'group') {
+          appendRoomLog(room.id, { role: 'assistant', author: member.alias, content: answer, timestamp: new Date().toISOString() });
+        }
       } catch (error) {
         updateMessageInRoom(room.id, placeholder.id, {
           status: 'error',
@@ -853,12 +961,13 @@ export default function App() {
             updateMessageInRoom(room.id, placeholder.id, { status: 'running', content: '' });
 
             const historyMsgs = buildChatHistoryForDelegation(
-              previousMessages,
+              messagesByRoomRef.current[room.id] ?? [],
               room,
               target,
               taskText,
               delegatorAlias,
               delegatorContent,
+              roomLogText,
             );
 
             let accumulated = '';
@@ -877,6 +986,9 @@ export default function App() {
 
             const answer = accumulated.trim() || '[Hermes 没有返回内容]';
             updateMessageInRoom(room.id, placeholder.id, { content: answer, status: 'sent' });
+
+            // Write delegated reply to persistent room log
+            appendRoomLog(room.id, { role: 'assistant', author: target.alias, content: answer, timestamp: new Date().toISOString() });
 
             // Scan this agent's reply for further @mentions → recurse
             const nextRes = resolveAssistantMentions(room, answer, target.connectionId);
@@ -1595,8 +1707,26 @@ export default function App() {
 
         <Text style={styles.sectionTitle}>创建群聊</Text>
         <TextInput style={styles.input} value={groupName} onChangeText={setGroupName} placeholder="群聊名称" />
-        <Text style={styles.help}>群聊会加入全部已启用连接。发送时必须使用 @成员名 或 @all。</Text>
-        <PrimaryButton icon="people-outline" label="创建群聊" onPress={createGroupRoom} disabled={enabledConnections.length < 2} />
+        <Text style={styles.help}>选择要加入群聊的 Hermes AI：</Text>
+        {enabledConnections.length === 0 ? <Text style={styles.muted}>还没有已启用的 Hermes 连接。</Text> : null}
+        {enabledConnections.map((connection) => (
+          <TouchableOpacity
+            key={connection.id}
+            style={[styles.rowCard, selectedGroupMembers.has(connection.id) && styles.rowCardSelected]}
+            onPress={() => toggleGroupMemberSelection(connection.id)}
+          >
+            <View style={styles.rowMain}>
+              <Text style={styles.cardTitle}>{connection.name}</Text>
+              <Text style={styles.muted}>{connection.baseUrl}</Text>
+            </View>
+            <Ionicons
+              name={selectedGroupMembers.has(connection.id) ? 'checkbox' : 'square-outline'}
+              size={22}
+              color={selectedGroupMembers.has(connection.id) ? '#2563eb' : '#d1d5db'}
+            />
+          </TouchableOpacity>
+        ))}
+        <PrimaryButton icon="people-outline" label="创建群聊" onPress={createGroupRoom} disabled={selectedGroupMembers.size < 2} />
 
         <Text style={styles.sectionTitle}>已有房间</Text>
         {rooms.map((room) => (
@@ -1642,7 +1772,14 @@ export default function App() {
           placeholder="模型名"
           autoCapitalize="none"
         />
-        <PrimaryButton icon="add-circle-outline" label="添加连接" onPress={addConnection} />
+        {editingConnectionId ? (
+          <View style={styles.buttonRow}>
+            <PrimaryButton icon="save-outline" label="更新连接" onPress={handleUpdateConnection} />
+            <SecondaryButton icon="close-outline" label="取消" onPress={handleCancelEdit} />
+          </View>
+        ) : (
+          <PrimaryButton icon="add-circle-outline" label="添加连接" onPress={addConnection} />
+        )}
         <View style={styles.importSection}>
           <View style={styles.importRow}>
             <SecondaryButton icon="cloud-upload-outline" label="导入 JSON" onPress={importConnections} />
@@ -1706,6 +1843,8 @@ export default function App() {
                 disabled={testingConnectionId === connection.id}
               />
               <SecondaryButton icon="chatbubble-outline" label="单聊" onPress={() => createDirectRoom(connection)} disabled={!connection.enabled} />
+              <SecondaryButton icon="create-outline" label="编辑" onPress={() => { setTab('connections'); handleEditConnection(connection); }} />
+              <SecondaryButton icon="trash-outline" label="删除" onPress={() => handleDeleteConnection(connection.id)} />
             </View>
           </View>
         ))}
@@ -1721,9 +1860,14 @@ function buildChatHistory(
   text: string,
   attachments: Attachment[],
   contextLimit = DEFAULT_CONTEXT_LIMIT,
+  roomLogText = '',
 ): HermesChatMessage[] {
+  const baseSystem = room.kind === 'group'
+    ? `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。你能看到群聊里所有人的发言（每条消息都会标注说话人）。请只代表自己回复，不要模仿其他成员的语气。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。复述或引用聊天记录时不要使用 @ 前缀（直接写名字即可），否则会误触发重复转发。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。@使用边界：仅在明确需要委托/通知/呼叫其他姐妹时才使用 @姐妹名。不需要对方行动时不要用 @。闲聊中提到姐妹名字、表达想法或自言自语时都不必 @。`
+    : '';
+  const systemContent = roomLogText ? baseSystem + roomLogText : baseSystem;
   const systemPrefix: HermesChatMessage[] = room.kind === 'group'
-    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。你能看到群聊里所有人的发言（每条消息都会标注说话人）。请只代表自己回复，不要模仿其他成员的语气。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。复述或引用聊天记录时不要使用 @ 前缀（直接写名字即可），否则会误触发重复转发。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。@使用边界：仅在明确需要委托/通知/呼叫其他姐妹时才使用 @姐妹名。不需要对方行动时不要用 @。闲聊中提到姐妹名字、表达想法或自言自语时都不必 @。` }]
+    ? [{ role: 'system', content: systemContent }]
     : [];
 
   const history = previousMessages
@@ -1753,11 +1897,14 @@ function buildChatHistoryForDelegation(
   taskText: string,
   delegatedFrom: string,
   delegatorMessage: string,
+  roomLogText = '',
 ): HermesChatMessage[] {
+  const baseSystem = `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。你能看到群聊里所有人的发言（每条消息都会标注说话人）。${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复，不要模仿其他成员的语气。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。复述或引用聊天记录时不要使用 @ 前缀（直接写名字即可），否则会误触发重复转发。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。@使用边界：仅在明确需要委托/通知/呼叫其他姐妹时才使用 @姐妹名。不需要对方行动时不要用 @。闲聊中提到姐妹名字、表达想法或自言自语时都不必 @。`;
+  const systemContent = roomLogText ? baseSystem + roomLogText : baseSystem;
   return [
     {
       role: 'system',
-      content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。你能看到群聊里所有人的发言（每条消息都会标注说话人）。${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复，不要模仿其他成员的语气。群聊通信规则：当需要通知其他姐妹或派发任务时，必须在群聊中使用 @姐妹名 的方式。复述或引用聊天记录时不要使用 @ 前缀（直接写名字即可），否则会误触发重复转发。严禁私下联系其他姐妹（禁止通过 curl、frp、session API 等任意方式直接通信）。@使用边界：仅在明确需要委托/通知/呼叫其他姐妹时才使用 @姐妹名。不需要对方行动时不要用 @。闲聊中提到姐妹名字、表达想法或自言自语时都不必 @。`,
+      content: systemContent,
     },
     ...previousMessages
       .filter((message) => message.status === 'sent')
@@ -3230,6 +3377,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e5e7eb',
+  },
+  rowCardSelected: {
+    borderColor: '#2563eb',
+    backgroundColor: '#eff6ff',
   },
   rowMain: {
     flex: 1,

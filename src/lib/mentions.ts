@@ -1,6 +1,13 @@
 import { Room, RoomMember, TargetResolution } from '../types';
 
-const MENTION_PATTERN = /(^|\s)[@＠]([\p{L}\p{N}_\-.\u4e00-\u9fff]+|all)(?=\s|$)/giu;
+const MENTION_PATTERN = /(^|\s)[@＠]([\p{L}\p{N}_\-.\u4e00-\u9fff]+|all)(?=\s|[^\p{L}\p{N}_\-.\u4e00-\u9fff]|$)/giu;
+
+/**
+ * 匹配「聊天记录复述」格式的行：编号列表 + 说话人 + 冒号。
+ * 例如 "4. 我（Laper）：好。@Derux @Arilphin 主人在群里的..."
+ * 这些行里的 @ 是引用历史，不应触发委托转发。
+ */
+const QUOTED_HISTORY_LINE = /^\d+\.\s+\S+[：:]/;
 
 export function resolveMentionTargets(room: Room, rawText: string): TargetResolution {
   const enabledMembers = room.members.filter((member) => member.enabled);
@@ -92,12 +99,20 @@ export function resolveAssistantMentions(
   assistantText: string,
   excludeConnectionId: string,
 ): TargetResolution {
+  // Filter out lines that look like quoted chat history before scanning
+  // for @mentions. This prevents re-triggering delegation when an agent
+  // simply recounts past conversation (e.g., "4. Laper：好。@Derux").
+  const cleanText = assistantText
+    .split('\n')
+    .filter((line) => !QUOTED_HISTORY_LINE.test(line.trim()))
+    .join('\n');
+
   const enabledMembers = room.members.filter(
     (member) => member.enabled && member.connectionId !== excludeConnectionId,
   );
 
   const mentions: string[] = [];
-  const strippedText = assistantText
+  const strippedText = cleanText
     .replace(MENTION_PATTERN, (full, leading: string, mention: string) => {
       const normalized = normalizeMention(mention);
       mentions.push(normalized);
