@@ -698,9 +698,9 @@ export default function App() {
         stream: true,
       }, {
         sessionId: room.sessionIds[connection.id],
-        sessionKey: room.sessionKey,
-        timeoutMs: 120_000,
-        signal: controller.signal,
+          sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
+          timeoutMs: 120_000,
+          signal: controller.signal,
       })) {
         streamedText += chunk;
         updateMessageInRoom(room.id, placeholderId, { content: streamedText });
@@ -788,7 +788,7 @@ export default function App() {
           stream: true,
         }, {
           sessionId: room.sessionIds[connection.id],
-          sessionKey: room.sessionKey,
+          sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: 120_000,
         })) {
           accumulated += chunk;
@@ -849,7 +849,7 @@ export default function App() {
               stream: true,
             }, {
               sessionId: room.sessionIds[connection.id],
-              sessionKey: room.sessionKey,
+                sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
               timeoutMs: 120_000,
             })) {
               accumulated += chunk;
@@ -1673,11 +1673,19 @@ function buildChatHistory(
   contextLimit = DEFAULT_CONTEXT_LIMIT,
 ): HermesChatMessage[] {
   const systemPrefix: HermesChatMessage[] = room.kind === 'group'
-    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，当前被 @ 的 Hermes 成员名是「${member.alias}」。请只代表自己回复。` }]
+    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。请只代表自己回复，不要模仿其他成员的语气。` }]
     : [];
 
+  // Per-member context isolation: only include user messages and
+  // this member's OWN assistant replies — never other agents' replies.
+  const myConnectionId = member.connectionId;
   const history = previousMessages
-    .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
+    .filter((message) => {
+      if (message.status !== 'sent') return false;
+      if (message.role === 'user') return true;
+      if (message.role === 'assistant' && message.authorId === myConnectionId) return true;
+      return false;
+    })
     .slice(-Math.max(1, contextLimit))
     .map<HermesChatMessage>((message) => ({
       role: message.role,
@@ -1722,13 +1730,20 @@ function buildChatHistoryForDelegation(
 function makeRoom(name: string, kind: Room['kind'], members: RoomMember[]): Room {
   const now = new Date().toISOString();
   const id = makeId('room');
+  const sessionIds: Record<string, string> = {};
+  const memberSessionKeys: Record<string, string> = {};
+  for (const member of members) {
+    sessionIds[member.connectionId] = `laphiny-${id}-${member.connectionId}`;
+    memberSessionKeys[member.connectionId] = `laphiny-${id}-key`;
+  }
   return {
     id,
     name,
     kind,
     members,
-    sessionIds: {},
+    sessionIds,
     sessionKey: `laphiny-${id}`,
+    memberSessionKeys,
     contextLimit: DEFAULT_CONTEXT_LIMIT,
     createdAt: now,
     updatedAt: now,
