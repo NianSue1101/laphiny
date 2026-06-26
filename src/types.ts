@@ -29,6 +29,37 @@ export interface Room {
   updatedAt: string;
 }
 
+export interface SyncConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  lastPulledAt?: string;
+  lastPushedAt?: string;
+  updatedAt: string;
+}
+
+export type SquareEventKind = 'message' | 'system' | 'task' | 'health';
+
+export interface SquareEvent {
+  id: string;
+  kind: SquareEventKind;
+  source: string;
+  target?: string;
+  roomId?: string;
+  roomName?: string;
+  title: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface SyncSnapshot {
+  connections: HermesConnection[];
+  rooms: Room[];
+  messagesByRoom: Record<string, ChatMessage[]>;
+  squareEvents: SquareEvent[];
+  updatedAt: string;
+}
+
 export interface Attachment {
   id: string;
   name: string;
