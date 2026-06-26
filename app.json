@@ -31,8 +31,8 @@
       "display": "standalone",
       "themeColor": "#8b5cf6",
       "backgroundColor": "#f8efe4",
-      "favicon": "./assets/favicon.png",
-      "publicUrl": "/laphiny/"
+      "publicUrl": "/laphiny/",
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-secure-store",

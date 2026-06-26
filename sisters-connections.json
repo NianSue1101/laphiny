@@ -1,0 +1,32 @@
+{
+  "connections": [
+    {
+      "name": "Flor",
+      "baseUrl": "https://nianxxz.site/hermes-api",
+      "apiKey": "24a799bdc0ad4c0d73235ee83aae435a2e5b2cae4d7494abb120f7e15a0ba377",
+      "model": "hermes-agent",
+      "enabled": true
+    },
+    {
+      "name": "Laper",
+      "baseUrl": "https://nianxxz.site/laper-api",
+      "apiKey": "24a799bdc0ad4c0d73235ee83aae435a2e5b2cae4d7494abb120f7e15a0ba377",
+      "model": "hermes-agent",
+      "enabled": true
+    },
+    {
+      "name": "Arilphin",
+      "baseUrl": "https://nianxxz.site/arilphin-api",
+      "apiKey": "24a799bdc0ad4c0d73235ee83aae435a2e5b2cae4d7494abb120f7e15a0ba377",
+      "model": "hermes-agent",
+      "enabled": true
+    },
+    {
+      "name": "Derux",
+      "baseUrl": "https://nianxxz.site/derux-api",
+      "apiKey": "24a799bdc0ad4c0d73235ee83aae435a2e5b2cae4d7494abb120f7e15a0ba377",
+      "model": "hermes-agent",
+      "enabled": true
+    }
+  ]
+}
