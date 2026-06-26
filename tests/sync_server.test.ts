@@ -14,9 +14,20 @@ test('sync server merges snapshots into sqlite tables', () => {
   assert.equal(snapshot.connections.length, 1);
   assert.equal(snapshot.rooms.length, 1);
   assert.equal(snapshot.rooms[0].members[0].alias, 'Flor');
+  assert.equal(snapshot.rooms[0].sessionIds.conn_1, 'session-conn-1');
+  assert.equal(snapshot.rooms[0].memberSessionKeys.conn_1, 'member-key-1');
+  assert.equal(snapshot.connections[0].profile?.publicPersona, '公开协作卡片');
   assert.equal(snapshot.messagesByRoom.room_1.length, 1);
   assert.equal(snapshot.messagesByRoom.room_1[0].attachments?.[0].name, 'note.txt');
   assert.equal(snapshot.squareEvents.length, 1);
+  assert.equal(snapshot.rooms[0].defaultCollaborationMode, 'sequential');
+  assert.equal(snapshot.rooms[0].lastSummary?.authorName, 'Flor');
+  assert.equal(snapshot.rooms[0].memoryCapsule?.goal, '长期迭代 Laphiny');
+  assert.equal(snapshot.rooms[0].roleplay?.gmConnectionId, 'conn_1');
+  assert.equal(snapshot.collaborationEvents.length, 1);
+  assert.equal(snapshot.delegationTasks.length, 1);
+  assert.equal(snapshot.teamTemplates.length, 1);
+  assert.equal(snapshot.profileVersions.length, 1);
 
   db.close();
 });
@@ -71,6 +82,14 @@ function makeSnapshot(options: { connectionName?: string; updatedAt?: string } =
       apiKey: 'key',
       model: 'hermes-agent',
       enabled: true,
+      profile: {
+        publicPersona: '公开协作卡片',
+        strengths: ['测试'],
+        delegateWhen: ['需要测试'],
+        avoidWhen: [],
+        source: 'self-report',
+        updatedAt,
+      },
       createdAt: now,
       updatedAt,
     }],
@@ -79,9 +98,49 @@ function makeSnapshot(options: { connectionName?: string; updatedAt?: string } =
       name: 'Room',
       kind: 'direct',
       members: [{ connectionId: 'conn_1', alias: 'Flor', enabled: true }],
-      sessionIds: {},
+      sessionIds: { conn_1: 'session-conn-1' },
       sessionKey: 'session',
+      memberSessionKeys: { conn_1: 'member-key-1' },
       contextLimit: 20,
+      defaultCollaborationMode: 'sequential',
+      summaryConnectionId: 'conn_1',
+      autoDelegationEnabled: true,
+      maxDelegationDepth: 3,
+      lastSummary: {
+        id: 'summary_1',
+        roomId: 'room_1',
+        authorConnectionId: 'conn_1',
+        authorName: 'Flor',
+        content: 'summary',
+        sourceMessageCount: 1,
+        createdAt: now,
+      },
+      memoryCapsule: {
+        id: 'memory_1',
+        roomId: 'room_1',
+        goal: '长期迭代 Laphiny',
+        decisions: ['主打 Soul-native 协作'],
+        todos: ['实现协作仪式'],
+        preferences: ['中文输出'],
+        openQuestions: ['如何部署'],
+        handoffNotes: '先看阶段四文档',
+        source: 'agent-generated',
+        authorName: 'Flor',
+        version: 1,
+        createdAt: now,
+        updatedAt,
+      },
+      roleplay: {
+        enabled: true,
+        gmConnectionId: 'conn_1',
+        playerName: '调查员',
+        genre: '都市怪谈',
+        tone: '悬疑、温柔、桌游店式',
+        premise: '雨夜里的旧书店忽然开门。',
+        currentScene: '玩家站在旧书店门口。',
+        includeAllAgents: true,
+        updatedAt,
+      },
       createdAt: now,
       updatedAt,
     }],
@@ -113,6 +172,53 @@ function makeSnapshot(options: { connectionName?: string; updatedAt?: string } =
       roomName: 'Room',
       title: 'Flor 更新',
       body: 'hello',
+      createdAt: now,
+    }],
+    collaborationEvents: [{
+      id: 'collab_1',
+      kind: 'delegation_created',
+      roomId: 'room_1',
+      roomName: 'Room',
+      source: 'Flor',
+      target: 'Laper',
+      title: 'Flor 委托 Laper',
+      body: '任务',
+      createdAt: now,
+    }],
+    delegationTasks: [{
+      id: 'task_1',
+      roomId: 'room_1',
+      roomName: 'Room',
+      fromConnectionId: 'conn_1',
+      fromAlias: 'Flor',
+      toConnectionId: 'conn_2',
+      toAlias: 'Laper',
+      taskText: '任务',
+      status: 'done',
+      depth: 1,
+      createdAt: now,
+      updatedAt,
+    }],
+    teamTemplates: [{
+      id: 'team_1',
+      name: '默认小队',
+      memberOrder: ['conn_1'],
+      defaultMode: 'sequential',
+      autoDelegationEnabled: true,
+      maxDelegationDepth: 3,
+      createdAt: now,
+      updatedAt,
+    }],
+    profileVersions: [{
+      id: 'profile_1',
+      connectionId: 'conn_1',
+      connectionName: 'Flor',
+      profile: {
+        publicPersona: '公开协作卡片',
+        strengths: ['测试'],
+        delegateWhen: ['需要测试'],
+        avoidWhen: [],
+      },
       createdAt: now,
     }],
     updatedAt,

@@ -13,7 +13,7 @@ LAPHINY_SYNC_API_KEY='<a-long-random-secret>' \
 npm run sync:server
 ```
 
-Then configure Laphiny's Square tab with:
+Then configure Laphiny's Soul Atrium tab with:
 
 - Base URL: `http://<laper-tablet-ip>:8787`
 - API Key: the same `LAPHINY_SYNC_API_KEY`
@@ -54,7 +54,7 @@ The backend should merge by `id` for connections, rooms, messages, and square ev
 ### `GET /v1/events?since=<iso-date>`
 
 Returns square events newer than `since`. If `since` is omitted, returns recent events.
-Laphiny polls this endpoint while sync is enabled, so backend-side events can appear in Sisters Square without a full snapshot pull.
+Laphiny polls this endpoint while sync is enabled, so backend-side events can appear in Soul Atrium without a full snapshot pull.
 
 ### `POST /v1/events`
 

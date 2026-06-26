@@ -1,0 +1,184 @@
+import { type ReactNode } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+
+export function MarkdownText({ content }: { content: string }) {
+  if (!content) {
+    return (
+      <View style={styles.streamingLine}>
+        <ActivityIndicator size="small" color="#2563eb" />
+        <Text style={styles.streamingText}>正在生成...</Text>
+      </View>
+    );
+  }
+
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index] ?? '';
+
+    if (line.trim().startsWith('```')) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !(lines[index] ?? '').trim().startsWith('```')) {
+        codeLines.push(lines[index] ?? '');
+        index += 1;
+      }
+      index += 1;
+      blocks.push(
+        <View key={`code-${index}`} style={styles.markdownCodeBlock}>
+          <Text style={styles.markdownCodeText}>{codeLines.join('\n')}</Text>
+        </View>,
+      );
+      continue;
+    }
+
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    if (isMarkdownTable(lines, index)) {
+      const tableLines: string[] = [];
+      tableLines.push(lines[index] ?? '');
+      index += 2;
+      while (index < lines.length && (lines[index] ?? '').includes('|') && (lines[index] ?? '').trim()) {
+        tableLines.push(lines[index] ?? '');
+        index += 1;
+      }
+      blocks.push(<MarkdownTable key={`table-${index}`} lines={tableLines} />);
+      continue;
+    }
+
+    const headingMatch = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      blocks.push(
+        <Text key={`heading-${index}`} style={[styles.markdownText, styles.markdownHeading]}>
+          {renderInlineMarkdown(headingMatch[2] ?? '')}
+        </Text>,
+      );
+      index += 1;
+      continue;
+    }
+
+    const listMatch = /^(\s*)([-*]|\d+\.)\s+(.+)$/.exec(line);
+    if (listMatch) {
+      blocks.push(
+        <View key={`list-${index}`} style={styles.markdownListRow}>
+          <Text style={styles.markdownBullet}>{listMatch[2]}</Text>
+          <Text style={[styles.markdownText, styles.markdownListText]}>{renderInlineMarkdown(listMatch[3] ?? '')}</Text>
+        </View>,
+      );
+      index += 1;
+      continue;
+    }
+
+    const quoteMatch = /^>\s?(.+)$/.exec(line);
+    if (quoteMatch) {
+      blocks.push(
+        <View key={`quote-${index}`} style={styles.markdownQuote}>
+          <Text style={styles.markdownText}>{renderInlineMarkdown(quoteMatch[1] ?? '')}</Text>
+        </View>,
+      );
+      index += 1;
+      continue;
+    }
+
+    const paragraphLines = [line.trim()];
+    index += 1;
+    while (
+      index < lines.length
+      && (lines[index] ?? '').trim()
+      && !(lines[index] ?? '').trim().startsWith('```')
+      && !/^(#{1,3})\s+/.test(lines[index] ?? '')
+      && !/^(\s*)([-*]|\d+\.)\s+/.test(lines[index] ?? '')
+      && !/^>\s?/.test(lines[index] ?? '')
+      && !isMarkdownTable(lines, index)
+    ) {
+      paragraphLines.push((lines[index] ?? '').trim());
+      index += 1;
+    }
+
+    blocks.push(
+      <Text key={`p-${index}`} style={styles.markdownText}>
+        {renderInlineMarkdown(paragraphLines.join('\n'))}
+      </Text>,
+    );
+  }
+
+  return <View style={styles.markdown}>{blocks}</View>;
+}
+
+function MarkdownTable({ lines }: { lines: string[] }) {
+  const rows = lines.map((line) => splitTableRow(line));
+  return (
+    <View style={styles.markdownTable}>
+      {rows.map((row, rowIndex) => (
+        <View key={`row-${rowIndex}`} style={[styles.markdownTableRow, rowIndex === 0 && styles.markdownTableHeader]}>
+          {row.map((cell, cellIndex) => (
+            <Text key={`cell-${cellIndex}`} style={styles.markdownTableCell}>
+              {renderInlineMarkdown(cell)}
+            </Text>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function isMarkdownTable(lines: string[], index: number): boolean {
+  const current = lines[index] ?? '';
+  const next = lines[index + 1] ?? '';
+  return current.includes('|') && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(next);
+}
+
+function splitTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
+    const token = match[0];
+    if (token.startsWith('`')) {
+      nodes.push(<Text key={`code-${match.index}`} style={styles.inlineCode}>{token.slice(1, -1)}</Text>);
+    } else {
+      nodes.push(<Text key={`bold-${match.index}`} style={styles.inlineBold}>{token.slice(2, -2)}</Text>);
+    }
+    cursor = match.index + token.length;
+  }
+
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
+const styles = StyleSheet.create({
+  streamingLine: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
+  streamingText: { color: '#6b7280' },
+  markdown: { gap: 8 },
+  markdownText: { color: '#111827', lineHeight: 22, fontSize: 15 },
+  markdownHeading: { fontSize: 16, fontWeight: '800', marginTop: 4 },
+  markdownListRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  markdownBullet: { color: '#2563eb', lineHeight: 22, minWidth: 18, fontWeight: '700' },
+  markdownListText: { flex: 1 },
+  markdownQuote: { borderLeftWidth: 3, borderLeftColor: '#bfdbfe', backgroundColor: '#eff6ff', padding: 10, borderRadius: 8 },
+  markdownCodeBlock: { backgroundColor: '#111827', borderRadius: 10, padding: 12 },
+  markdownCodeText: { color: '#e5e7eb', fontFamily: 'monospace', lineHeight: 20 },
+  markdownTable: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, overflow: 'hidden' },
+  markdownTableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
+  markdownTableHeader: { backgroundColor: '#f3f4f6' },
+  markdownTableCell: { flex: 1, padding: 8, color: '#111827', fontSize: 13 },
+  inlineCode: { backgroundColor: '#e5e7eb', color: '#111827', borderRadius: 4, paddingHorizontal: 4, fontFamily: 'monospace' },
+  inlineBold: { fontWeight: '800', color: '#111827' },
+});
