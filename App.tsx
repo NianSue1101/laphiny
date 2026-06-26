@@ -1676,14 +1676,13 @@ function buildChatHistory(
     ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。请只代表自己回复，不要模仿其他成员的语气。` }]
     : [];
 
-  // Per-member context isolation: only include user messages and
-  // this member's OWN assistant replies — never other agents' replies.
-  const myConnectionId = member.connectionId;
+  // Group chat: include user messages and ALL assistant replies
+  // so every member can see what other members said.
   const history = previousMessages
     .filter((message) => {
       if (message.status !== 'sent') return false;
       if (message.role === 'user') return true;
-      if (message.role === 'assistant' && message.authorId === myConnectionId) return true;
+      if (message.role === 'assistant') return true;
       return false;
     })
     .slice(-Math.max(1, contextLimit))
@@ -1713,7 +1712,7 @@ function buildChatHistoryForDelegation(
   return [
     {
       role: 'system',
-      content: `你正在 Laphiny 群聊「${room.name}」中，${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复。`,
+      content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复，不要模仿其他成员的语气。`,
     },
     ...previousMessages
       .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
