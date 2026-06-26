@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Clipboard from 'expo-clipboard';
 
 import { pickDocuments, pickImages } from './src/lib/attachments';
 import { HermesClient } from './src/lib/hermes_client';
@@ -29,10 +30,49 @@ import { Attachment, ChatMessage, HermesChatMessage, HermesConnection, Room, Roo
 
 type Tab = 'chat' | 'connections' | 'rooms';
 type IconName = keyof typeof Ionicons.glyphMap;
+type QuickCommand = {
+  id: string;
+  label: string;
+  icon: IconName;
+  targetAlias: string;
+  prompt: string;
+};
 
 const DEFAULT_MODEL = 'hermes-agent';
 
 const DEFAULT_API_KEY = '24a799bdc0ad4c0d73235ee83aae435a2e5b2cae4d7494abb120f7e15a0ba377';
+const DEFAULT_CONTEXT_LIMIT = 20;
+
+const QUICK_COMMANDS: QuickCommand[] = [
+  {
+    id: 'deploy',
+    label: '构建部署',
+    icon: 'rocket-outline',
+    targetAlias: 'Laper',
+    prompt: '请检查当前项目状态，执行构建部署流程，并返回结果和下一步建议。',
+  },
+  {
+    id: 'daily',
+    label: '日报',
+    icon: 'newspaper-outline',
+    targetAlias: 'Derux',
+    prompt: '请整理今天的进展日报，按已完成、风险、明日计划输出。',
+  },
+  {
+    id: 'fund',
+    label: '查基金',
+    icon: 'stats-chart-outline',
+    targetAlias: 'Derux',
+    prompt: '请查询并总结我关注的基金/市场信息，给出需要注意的变化。',
+  },
+  {
+    id: 'summarize',
+    label: '总结房间',
+    icon: 'reader-outline',
+    targetAlias: 'Flor',
+    prompt: '请总结当前房间最近的对话，提炼待办、结论和未解决问题。',
+  },
+];
 
 const STATUS_LABELS: Record<ChatMessage['status'], string> = {
   local: '提示',
@@ -87,6 +127,8 @@ export default function App() {
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [activeStreamIds, setActiveStreamIds] = useState<Record<string, true>>({});
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
+  const [quickCommandsOpen, setQuickCommandsOpen] = useState(false);
+  const [roomToolsOpen, setRoomToolsOpen] = useState(false);
   const [testingConnectionId, setTestingConnectionId] = useState<string | null>(null);
   const [connectionForm, setConnectionForm] = useState({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
   const [jsonPaste, setJsonPaste] = useState('');
@@ -382,10 +424,11 @@ export default function App() {
     streamControllersRef.current[messageId]?.abort();
   }
 
-  function getSendTargets(room: Room, rawText: string): { targets: RoomMember[]; textForHermes: string } {
+  function getSendTargets(room: Room, rawText: string, explicitTargetIds = selectedTargetIds): { targets: RoomMember[]; textForHermes: string } {
     const resolution = resolveMentionTargets(room, rawText);
+    const explicitTargetSet = new Set(explicitTargetIds);
     const manuallySelectedTargets = room.members.filter((member) => (
-      member.enabled && selectedTargetSet.has(member.connectionId)
+      member.enabled && explicitTargetSet.has(member.connectionId)
     ));
 
     if (room.kind === 'group' && manuallySelectedTargets.length > 0) {
@@ -433,7 +476,7 @@ export default function App() {
       const client = new HermesClient(connection);
       for await (const chunk of client.chatCompletionStream({
         model: connection.model,
-        messages: buildChatHistory(previousMessages, room, member, text, attachments),
+        messages: buildChatHistory(previousMessages, room, member, text, attachments, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT),
         stream: true,
       }, {
         sessionId: room.sessionIds[connection.id],
@@ -469,24 +512,17 @@ export default function App() {
     }
   }
 
-  async function sendMessage() {
-    if (!selectedRoom) {
-      showNotice('请先创建或选择房间');
-      return;
-    }
-
-    const rawText = draft.trim();
-    if (!rawText && pendingAttachments.length === 0) {
+  async function dispatchMessage(room: Room, rawText: string, attachments: Attachment[], explicitTargetIds = selectedTargetIds) {
+    if (!rawText && attachments.length === 0) {
       return;
     }
 
     const previousMessages = selectedMessages;
-    const attachments = pendingAttachments;
-    const { targets, textForHermes } = getSendTargets(selectedRoom, rawText);
+    const { targets, textForHermes } = getSendTargets(room, rawText, explicitTargetIds);
     const now = new Date().toISOString();
     const userMessage: ChatMessage = {
       id: makeId('msg'),
-      roomId: selectedRoom.id,
+      roomId: room.id,
       role: 'user',
       authorId: 'user',
       authorName: '你',
@@ -499,24 +535,24 @@ export default function App() {
     setDraft('');
     setPendingAttachments([]);
     setSelectedTargetIds([]);
-    appendMessagesToRoom(selectedRoom.id, [userMessage]);
+    appendMessagesToRoom(room.id, [userMessage]);
 
     if (targets.length === 0) {
-      const errorText = selectedRoom.kind === 'group'
+      const errorText = room.kind === 'group'
         ? '请选择本次回复成员，或使用 @成员名 / @all 触发 Hermes 回复。'
         : '这个房间没有可用的 Hermes 成员。';
-      appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, errorText)]);
+      appendMessagesToRoom(room.id, [makeLocalNotice(room.id, errorText)]);
       return;
     }
 
-    const assistantPlaceholders = targets.map((member) => makeAssistantPlaceholder(selectedRoom.id, member));
-    appendMessagesToRoom(selectedRoom.id, assistantPlaceholders);
+    const assistantPlaceholders = targets.map((member) => makeAssistantPlaceholder(room.id, member));
+    appendMessagesToRoom(room.id, assistantPlaceholders);
 
     await Promise.all(assistantPlaceholders.map(async (placeholder, index) => {
       const member = targets[index];
       if (!member) return;
       await streamHermesReply({
-        room: selectedRoom,
+        room,
         member,
         placeholderId: placeholder.id,
         text: textForHermes,
@@ -524,6 +560,16 @@ export default function App() {
         previousMessages,
       });
     }));
+  }
+
+  async function sendMessage() {
+    if (!selectedRoom) {
+      showNotice('请先创建或选择房间');
+      return;
+    }
+
+    const rawText = draft.trim();
+    await dispatchMessage(selectedRoom, rawText, pendingAttachments);
   }
 
   async function retryMessage(message: ChatMessage) {
@@ -570,6 +616,71 @@ export default function App() {
     });
   }
 
+  async function runQuickCommand(command: QuickCommand) {
+    if (!selectedRoom) {
+      showNotice('请先选择房间');
+      return;
+    }
+
+    const targetMember = selectedRoom.members.find((member) => (
+      member.enabled && member.alias.toLowerCase() === command.targetAlias.toLowerCase()
+    ));
+    const fallbackMember = selectedRoom.kind === 'direct' ? selectedRoom.members.find((member) => member.enabled) : undefined;
+    const member = targetMember ?? fallbackMember;
+    if (!member) {
+      showNotice('无法发送快捷指令', `当前房间没有可用的 ${command.targetAlias}。`);
+      return;
+    }
+
+    await dispatchMessage(selectedRoom, command.prompt, [], [member.connectionId]);
+  }
+
+  function updateSelectedRoom(patch: Partial<Room>) {
+    if (!selectedRoom) return;
+    const now = new Date().toISOString();
+    setRooms((current) => current.map((room) => (
+      room.id === selectedRoom.id ? { ...room, ...patch, updatedAt: now } : room
+    )));
+  }
+
+  function updateContextLimit(delta: number) {
+    if (!selectedRoom) return;
+    const currentLimit = selectedRoom.contextLimit ?? DEFAULT_CONTEXT_LIMIT;
+    updateSelectedRoom({ contextLimit: Math.max(4, Math.min(80, currentLimit + delta)) });
+  }
+
+  function resetRoomSession() {
+    if (!selectedRoom) return;
+    requestConfirm('清空 Hermes 记忆', '将为当前房间生成新的 sessionKey，后续请求不会继续旧会话。', () => {
+      updateSelectedRoom({
+        sessionIds: {},
+        sessionKey: `laphiny-${selectedRoom.id}-${Date.now().toString(36)}`,
+      });
+      appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, '已重置当前房间的 Hermes 会话。')]);
+    });
+  }
+
+  function clearSelectedRoomMessages() {
+    if (!selectedRoom) return;
+    requestConfirm('清空本地记录', '这只会清空当前设备里的这个房间消息，不会删除连接配置。', () => {
+      setMessagesByRoom((current) => ({
+        ...current,
+        [selectedRoom.id]: [],
+      }));
+    });
+  }
+
+  async function exportSelectedRoom(format: 'json' | 'markdown') {
+    if (!selectedRoom) return;
+    const messages = messagesByRoom[selectedRoom.id] ?? [];
+    const text = format === 'json'
+      ? JSON.stringify({ room: selectedRoom, messages }, null, 2)
+      : buildMarkdownExport(selectedRoom, messages);
+
+    await Clipboard.setStringAsync(text);
+    showNotice(format === 'json' ? 'JSON 已复制' : 'Markdown 已复制', '当前房间记录已复制到剪贴板。');
+  }
+
   if (!hydrated) {
     return (
       <SafeAreaView style={styles.centered}>
@@ -613,37 +724,29 @@ export default function App() {
 
   function renderChat() {
     return (
-      <View style={styles.content}>
-        <View style={styles.roomRail}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.roomRailContent}>
-            {rooms.map((room) => (
-              <TouchableOpacity
-                key={room.id}
-                style={[styles.roomPill, room.id === selectedRoomId && styles.roomPillActive]}
-                onPress={() => setSelectedRoomId(room.id)}
-              >
-                <Ionicons
-                  name={room.kind === 'group' ? 'people-outline' : 'person-outline'}
-                  size={14}
-                  color={room.id === selectedRoomId ? '#ffffff' : '#4b5563'}
-                />
-                <Text style={[styles.roomPillText, room.id === selectedRoomId && styles.roomPillTextActive]}>{room.name}</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.roomCreatePill} onPress={() => setTab('rooms')}>
-              <Ionicons name="add" size={16} color="#2563eb" />
-              <Text style={styles.roomCreateText}>新房间</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
+      <View style={[styles.content, isWideLayout && styles.chatDesktop]}>
+        {isWideLayout ? renderChatSidebar() : renderRoomRail()}
+        <View style={styles.chatMain}>
 
         {selectedRoom ? (
           <View style={styles.chatHeader}>
             <View style={styles.roomTitleBlock}>
               <Text style={styles.roomTitle}>{selectedRoom.name}</Text>
               <Text style={styles.roomSummary}>
-                {selectedRoom.kind === 'group' ? '群聊' : '单聊'} · {selectedRoom.members.length} 位 Hermes
+                {selectedRoom.kind === 'group' ? '群聊' : '单聊'} · {selectedRoom.members.length} 位 Hermes · 上下文 {selectedRoom.contextLimit ?? DEFAULT_CONTEXT_LIMIT} 条
               </Text>
+            </View>
+            <View style={styles.roomHeaderActions}>
+              <MiniButton
+                icon={quickCommandsOpen ? 'flash' : 'flash-outline'}
+                label="指令"
+                onPress={() => setQuickCommandsOpen((open) => !open)}
+              />
+              <MiniButton
+                icon={roomToolsOpen ? 'options' : 'options-outline'}
+                label="工具"
+                onPress={() => setRoomToolsOpen((open) => !open)}
+              />
             </View>
             <View style={styles.memberChips}>
               {selectedRoom.kind === 'group' ? (
@@ -669,6 +772,8 @@ export default function App() {
                 </TouchableOpacity>
               ))}
             </View>
+            {quickCommandsOpen ? renderQuickCommands() : null}
+            {roomToolsOpen ? renderRoomTools() : null}
           </View>
         ) : null}
 
@@ -794,6 +899,142 @@ export default function App() {
             <IconButton icon={sending ? 'hourglass-outline' : 'send'} label="发送" onPress={sendMessage} disabled={sending || !selectedRoom} variant="primary" />
           </View>
         </View>
+        </View>
+      </View>
+    );
+  }
+
+  function renderRoomRail() {
+    return (
+      <View style={styles.roomRail}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.roomRailContent}>
+          {rooms.map((room) => (
+            <TouchableOpacity
+              key={room.id}
+              style={[styles.roomPill, room.id === selectedRoomId && styles.roomPillActive]}
+              onPress={() => setSelectedRoomId(room.id)}
+            >
+              <Ionicons
+                name={room.kind === 'group' ? 'people-outline' : 'person-outline'}
+                size={14}
+                color={room.id === selectedRoomId ? '#ffffff' : '#4b5563'}
+              />
+              <Text style={[styles.roomPillText, room.id === selectedRoomId && styles.roomPillTextActive]}>{room.name}</Text>
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity style={styles.roomCreatePill} onPress={() => setTab('rooms')}>
+            <Ionicons name="add" size={16} color="#2563eb" />
+            <Text style={styles.roomCreateText}>新房间</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  function renderChatSidebar() {
+    return (
+      <View style={styles.chatSidebar}>
+        <View style={styles.sidebarHeader}>
+          <Text style={styles.sidebarTitle}>房间</Text>
+          <TouchableOpacity style={styles.sidebarIconButton} onPress={() => setTab('rooms')}>
+            <Ionicons name="add" size={18} color="#2563eb" />
+          </TouchableOpacity>
+        </View>
+        <ScrollView style={styles.sidebarRooms} contentContainerStyle={styles.sidebarRoomsContent}>
+          {rooms.length === 0 ? <Text style={styles.help}>还没有房间。</Text> : null}
+          {rooms.map((room) => {
+            const roomMessages = messagesByRoom[room.id] ?? [];
+            const lastMessage = roomMessages[roomMessages.length - 1];
+            const active = room.id === selectedRoomId;
+            return (
+              <TouchableOpacity
+                key={room.id}
+                style={[styles.sidebarRoom, active && styles.sidebarRoomActive]}
+                onPress={() => setSelectedRoomId(room.id)}
+              >
+                <View style={styles.sidebarRoomTop}>
+                  <Text style={[styles.sidebarRoomTitle, active && styles.sidebarRoomTitleActive]}>{room.name}</Text>
+                  <Text style={styles.sidebarRoomMeta}>{room.members.length}</Text>
+                </View>
+                <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
+                  {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  function renderQuickCommands() {
+    if (!selectedRoom) return null;
+
+    return (
+      <View style={styles.quickPanel}>
+        <Text style={styles.panelLabel}>快捷指令</Text>
+        <View style={styles.quickGrid}>
+          {QUICK_COMMANDS.map((command) => {
+            const targetInRoom = selectedRoom.members.some((member) => (
+              member.enabled && member.alias.toLowerCase() === command.targetAlias.toLowerCase()
+            ));
+            const usable = targetInRoom || selectedRoom.kind === 'direct';
+            return (
+              <TouchableOpacity
+                key={command.id}
+                style={[styles.quickCommand, !usable && styles.quickCommandDisabled]}
+                onPress={() => runQuickCommand(command)}
+                disabled={!usable || sending}
+              >
+                <Ionicons name={command.icon} size={18} color={usable ? '#2563eb' : '#9ca3af'} />
+                <View style={styles.quickCommandTextBlock}>
+                  <Text style={[styles.quickCommandTitle, !usable && styles.quickCommandTitleDisabled]}>{command.label}</Text>
+                  <Text style={styles.quickCommandTarget}>{usable ? `给 ${command.targetAlias}` : `缺少 ${command.targetAlias}`}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+    );
+  }
+
+  function renderRoomTools() {
+    if (!selectedRoom) return null;
+    const messages = messagesByRoom[selectedRoom.id] ?? [];
+    const attachmentsCount = messages.reduce((total, message) => total + (message.attachments?.length ?? 0), 0);
+
+    return (
+      <View style={styles.toolsPanel}>
+        <View style={styles.toolMetricRow}>
+          <View style={styles.toolMetric}>
+            <Text style={styles.toolMetricValue}>{messages.length}</Text>
+            <Text style={styles.toolMetricLabel}>消息</Text>
+          </View>
+          <View style={styles.toolMetric}>
+            <Text style={styles.toolMetricValue}>{attachmentsCount}</Text>
+            <Text style={styles.toolMetricLabel}>附件</Text>
+          </View>
+          <View style={styles.toolMetric}>
+            <Text style={styles.toolMetricValue}>{selectedRoom.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
+            <Text style={styles.toolMetricLabel}>上下文</Text>
+          </View>
+        </View>
+
+        <View style={styles.contextControl}>
+          <Text style={styles.panelLabel}>上下文预算</Text>
+          <View style={styles.stepper}>
+            <MiniButton icon="remove-outline" label="-4" onPress={() => updateContextLimit(-4)} />
+            <MiniButton icon="add-outline" label="+4" onPress={() => updateContextLimit(4)} />
+          </View>
+        </View>
+
+        <View style={styles.toolActions}>
+          <MiniButton icon="download-outline" label="导出 JSON" onPress={() => exportSelectedRoom('json')} />
+          <MiniButton icon="document-text-outline" label="导出 MD" onPress={() => exportSelectedRoom('markdown')} />
+          <MiniButton icon="refresh-circle-outline" label="清空记忆" onPress={resetRoomSession} />
+          <MiniButton icon="trash-outline" label="清空记录" onPress={clearSelectedRoomMessages} />
+        </View>
       </View>
     );
   }
@@ -916,6 +1157,7 @@ function buildChatHistory(
   member: RoomMember,
   text: string,
   attachments: Attachment[],
+  contextLimit = DEFAULT_CONTEXT_LIMIT,
 ): HermesChatMessage[] {
   const systemPrefix: HermesChatMessage[] = room.kind === 'group'
     ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，当前被 @ 的 Hermes 成员名是「${member.alias}」。请只代表自己回复。` }]
@@ -923,7 +1165,7 @@ function buildChatHistory(
 
   const history = previousMessages
     .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
-    .slice(-20)
+    .slice(-Math.max(1, contextLimit))
     .map<HermesChatMessage>((message) => ({
       role: message.role,
       content: message.content,
@@ -949,6 +1191,7 @@ function makeRoom(name: string, kind: Room['kind'], members: RoomMember[]): Room
     members,
     sessionIds: {},
     sessionKey: `laphiny-${id}`,
+    contextLimit: DEFAULT_CONTEXT_LIMIT,
     createdAt: now,
     updatedAt: now,
   };
@@ -1242,6 +1485,45 @@ function showNotice(title: string, message?: string) {
   Alert.alert(title, message);
 }
 
+function requestConfirm(title: string, message: string, onConfirm: () => void) {
+  if (Platform.OS === 'web') {
+    if (globalThis.confirm?.(`${title}\n${message}`)) onConfirm();
+    return;
+  }
+
+  Alert.alert(title, message, [
+    { text: '取消', style: 'cancel' },
+    { text: '确认', style: 'destructive', onPress: onConfirm },
+  ]);
+}
+
+function buildMarkdownExport(room: Room, messages: ChatMessage[]): string {
+  const lines = [
+    `# ${room.name}`,
+    '',
+    `- 类型：${room.kind === 'group' ? '群聊' : '单聊'}`,
+    `- 成员：${room.members.map((member) => member.alias).join('、')}`,
+    `- 导出时间：${new Date().toISOString()}`,
+    '',
+  ];
+
+  for (const message of messages) {
+    lines.push(`## ${message.authorName} · ${formatTime(message.createdAt)} · ${getStatusLabel(message.status)}`);
+    lines.push('');
+    lines.push(message.content || '[空消息]');
+    if (message.attachments?.length) {
+      lines.push('');
+      lines.push('附件：');
+      for (const attachment of message.attachments) {
+        lines.push(`- ${attachment.name} (${attachment.mimeType})`);
+      }
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
 function isMarkdownTable(lines: string[], index: number): boolean {
   const current = lines[index] ?? '';
   const next = lines[index + 1] ?? '';
@@ -1387,6 +1669,89 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
+  chatDesktop: {
+    flexDirection: 'row',
+    gap: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
+  chatSidebar: {
+    width: 280,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+    overflow: 'hidden',
+  },
+  sidebarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  sidebarTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  sidebarIconButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+  },
+  sidebarRooms: {
+    flex: 1,
+  },
+  sidebarRoomsContent: {
+    padding: 8,
+    gap: 8,
+  },
+  sidebarRoom: {
+    gap: 6,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
+    backgroundColor: '#ffffff',
+  },
+  sidebarRoomActive: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  sidebarRoomTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  sidebarRoomTitle: {
+    flex: 1,
+    color: '#111827',
+    fontWeight: '800',
+  },
+  sidebarRoomTitleActive: {
+    color: '#1d4ed8',
+  },
+  sidebarRoomMeta: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  sidebarRoomPreview: {
+    color: '#6b7280',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  chatMain: {
+    flex: 1,
+    minWidth: 0,
+  },
   panel: {
     padding: 20,
     gap: 12,
@@ -1448,6 +1813,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     gap: 10,
   },
+  roomHeaderActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   roomTitleBlock: {
     gap: 2,
   },
@@ -1481,6 +1851,94 @@ const styles = StyleSheet.create({
   },
   memberChipTextSelected: {
     color: '#ffffff',
+  },
+  quickPanel: {
+    gap: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  panelLabel: {
+    color: '#4b5563',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  quickGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  quickCommand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 150,
+    flexGrow: 1,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  quickCommandDisabled: {
+    borderColor: '#e5e7eb',
+    backgroundColor: '#f9fafb',
+  },
+  quickCommandTextBlock: {
+    flex: 1,
+    gap: 2,
+  },
+  quickCommandTitle: {
+    color: '#1d4ed8',
+    fontWeight: '800',
+  },
+  quickCommandTitleDisabled: {
+    color: '#9ca3af',
+  },
+  quickCommandTarget: {
+    color: '#6b7280',
+    fontSize: 12,
+  },
+  toolsPanel: {
+    gap: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  toolMetricRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  toolMetric: {
+    flex: 1,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#f9fafb',
+  },
+  toolMetricValue: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  toolMetricLabel: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  contextControl: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  stepper: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  toolActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   messages: {
     flex: 1,

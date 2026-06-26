@@ -24,6 +24,7 @@ export interface Room {
   members: RoomMember[];
   sessionIds: Record<string, string>;
   sessionKey: string;
+  contextLimit?: number;
   createdAt: string;
   updatedAt: string;
 }
