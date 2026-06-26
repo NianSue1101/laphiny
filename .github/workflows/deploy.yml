@@ -1,0 +1,57 @@
+name: Build & Deploy Laphiny
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Run tests
+        run: npm test
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build web
+        run: npm run web:build
+
+      - name: Package dist
+        run: tar -czf laphiny-dist.tar.gz dist/
+
+      - name: Deploy to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: laphiny-dist.tar.gz
+          target: /home/sisters-shared/laphiny-deploy/
+          strip_components: 0
+
+      - name: Signal deployment ready
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/sisters-shared/laphiny-deploy
+            tar -xzf laphiny-dist.tar.gz
+            rm -f laphiny-dist.tar.gz
+            date -u +%s > .deploy-version
+            echo "Deploy version: $(cat .deploy-version)"
