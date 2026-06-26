@@ -76,6 +76,7 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [testingConnectionId, setTestingConnectionId] = useState<string | null>(null);
   const [connectionForm, setConnectionForm] = useState({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
+  const [jsonPaste, setJsonPaste] = useState('');
   const [groupName, setGroupName] = useState('Hermes 群聊');
   const hydratedRef = useRef(false);
 
@@ -163,6 +164,69 @@ export default function App() {
     setConnectionForm({ name: '', baseUrl: '', apiKey: '', model: DEFAULT_MODEL });
   }
 
+  function handlePasteImport() {
+    const text = jsonPaste.trim();
+    if (!text) return;
+    importConnectionsFromText(text);
+    setJsonPaste('');
+  }
+
+  function importConnectionsFromText(text: string) {
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      showNotice('JSON 格式错误', '文本不是有效的 JSON');
+      return;
+    }
+
+    if (!Array.isArray(data)) {
+      showNotice('JSON 格式错误', 'JSON 必须是连接对象数组');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const imported: HermesConnection[] = [];
+    for (let i = 0; i < data.length; i++) {
+      const item = data[i];
+      if (!item || typeof item !== 'object') continue;
+      const name = String((item as Record<string, unknown>).name ?? '').trim();
+      const baseUrl = String((item as Record<string, unknown>).baseUrl ?? '').trim();
+      if (!name || !baseUrl) continue;
+
+      imported.push({
+        id: makeId('conn'),
+        name,
+        baseUrl,
+        apiKey: String((item as Record<string, unknown>).apiKey ?? ''),
+        model: String((item as Record<string, unknown>).model || DEFAULT_MODEL),
+        enabled: (item as Record<string, unknown>).enabled !== false,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    if (imported.length === 0) {
+      showNotice('没有可导入的连接', 'JSON 中没有有效的连接数据');
+      return;
+    }
+
+    setConnections((current) => {
+      const existingNames = new Set(current.map((c) => c.name));
+      const newOnes = imported.filter((c) => !existingNames.has(c.name));
+      if (newOnes.length === 0) {
+        showNotice('没有新连接', '全部连接已存在');
+        return current;
+      }
+      const skipped = imported.length - newOnes.length;
+      showNotice(
+        '导入完成',
+        `已导入 ${newOnes.length} 个连接${skipped > 0 ? `，跳过 ${skipped} 个已存在` : ''}`,
+      );
+      return [...current, ...newOnes];
+    });
+  }
+
   async function importConnections() {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -175,62 +239,17 @@ export default function App() {
       if (!asset) return;
 
       const text = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
-      let data: unknown;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        showNotice('JSON 格式错误', '文件不是有效的 JSON');
-        return;
-      }
-
-      if (!Array.isArray(data)) {
-        showNotice('JSON 格式错误', 'JSON 必须是连接对象数组');
-        return;
-      }
-
-      const now = new Date().toISOString();
-      const imported: HermesConnection[] = [];
-      for (let i = 0; i < data.length; i++) {
-        const item = data[i];
-        if (!item || typeof item !== 'object') continue;
-        const name = String((item as Record<string, unknown>).name ?? '').trim();
-        const baseUrl = String((item as Record<string, unknown>).baseUrl ?? '').trim();
-        if (!name || !baseUrl) continue;
-
-        imported.push({
-          id: makeId('conn'),
-          name,
-          baseUrl,
-          apiKey: String((item as Record<string, unknown>).apiKey ?? ''),
-          model: String((item as Record<string, unknown>).model || DEFAULT_MODEL),
-          enabled: (item as Record<string, unknown>).enabled !== false,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-
-      if (imported.length === 0) {
-        showNotice('没有可导入的连接', 'JSON 中没有有效的连接数据');
-        return;
-      }
-
-      setConnections((current) => {
-        const existingNames = new Set(current.map((c) => c.name));
-        const newOnes = imported.filter((c) => !existingNames.has(c.name));
-        if (newOnes.length === 0) {
-          showNotice('没有新连接', '全部连接已存在');
-          return current;
-        }
-        const skipped = imported.length - newOnes.length;
-        showNotice(
-          '导入完成',
-          `已导入 ${newOnes.length} 个连接${skipped > 0 ? `，跳过 ${skipped} 个已存在` : ''}`,
-        );
-        return [...current, ...newOnes];
-      });
+      importConnectionsFromText(text);
     } catch (error) {
       showNotice('导入失败', getErrorMessage(error));
     }
+  }
+
+  function handlePasteImport() {
+    const text = jsonPaste.trim();
+    if (!text) return;
+    importConnectionsFromText(text);
+    setJsonPaste('');
   }
 
   async function testConnection(connection: HermesConnection) {
@@ -563,7 +582,19 @@ export default function App() {
           autoCapitalize="none"
         />
         <PrimaryButton label="添加连接" onPress={addConnection} />
-        <SecondaryButton label="导入 JSON" onPress={importConnections} />
+        <View style={styles.importRow}>
+          <SecondaryButton label="导入 JSON" onPress={importConnections} />
+          <TextInput
+            style={[styles.input, styles.importTextInput]}
+            multiline
+            value={jsonPaste}
+            onChangeText={setJsonPaste}
+            placeholder={`[\n  { "name": "My Hermes", "baseUrl": "http://...", "apiKey": "..." }\n]`}
+            autoCapitalize="none"
+            textAlignVertical="top"
+          />
+          <SecondaryButton label="粘贴导入" onPress={handlePasteImport} disabled={!jsonPaste.trim()} />
+        </View>
 
         <Text style={styles.sectionTitle}>连接列表</Text>
         {connections.length === 0 ? <Text style={styles.muted}>暂无连接。</Text> : null}
@@ -862,6 +893,22 @@ const styles = StyleSheet.create({
     borderColor: '#d8caba',
     backgroundColor: '#fffaf4',
     color: '#271a38',
+  },
+  jsonPasteInput: {
+    minHeight: 80,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 11,
+  },
+  importRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  importTextInput: {
+    flex: 1,
+    minHeight: 44,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 11,
   },
   pendingAttachments: {
     flexDirection: 'row',
