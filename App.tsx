@@ -698,7 +698,7 @@ export default function App() {
         stream: true,
       }, {
         sessionId: room.sessionIds[connection.id],
-        sessionKey: room.sessionKey,
+        sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
         timeoutMs: 120_000,
         signal: controller.signal,
       })) {
@@ -788,7 +788,7 @@ export default function App() {
           stream: true,
         }, {
           sessionId: room.sessionIds[connection.id],
-          sessionKey: room.sessionKey,
+          sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: 120_000,
         })) {
           accumulated += chunk;
@@ -849,7 +849,7 @@ export default function App() {
               stream: true,
             }, {
               sessionId: room.sessionIds[connection.id],
-              sessionKey: room.sessionKey,
+                sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
               timeoutMs: 120_000,
             })) {
               accumulated += chunk;
@@ -1673,11 +1673,18 @@ function buildChatHistory(
   contextLimit = DEFAULT_CONTEXT_LIMIT,
 ): HermesChatMessage[] {
   const systemPrefix: HermesChatMessage[] = room.kind === 'group'
-    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，当前被 @ 的 Hermes 成员名是「${member.alias}」。请只代表自己回复。` }]
+    ? [{ role: 'system', content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。请只代表自己回复，不要模仿其他成员的语气。` }]
     : [];
 
+  // Group chat: include user messages and ALL assistant replies
+  // so every member can see what other members said.
   const history = previousMessages
-    .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
+    .filter((message) => {
+      if (message.status !== 'sent') return false;
+      if (message.role === 'user') return true;
+      if (message.role === 'assistant') return true;
+      return false;
+    })
     .slice(-Math.max(1, contextLimit))
     .map<HermesChatMessage>((message) => ({
       role: message.role,
@@ -1705,7 +1712,7 @@ function buildChatHistoryForDelegation(
   return [
     {
       role: 'system',
-      content: `你正在 Laphiny 群聊「${room.name}」中，${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复。`,
+      content: `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。${delegatedFrom}判断这个任务更适合你，于是在群里 @ 了你。请只代表自己回复，不要模仿其他成员的语气。`,
     },
     ...previousMessages
       .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
@@ -1722,13 +1729,20 @@ function buildChatHistoryForDelegation(
 function makeRoom(name: string, kind: Room['kind'], members: RoomMember[]): Room {
   const now = new Date().toISOString();
   const id = makeId('room');
+  const sessionIds: Record<string, string> = {};
+  const memberSessionKeys: Record<string, string> = {};
+  for (const member of members) {
+    sessionIds[member.connectionId] = `laphiny-${id}-${member.connectionId}`;
+    memberSessionKeys[member.connectionId] = `laphiny-${id}-key`;
+  }
   return {
     id,
     name,
     kind,
     members,
-    sessionIds: {},
+    sessionIds,
     sessionKey: `laphiny-${id}`,
+    memberSessionKeys,
     contextLimit: DEFAULT_CONTEXT_LIMIT,
     createdAt: now,
     updatedAt: now,
