@@ -78,3 +78,48 @@ function uniqueMembers(members: RoomMember[]): RoomMember[] {
 
   return result;
 }
+
+/**
+ * 解析 assistant 回复中的 @提及，找出被委托的成员。
+ * 用于自动转发：agent A 在回复中 @了 agent B，Laphiny 自动把消息转发给 B。
+ *
+ * @param room 当前房间
+ * @param assistantText assistant 回复的文本内容
+ * @param excludeConnectionId 排除此 connectionId（防止 agent @自己造成循环）
+ */
+export function resolveAssistantMentions(
+  room: Room,
+  assistantText: string,
+  excludeConnectionId: string,
+): TargetResolution {
+  const enabledMembers = room.members.filter(
+    (member) => member.enabled && member.connectionId !== excludeConnectionId,
+  );
+
+  const mentions: string[] = [];
+  const strippedText = assistantText
+    .replace(MENTION_PATTERN, (full, leading: string, mention: string) => {
+      const normalized = normalizeMention(mention);
+      mentions.push(normalized);
+      return leading || '';
+    })
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  if (mentions.length === 0) {
+    return { targets: [], mentions, strippedText, reason: 'none' };
+  }
+
+  const targets = uniqueMembers(
+    mentions.flatMap((mention) =>
+      enabledMembers.filter((member) => memberMatchesMention(member, mention)),
+    ),
+  );
+
+  return {
+    targets,
+    mentions,
+    strippedText,
+    reason: targets.length > 0 ? 'mentions' : 'none',
+  };
+}

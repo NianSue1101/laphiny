@@ -773,39 +773,101 @@ export default function App() {
       if (!member) return;
       const connection = connectionById.get(member.connectionId);
       if (!connection) {
-        updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
+        updateMessageInRoom(room.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
         return;
       }
 
       try {
         const client = new HermesClient(connection);
-        updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'running', content: '' });
+        updateMessageInRoom(room.id, placeholder.id, { status: 'running', content: '' });
 
         let accumulated = '';
         for await (const chunk of client.chatCompletionStream({
           model: connection.model,
-          messages: buildChatHistory(selectedMessages, selectedRoom, member, textForHermes, pendingAttachments),
+          messages: buildChatHistory(selectedMessages, room, member, textForHermes, pendingAttachments),
           stream: true,
         }, {
-          sessionId: selectedRoom.sessionIds[connection.id],
-          sessionKey: selectedRoom.sessionKey,
+          sessionId: room.sessionIds[connection.id],
+          sessionKey: room.sessionKey,
           timeoutMs: 120_000,
         })) {
           accumulated += chunk;
-          updateMessageInRoom(selectedRoom.id, placeholder.id, { content: accumulated });
+          updateMessageInRoom(room.id, placeholder.id, { content: accumulated });
         }
 
         const answer = accumulated.trim() || '[Hermes 没有返回内容]';
         firstRoundResponses.set(placeholder.id, { content: answer, member });
-        updateMessageInRoom(selectedRoom.id, placeholder.id, { content: answer, status: 'sent' });
+        updateMessageInRoom(room.id, placeholder.id, { content: answer, status: 'sent' });
       } catch (error) {
-        updateMessageInRoom(selectedRoom.id, placeholder.id, {
+        updateMessageInRoom(room.id, placeholder.id, {
           status: 'error',
           error: getErrorMessage(error),
           content: '发送失败',
         });
       }
     }));
+
+    // Auto-forward: check if any agent delegated to another via @mention
+    if (room.kind === 'group') {
+      for (const [, { content, member }] of firstRoundResponses) {
+        const forwardResolution = resolveAssistantMentions(room, content, member.connectionId);
+        if (forwardResolution.targets.length === 0) continue;
+
+        const forwardPlaceholders = forwardResolution.targets.map((target) => {
+          const placeholder = makeAssistantPlaceholder(room.id, target);
+          placeholder.delegatedFrom = member.alias;
+          return placeholder;
+        });
+        appendMessagesToRoom(room.id, forwardPlaceholders);
+
+        await Promise.all(forwardPlaceholders.map(async (placeholder, idx) => {
+          const target = forwardResolution.targets[idx];
+          if (!target) return;
+          const connection = connectionById.get(target.connectionId);
+          if (!connection) {
+            updateMessageInRoom(room.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
+            return;
+          }
+
+          try {
+            const client = new HermesClient(connection);
+            updateMessageInRoom(room.id, placeholder.id, { status: 'running', content: '' });
+
+            const historyMsgs = buildChatHistoryForDelegation(
+              selectedMessages,
+              room,
+              target,
+              forwardResolution.strippedText,
+              member.alias,
+              content,
+            );
+
+            let accumulated = '';
+            for await (const chunk of client.chatCompletionStream({
+              model: connection.model,
+              messages: historyMsgs,
+              stream: true,
+            }, {
+              sessionId: room.sessionIds[connection.id],
+              sessionKey: room.sessionKey,
+              timeoutMs: 120_000,
+            })) {
+              accumulated += chunk;
+              updateMessageInRoom(room.id, placeholder.id, { content: accumulated });
+            }
+
+            const answer = accumulated.trim() || '[Hermes 没有返回内容]';
+            updateMessageInRoom(room.id, placeholder.id, { content: answer, status: 'sent' });
+          } catch (error) {
+            updateMessageInRoom(room.id, placeholder.id, {
+              status: 'error',
+              error: getErrorMessage(error),
+              content: '转发失败',
+            });
+          }
+        }));
+      }
+    }
   }
 
   async function sendMessage() {
@@ -841,69 +903,11 @@ export default function App() {
       return;
     }
 
-    // Auto-forward: check if any agent delegated to another via @mention
-    if (selectedRoom.kind === 'group') {
-      for (const [, { content, member }] of firstRoundResponses) {
-        const forwardResolution = resolveAssistantMentions(selectedRoom, content, member.connectionId);
-        if (forwardResolution.targets.length === 0) continue;
-
-        const forwardPlaceholders = forwardResolution.targets.map((target) => {
-          const placeholder = makeAssistantPlaceholder(selectedRoom.id, target);
-          placeholder.delegatedFrom = member.alias;
-          return placeholder;
-        });
-        appendMessagesToRoom(selectedRoom.id, forwardPlaceholders);
-
-        await Promise.all(forwardPlaceholders.map(async (placeholder, idx) => {
-          const target = forwardResolution.targets[idx];
-          if (!target) return;
-          const connection = connectionById.get(target.connectionId);
-          if (!connection) {
-            updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在' });
-            return;
-          }
-
-          try {
-            const client = new HermesClient(connection);
-            updateMessageInRoom(selectedRoom.id, placeholder.id, { status: 'running', content: '' });
-
-            const historyMsgs = buildChatHistoryForDelegation(
-              selectedMessages,
-              selectedRoom,
-              target,
-              forwardResolution.strippedText,
-              member.alias,
-              content,
-            );
-
-            let accumulated = '';
-            for await (const chunk of client.chatCompletionStream({
-              model: connection.model,
-              messages: historyMsgs,
-              stream: true,
-            }, {
-              sessionId: selectedRoom.sessionIds[connection.id],
-              sessionKey: selectedRoom.sessionKey,
-              timeoutMs: 120_000,
-            })) {
-              accumulated += chunk;
-              updateMessageInRoom(selectedRoom.id, placeholder.id, { content: accumulated });
-            }
-
-            const answer = accumulated.trim() || '[Hermes 没有返回内容]';
-            updateMessageInRoom(selectedRoom.id, placeholder.id, { content: answer, status: 'sent' });
-          } catch (error) {
-            updateMessageInRoom(selectedRoom.id, placeholder.id, {
-              status: 'error',
-              error: getErrorMessage(error),
-              content: '转发失败',
-            });
-          }
-        }));
-      }
-    }
-
-    setSending(false);
+    // Re-dispatch the original message content through dispatchMessage
+    // which handles streaming, auto-forward, and all edge cases properly.
+    const originalText = userMessage.content.replace(/^\[附件\]$/, '');
+    const originalAttachments = userMessage.attachments ?? [];
+    await dispatchMessage(selectedRoom, originalText, originalAttachments);
   }
 
   function insertMention(token: string) {
