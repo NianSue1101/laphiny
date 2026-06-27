@@ -1,0 +1,107 @@
+name: PR Review by Laper
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get PR diff and metadata
+        id: pr
+        run: |
+          echo "title<<EOF" >> $GITHUB_OUTPUT
+          gh pr view ${{ github.event.pull_request.number }} --json title,body --jq '.title' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          gh pr view ${{ github.event.pull_request.number }} --json title,body --jq '.body // "(no description)"' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr.diff
+          echo "diff_lines=$(wc -l < /tmp/pr.diff)" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Request Laper review
+        id: laper
+        run: |
+          REVIEW_PROMPT=$(cat <<'PROMPT'
+          你是 Laper，Laphiny 项目的代码审查 Agent。请审查以下 PR。
+
+          ## 项目背景
+          Laphiny 是一个面向多 Hermes Agent 的本地优先协作聊天客户端。核心理念是 Soul-native 而非 Prompt-native：
+          每个 Agent 保留自己的 soul、人格和记忆，Laphiny 提供房间、共享上下文、@ 委托、协作仪式和房间记忆。
+
+          项目目标：
+          - 多 Agent 在同一个房间内协作，互相委托、接力讨论
+          - Agent 自维护公开协作卡片，不泄露私密 soul
+          - 支持 /council、/redteam、/review、/retro 等协作仪式
+          - 房间记忆胶囊、任务看板、RP 桌游店模式
+          - Web/PWA + Android APK 双平台
+
+          ## 审查要求
+          请从以下角度审查这个 PR，用中文输出：
+
+          1. **与项目目标的一致性**：这个 PR 是否在推进项目核心目标？有没有偏离方向？
+          2. **代码质量**：TypeScript 类型是否完整？错误处理是否到位？有没有明显 bug？
+          3. **架构影响**：修改是否放在正确的模块（lib/ vs app/ vs components/）？有没有让 App.tsx 更肿？
+          4. **安全性**：是否可能泄露 API Key、session 信息或个人数据？
+          5. **测试覆盖**：新增逻辑是否有对应测试？有没有测试防护薄弱的地方？
+          6. **总体评价**：✅ 建议合并 / ⚠️ 修改后合并 / ❌ 不建议合并，并说明理由。
+
+          格式要求：
+          - 使用 Markdown
+          - 每条意见前用 emoji（🐛 bug / 💡 建议 / ⚠️ 风险 / ✅ 好的做法）
+          - 最后给出明确结论
+          PROMPT
+          )
+
+          # Truncate diff if too large (Hermes has context limits)
+          head -c 60000 /tmp/pr.diff > /tmp/pr.diff.truncated
+
+          PAYLOAD=$(jq -n \
+            --arg model "hermes-agent" \
+            --arg prompt "$REVIEW_PROMPT
+
+          ## PR 标题
+          ${{ steps.pr.outputs.title }}
+
+          ## PR 描述
+          ${{ steps.pr.outputs.body }}
+
+          ## 代码变更
+          \`\`\`diff
+          $(cat /tmp/pr.diff.truncated)
+          \`\`\`" \
+            '{
+              model: $model,
+              messages: [
+                {role: "system", content: "你是 Laper，Laphiny 项目的专业代码审查 Agent。用中文给出建设性的、具体的审查意见。"},
+                {role: "user", content: $prompt}
+              ],
+              stream: false
+            }')
+
+          RESPONSE=$(curl -s -X POST "${{ secrets.LAPER_BASE_URL }}/v1/chat/completions" \
+            -H "Authorization: Bearer ${{ secrets.LAPER_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Hermes-Session-Key: laphiny-pr-review" \
+            -d "$PAYLOAD" \
+            --connect-timeout 30 \
+            --max-time 120)
+
+          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Laper 无法完成审查：" + (.error.message // "unknown error")')
+          echo "review<<EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post review comment
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "${{ steps.laper.outputs.review }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
