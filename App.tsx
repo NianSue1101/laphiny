@@ -8,13 +8,14 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  StatusBar as NativeStatusBar,
   Text,
   TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
-import { StatusBar } from 'expo-status-bar';
+import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 
 import {
   APP_VERSION,
@@ -107,7 +108,7 @@ import { pickDocuments, pickImages } from './src/lib/attachments';
 import { buildAgentProfileInquiryMessages, normalizeImportedAgentProfile, parseAgentProfileResponse, summarizeAgentProfile } from './src/lib/agent_profile';
 import { COLLABORATION_RITUALS, buildRitualConsensusMessages, buildRitualPrompt, getRitualHelpText, getRitualTargets, parseCollaborationRitualCommand, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
 import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle, makeDiagnosticLog, sanitizeDiagnosticLogs } from './src/lib/diagnostics';
-import { HermesClient } from './src/lib/hermes_client';
+import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
 import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
 import { buildRoomMemoryMessages, formatRoomMemoryForPrompt, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
 import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
@@ -2462,6 +2463,17 @@ ${content}`)]);
     showNotice(format === 'json' ? 'JSON 已复制' : 'Markdown 已复制', '当前房间记录已复制到剪贴板。');
   }
 
+  async function copyAgentReply(message: ChatMessage) {
+    const text = normalizeHermesReplyText(message.content).trim();
+    if (!text) {
+      showNotice('暂无可复制内容', '这条回复还没有文本内容。');
+      return;
+    }
+
+    await Clipboard.setStringAsync(text);
+    showNotice('回复已复制', `${message.authorName} 的回复已复制到剪贴板。`);
+  }
+
   function appendSquareEvent(event: SquareEvent) {
     setSquareEvents((current) => mergeSquareEvents([...current, event]).slice(-300));
   }
@@ -2859,7 +2871,7 @@ ${content}`)]);
 
   return (
     <SafeAreaView style={styles.shell}>
-      <StatusBar style="dark" />
+      <ExpoStatusBar style="dark" />
       {renderRoomReplyNotification()}
       <View style={styles.header}>
         <View style={styles.brandBlock}>
@@ -2951,6 +2963,10 @@ ${content}`)]);
   }
 
   function renderMessageBubble(message: ChatMessage) {
+    const displayContent = message.authorId === 'user'
+      ? message.content
+      : normalizeHermesReplyText(message.content);
+
     return (
       <View
         style={[
@@ -2976,7 +2992,7 @@ ${content}`)]);
             {message.error ? ` · ${message.error}` : ''}
           </Text>
         </View>
-        <MarkdownText content={message.content} />
+        <MarkdownText content={displayContent} />
         {message.attachments?.length ? (
           <View style={styles.attachments}>
             {message.attachments.map((attachment) => (
@@ -2986,6 +3002,7 @@ ${content}`)]);
         ) : null}
         {message.authorId !== 'user' && message.authorId !== 'system' ? (
           <View style={styles.messageActions}>
+            <MiniButton icon="copy-outline" label="复制" onPress={() => copyAgentReply(message)} />
             {message.status === 'running' ? (
               <MiniButton icon="stop-circle-outline" label="停止" onPress={() => stopMessage(message.id)} />
             ) : (
@@ -4534,6 +4551,7 @@ const styles = StyleSheet.create({
   shell: {
     flex: 1,
     backgroundColor: '#f5f7fb',
+    paddingTop: Platform.OS === 'android' ? NativeStatusBar.currentHeight ?? 0 : 0,
   },
   centered: {
     flex: 1,
@@ -4544,7 +4562,7 @@ const styles = StyleSheet.create({
   },
   replyIsland: {
     position: 'absolute',
-    top: 10,
+    top: Platform.OS === 'android' ? (NativeStatusBar.currentHeight ?? 0) + 10 : 10,
     left: '50%',
     zIndex: 50,
     width: 460,

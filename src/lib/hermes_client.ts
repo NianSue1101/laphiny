@@ -73,7 +73,7 @@ export class HermesClient {
     const contentType = response.headers.get('content-type') ?? '';
     if (!response.body?.getReader) {
       const text = await response.text();
-      const completion = parseNonStreamingChatCompletion(text, contentType);
+      const completion = parseChatCompletionText(text, contentType);
       if (completion) yield completion;
       return;
     }
@@ -96,23 +96,17 @@ export class HermesClient {
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          if (trimmed.startsWith('event:')) continue;
-          if (trimmed.startsWith(':')) continue;
-          if (trimmed === 'data: [DONE]') return;
-          if (!trimmed.startsWith('data: ')) continue;
-
-          try {
-            const chunk: HermesSseChunk = JSON.parse(trimmed.slice('data: '.length));
-            const content = chunk.choices?.[0]?.delta?.content;
-            if (content) {
-              yield content;
-            }
-          } catch {
-            // ignore malformed chunks
+          const parsed = parseSseLine(line);
+          if (parsed === 'done') return;
+          if (parsed) {
+            yield parsed;
           }
         }
+      }
+
+      const parsed = parseSseLine(buffer);
+      if (parsed && parsed !== 'done') {
+        yield parsed;
       }
 
       if (options?.signal?.aborted) {
@@ -199,6 +193,28 @@ export class HermesClient {
   }
 }
 
+export function normalizeHermesReplyText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+
+  if (trimmed.startsWith('data:')) {
+    const chunks = parseSseText(trimmed);
+    return chunks.length > 0 ? chunks.join('').trim() : text;
+  }
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as Partial<HermesChatCompletionResponse>;
+      const content = parsed.choices?.[0]?.message?.content;
+      return content ? content.trim() : text;
+    } catch {
+      return text;
+    }
+  }
+
+  return text;
+}
+
 interface HermesSseChunk {
   choices?: Array<{
     delta?: {
@@ -208,9 +224,14 @@ interface HermesSseChunk {
   }>;
 }
 
-function parseNonStreamingChatCompletion(text: string, contentType: string): string {
+function parseChatCompletionText(text: string, contentType: string): string {
   const trimmed = text.trim();
   if (!trimmed) return '';
+
+  if (contentType.includes('text/event-stream') || trimmed.startsWith('data:')) {
+    const chunks = parseSseText(trimmed);
+    if (chunks.length > 0) return chunks.join('').trim();
+  }
 
   if (contentType.includes('application/json') || trimmed.startsWith('{')) {
     try {
@@ -222,4 +243,38 @@ function parseNonStreamingChatCompletion(text: string, contentType: string): str
   }
 
   return trimmed;
+}
+
+function parseSseText(text: string): string[] {
+  const chunks: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const parsed = parseSseLine(line);
+    if (parsed === 'done') break;
+    if (parsed) chunks.push(parsed);
+  }
+  return chunks;
+}
+
+function parseSseLine(line: string): string | 'done' | null {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('event:') || trimmed.startsWith(':')) return null;
+  if (!trimmed.startsWith('data:')) return null;
+
+  const payload = trimmed.replace(/^data:\s*/, '');
+  if (payload === '[DONE]') return 'done';
+
+  try {
+    const chunk = JSON.parse(payload) as HermesSseChunk | HermesChatCompletionResponse;
+    return extractChatCompletionContent(chunk);
+  } catch {
+    return null;
+  }
+}
+
+function extractChatCompletionContent(chunk: HermesSseChunk | HermesChatCompletionResponse): string {
+  const choice = chunk.choices?.[0];
+  if (!choice) return '';
+  const deltaContent = 'delta' in choice ? choice.delta?.content : undefined;
+  const messageContent = 'message' in choice ? choice.message?.content : undefined;
+  return deltaContent ?? messageContent ?? '';
 }
