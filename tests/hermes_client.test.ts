@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 
-import { HermesClient } from '../src/lib/hermes_client';
+import { HermesClient, normalizeHermesReplyText } from '../src/lib/hermes_client';
 
 const originalFetch = globalThis.fetch;
 
@@ -54,4 +54,43 @@ test('chatCompletionStream falls back to non-readable plain text response bodies
   }
 
   assert.deepEqual(chunks, ['plain reply']);
+});
+
+test('chatCompletionStream parses text/event-stream fallback bodies', async () => {
+  globalThis.fetch = (async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',
+      '',
+      'data: {"choices":[{"delta":{"content":"你"},"finish_reason":null}]}',
+      '',
+      'data: {"choices":[{"delta":{"content":"好"},"finish_reason":null}]}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n'), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+    Object.defineProperty(response, 'body', { value: null });
+    return response;
+  }) as typeof fetch;
+
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  const chunks: string[] = [];
+  for await (const chunk of client.chatCompletionStream({ model: 'test-model', messages: [], stream: true })) {
+    chunks.push(chunk);
+  }
+
+  assert.deepEqual(chunks, ['你好']);
+});
+
+test('normalizeHermesReplyText cleans stored raw SSE replies', () => {
+  const raw = [
+    'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',
+    'data: {"choices":[{"delta":{"content":"任务"},"finish_reason":null}]}',
+    'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":null}]}',
+    'data: [DONE]',
+  ].join('\n');
+
+  assert.equal(normalizeHermesReplyText(raw), '任务完成');
 });

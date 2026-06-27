@@ -16,21 +16,21 @@ jobs:
       - name: Get PR diff and metadata
         id: pr
         run: |
-          echo "title<<EOF" >> $GITHUB_OUTPUT
-          gh pr view ${{ github.event.pull_request.number }} --json title,body --jq '.title' >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          gh pr view ${{ github.event.pull_request.number }} --json title,body --jq '.body // "(no description)"' >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr.diff
-          echo "diff_lines=$(wc -l < /tmp/pr.diff)" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          pr_number='${{ github.event.pull_request.number }}'
+          gh pr view "$pr_number" --json title --jq '.title' > /tmp/pr-title.md
+          gh pr view "$pr_number" --json body --jq '.body // "(no description)"' > /tmp/pr-body.md
+          gh pr diff "$pr_number" > /tmp/pr.diff
+          head -c 60000 /tmp/pr.diff > /tmp/pr.diff.truncated
+          echo "diff_lines=$(wc -l < /tmp/pr.diff)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Request Laper review
         id: laper
         run: |
-          REVIEW_PROMPT=$(cat <<'PROMPT'
+          set -euo pipefail
+          cat > /tmp/review-instructions.md <<'PROMPT'
           你是 Laper，Laphiny 项目的代码审查 Agent。请审查以下 PR。
 
           ## 项目背景
@@ -59,25 +59,20 @@ jobs:
           - 每条意见前用 emoji（🐛 bug / 💡 建议 / ⚠️ 风险 / ✅ 好的做法）
           - 最后给出明确结论
           PROMPT
-          )
 
-          # Truncate diff if too large (Hermes has context limits)
-          head -c 60000 /tmp/pr.diff > /tmp/pr.diff.truncated
+          PROMPT_TEXT=$(jq -n -r \
+            --rawfile instructions /tmp/review-instructions.md \
+            --rawfile title /tmp/pr-title.md \
+            --rawfile body /tmp/pr-body.md \
+            --rawfile diff /tmp/pr.diff.truncated \
+            '$instructions
+              + "\n## PR 标题\n" + $title
+              + "\n## PR 描述\n" + $body
+              + "\n## 代码变更\n```diff\n" + $diff + "\n```"')
 
-          PAYLOAD=$(jq -n \
+          jq -n \
             --arg model "hermes-agent" \
-            --arg prompt "$REVIEW_PROMPT
-
-          ## PR 标题
-          ${{ steps.pr.outputs.title }}
-
-          ## PR 描述
-          ${{ steps.pr.outputs.body }}
-
-          ## 代码变更
-          \`\`\`diff
-          $(cat /tmp/pr.diff.truncated)
-          \`\`\`" \
+            --arg prompt "$PROMPT_TEXT" \
             '{
               model: $model,
               messages: [
@@ -85,23 +80,63 @@ jobs:
                 {role: "user", content: $prompt}
               ],
               stream: false
-            }')
+            }' > /tmp/laper-request.json
 
-          RESPONSE=$(curl -s -X POST "${{ secrets.LAPER_BASE_URL }}/v1/chat/completions" \
+          set +e
+          curl -s -X POST "${{ secrets.LAPER_BASE_URL }}/v1/chat/completions" \
             -H "Authorization: Bearer ${{ secrets.LAPER_API_KEY }}" \
             -H "Content-Type: application/json" \
             -H "X-Hermes-Session-Key: laphiny-pr-review" \
-            -d "$PAYLOAD" \
+            --data-binary @/tmp/laper-request.json \
             --connect-timeout 30 \
-            --max-time 120)
+            --max-time 120 \
+            -o /tmp/laper-response.json
+          curl_status=$?
+          set -e
 
-          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Laper 无法完成审查：" + (.error.message // "unknown error")')
-          echo "review<<EOF" >> $GITHUB_OUTPUT
-          echo "$REVIEW" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          if [ "$curl_status" -ne 0 ]; then
+            REVIEW="Laper 无法完成审查：请求失败或超时（curl exit $curl_status）。"
+          elif jq -e . >/dev/null 2>&1 < /tmp/laper-response.json; then
+            REVIEW=$(jq -r '.choices[0].message.content // "Laper 无法完成审查：" + (.error.message // "unknown error")' < /tmp/laper-response.json)
+          else
+            REVIEW="Laper 无法完成审查：响应不是 JSON。"
+          fi
 
-      - name: Post review comment
+          REVIEW_EVENT="COMMENT"
+          if grep -q "❌ 不建议合并" <<< "$REVIEW"; then
+            REVIEW_EVENT="REQUEST_CHANGES"
+          elif grep -q "✅ 建议合并" <<< "$REVIEW"; then
+            REVIEW_EVENT="APPROVE"
+          fi
+
+          {
+            echo "### Laper 自动审查"
+            echo
+            echo "$REVIEW"
+          } > /tmp/laper-review.md
+          echo "review_file=/tmp/laper-review.md" >> "$GITHUB_OUTPUT"
+          echo "review_event=$REVIEW_EVENT" >> "$GITHUB_OUTPUT"
+
+      - name: Post Laper review
         run: |
-          gh pr comment ${{ github.event.pull_request.number }} --body "${{ steps.laper.outputs.review }}"
+          set -euo pipefail
+          pr_number='${{ github.event.pull_request.number }}'
+          review_file='${{ steps.laper.outputs.review_file }}'
+          review_event='${{ steps.laper.outputs.review_event }}'
+
+          case "$review_event" in
+            APPROVE)
+              gh pr review "$pr_number" --approve --body-file "$review_file" \
+                || gh pr comment "$pr_number" --body-file "$review_file"
+              ;;
+            REQUEST_CHANGES)
+              gh pr review "$pr_number" --request-changes --body-file "$review_file" \
+                || gh pr comment "$pr_number" --body-file "$review_file"
+              ;;
+            *)
+              gh pr review "$pr_number" --comment --body-file "$review_file" \
+                || gh pr comment "$pr_number" --body-file "$review_file"
+              ;;
+          esac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
