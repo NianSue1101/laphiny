@@ -138,7 +138,7 @@ export interface OnboardingStep {
 }
 
 export function getRoomModeDefinition(mode?: RoomModeId): RoomModeDefinition {
-  return ROOM_MODES.find((item) => item.id === mode) ?? ROOM_MODES[0];
+  return ROOM_MODES.find((item) => item.id === mode) ?? ROOM_MODES[0]!;
 }
 
 export function getRoomModeLabel(mode?: RoomModeId): string {
@@ -288,12 +288,12 @@ export function buildTaskBoard(tasks: DelegationTask[]): TaskBoardColumn[] {
   ];
   for (const task of tasks) {
     const column = task.status === 'done'
-      ? columns[2]
+      ? columns[2]!
       : task.status === 'error' || task.status === 'cancelled'
-        ? columns[3]
+        ? columns[3]!
         : task.status === 'running'
-          ? columns[1]
-          : columns[0];
+          ? columns[1]!
+          : columns[0]!;
     column.tasks.push(task);
   }
   for (const column of columns) {

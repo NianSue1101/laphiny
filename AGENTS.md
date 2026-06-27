@@ -1,75 +1,46 @@
 # Laphiny 项目守则
 
-> 所有接入本项目的 Hermes agent（Laper、Arilphin、Derux 等）必须遵守此文件。
+## 构建命令
 
-## 铁律：构建命令
+始终使用 `npm run web:build` 构建 Web 产物，不要直接运行 `npx expo export --platform web`。
 
-**永远只用 `npm run web:build`，禁止直接运行 `npx expo export --platform web`。**
+原因：项目部署在 `/laphiny/` 子路径下时，Expo 默认输出的资源路径不包含子路径前缀。`npm run web:build` 会先导出 Web 产物，再运行 `scripts/fix-web-paths.mjs` 修正 `/_expo`、`/assets` 和 favicon 路径。
 
-原因：Expo web 构建输出的路径不包含子路径前缀（如 `/_expo/...`），但项目部署在 `https://nianxxz.site/laphiny/` 下，所有资源必须带 `/laphiny/` 前缀。`npm run web:build` 内置了 Python 脚本自动替换路径。
+## 验证
 
-如果忘了这一步 → 页面白屏（JS 404）。
-
-## 部署流程
-
-```
-cd /root/laphiny
-npm run web:build   # 构建 + 路径修正
-# 构建完成后 dist/ 即为 web root，nginx 直接指向此目录，无需复制
-```
-
-## 部署验证（每次构建后必做）
+每次改动后优先运行：
 
 ```bash
-# 1. 确认 index.html 中的路径带 /laphiny/ 前缀
-grep -o 'src="[^"]*"' /root/laphiny/dist/index.html
-# 预期：src="/laphiny/_expo/static/js/web/index-*.js"
-
-# 2. 本地测试
-curl -sk -o /dev/null -w '%{http_code} %{size_download}' \
-  http://127.0.0.1:8080/laphiny/_expo/static/js/web/index-*.js
-# 预期：200 + ~1MB
-
-# 3. 外部测试（从服务器）
-curl -sk -o /dev/null -w '%{http_code} %{size_download}' \
-  https://nianxxz.site/laphiny/_expo/static/js/web/index-*.js
-# 预期：200 + ~1MB
+npm run typecheck
+npm test
+npm run web:build
 ```
 
-## 平板 nginx 配置
+Web 构建后确认：
 
-文件：`/etc/nginx/sites-enabled/laphiny`
+- `dist/index.html` 中的脚本路径带 `/laphiny/_expo/...` 前缀。
+- 图标字体资源路径带 `/laphiny/assets/...` 前缀。
+- 本地静态服务访问 `/laphiny/` 能正常加载页面。
 
-关键配置：
-- `root /root/laphiny/dist;`
-- `rewrite ^/laphiny/(.*) /$1 break;` — 剥离 `/laphiny/` 前缀使文件路径匹配 filesystem
-- API 代理：`/hermes-api/ → 127.0.0.1:8642`，`/laper-api/ → 127.0.0.1:8642`，`/arilphin-api/ → 127.0.0.1:8644`
+## Android
 
-修改后：`nginx -t && nginx -s reload`
+本地 Gradle 构建使用：
 
-## 服务器 nginx 配置
-
-文件：`/etc/nginx/conf.d/nianxxz-ssl.conf`
-
-```
-location ^~ /laphiny/ {
-    proxy_pass http://127.0.0.1:8680;  # → frp laphiny-web 隧道 → 平板 8080
-    proxy_set_header Host $host;
-    proxy_set_header Origin "";
-    add_header Cache-Control "no-cache, no-store, must-revalidate";
-}
+```bash
+npm run android:assemble:debug
+npm run android:assemble:release
 ```
 
-## frp 隧道
+Windows 和 Unix 都通过 `scripts/run-gradle.mjs` 调用 Gradle wrapper。
 
-平板 frpc：`laphiny-web` → 服务器 frps 端口 8680
+本地 Android 构建建议使用 JDK 17 或 21。JDK 25 可能触发 `Unsupported class file major version 69`。
 
-## 分支与协作
+## 隐私与发布
 
-- 主分支：`main`，已开启保护（禁止 force push / 分支删除）
-- 流程：Laper 开发 → 提 PR → Flor 审阅 → squash merge → 构建上线
-- 详见 `flor-laper-code-review-workflow` skill
+- 不要把真实 Hermes Gateway 地址、API Key、个人同步后端地址或本地连接备份提交到仓库。
+- 默认安装不应内置任何私人连接。
+- 诊断包和备份功能必须明确提醒用户：完整备份可能包含 API Key，诊断包应脱敏。
 
-## 群聊系统提示
+## 协作提示
 
-群聊中每个 member 收到的 system prompt 由 `App.tsx` 的 `buildChatHistory` / `buildChatHistoryForDelegation` 函数注入。修改群聊行为规则时改这两个函数，不要分发给各 agent 的 skill 文件。
+群聊中每个成员收到的 system prompt 由 `src/app/chat_history.ts` 构造。修改群聊、委托或协作行为时，优先调整那里和对应的 `src/lib/*` 纯逻辑模块，并补充测试。

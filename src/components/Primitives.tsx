@@ -257,7 +257,7 @@ function getAgentTheme(alias: string): AgentTheme {
     { bg: '#fefce8', border: '#fde68a', text: '#a16207' },
   ];
   const index = alias.split('').reduce((total, char) => total + char.charCodeAt(0), 0) % palette.length;
-  return { symbol: first, ...palette[index] };
+  return { symbol: first, ...(palette[index] ?? palette[0]!) };
 }
 
 function getAgentStatusColor(status: 'idle' | 'running' | 'delegated' | 'gm' | 'disabled'): string {
@@ -304,14 +304,14 @@ function getStatusTokenColor(tone: 'default' | 'rp' | 'memory' | 'warning'): str
 }
 
 const styles = StyleSheet.create({
-  tab: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb' },
-  tabActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  tab: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 7, paddingVertical: 8, borderRadius: 8, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb' },
+  tabActive: { backgroundColor: '#111827', borderColor: '#111827' },
   tabText: { color: '#4b5563', fontWeight: '700' },
   tabTextActive: { color: '#ffffff' },
-  primaryButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#2563eb', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12 },
+  primaryButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#2563eb', paddingHorizontal: 13, paddingVertical: 9, borderRadius: 8 },
   primaryButtonText: { color: '#ffffff', fontWeight: '800' },
-  secondaryButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12 },
-  secondaryButtonText: { color: '#2563eb', fontWeight: '700' },
+  secondaryButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#d1d5db', paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8 },
+  secondaryButtonText: { color: '#374151', fontWeight: '700' },
   disabledButton: { opacity: 0.45 },
   attachmentPreview: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, padding: 10, backgroundColor: '#ecfdf5', borderWidth: 1, borderColor: '#a7f3d0' },
   attachmentThumb: { width: 42, height: 42, borderRadius: 10, backgroundColor: '#d1fae5' },
@@ -329,12 +329,12 @@ const styles = StyleSheet.create({
   profileLabel: { color: '#6d28d9', fontSize: 12, fontWeight: '800' },
   profileText: { color: '#312e81', lineHeight: 19 },
   help: { color: '#6b7280', lineHeight: 20 },
-  statusToken: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
-  statusTokenDefault: { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' },
-  statusTokenRp: { backgroundColor: '#f5f3ff', borderColor: '#ddd6fe' },
-  statusTokenMemory: { backgroundColor: '#f0fdfa', borderColor: '#99f6e4' },
+  statusToken: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 7, borderWidth: 1 },
+  statusTokenDefault: { backgroundColor: '#ffffff', borderColor: '#e5e7eb' },
+  statusTokenRp: { backgroundColor: '#faf5ff', borderColor: '#ddd6fe' },
+  statusTokenMemory: { backgroundColor: '#f0fdfa', borderColor: '#ccfbf1' },
   statusTokenWarning: { backgroundColor: '#fffbeb', borderColor: '#fde68a' },
-  statusTokenText: { fontSize: 12, fontWeight: '800' },
+  statusTokenText: { fontSize: 12, fontWeight: '700' },
   statusTokenTextDefault: { color: '#1d4ed8' },
   statusTokenTextRp: { color: '#6d28d9' },
   statusTokenTextMemory: { color: '#0f766e' },
@@ -353,7 +353,7 @@ const styles = StyleSheet.create({
   healthMetricUnknown: { backgroundColor: '#f9fafb', borderColor: '#e5e7eb' },
   healthMetricValue: { fontWeight: '900', color: '#111827', fontSize: 18 },
   healthMetricLabel: { color: '#6b7280', fontSize: 12 },
-  badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, fontSize: 12, fontWeight: '800', overflow: 'hidden' },
+  badge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, fontSize: 12, fontWeight: '700', overflow: 'hidden' },
   healthBadgeOk: { color: '#047857', backgroundColor: '#d1fae5' },
   healthBadgeError: { color: '#b91c1c', backgroundColor: '#fee2e2' },
   healthBadgeChecking: { color: '#1d4ed8', backgroundColor: '#dbeafe' },
@@ -361,9 +361,9 @@ const styles = StyleSheet.create({
   healthDetails: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
   healthDetailText: { color: '#374151' },
   healthCheckedAt: { color: '#9ca3af', fontSize: 12 },
-  miniButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 999, backgroundColor: '#f3f4f6' },
+  miniButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, backgroundColor: '#f3f4f6' },
   miniButtonText: { color: '#4b5563', fontSize: 12, fontWeight: '700' },
-  iconButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb' },
+  iconButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 8, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb' },
   iconButtonPrimary: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
   emptyState: { alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, borderRadius: 20, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#ffffff' },
   emptyIcon: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#eff6ff' },

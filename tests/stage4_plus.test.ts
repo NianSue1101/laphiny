@@ -49,9 +49,9 @@ const relations = buildSoulRelations({
   delegationTasks: [makeTask('rel', 'done')],
   messagesByRoom: {},
 });
-assert.equal(relations[0].fromName, 'Flor');
-assert.equal(relations[0].toName, 'Laper');
-assert.equal(relations[0].completions, 1);
+assert.equal(relations[0]?.fromName, 'Flor');
+assert.equal(relations[0]?.toName, 'Laper');
+assert.equal(relations[0]?.completions, 1);
 
 console.log('stage4 plus tests passed');
 

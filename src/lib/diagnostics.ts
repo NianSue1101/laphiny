@@ -152,7 +152,7 @@ function redactUrl(value: string): string {
     }
     return url.toString();
   } catch {
-    return redactSecretText(value);
+    return redactSecretText(value) ?? '';
   }
 }
 

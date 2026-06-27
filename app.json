@@ -1,6 +1,7 @@
 {
   "expo": {
     "name": "Laphiny",
+    "owner": "nianxxz",
     "slug": "laphiny",
     "version": "0.1.0",
     "description": "Laphiny is a multi-room, multi-Hermes chat client for Android APK and Web/PWA.",
@@ -22,8 +23,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#f8efe4"
       },
-      "predictiveBackGestureEnabled": false,
-      "resizeableActivity": true
+      "predictiveBackGestureEnabled": false
     },
     "web": {
       "name": "Laphiny",
@@ -55,7 +55,13 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
-    ]
+      ],
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "2970a5e0-248d-49eb-a8b5-90c8c19ed6ee"
+      }
+    }
   }
 }

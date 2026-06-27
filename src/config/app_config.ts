@@ -1,7 +1,6 @@
-import type { ChatMessage, HermesConnection } from '../types';
+import type { ChatMessage } from '../types';
 import type { QuickCommand } from '../app/app_types';
 export const DEFAULT_MODEL = 'hermes-agent';
-export const DEFAULT_API_KEY = '24a799bdc0ad4c0d73235ee83aae435a2e5b2cae4d7494abb120f7e15a0ba377';
 export const DEFAULT_CONTEXT_LIMIT = 20;
 export const MAX_DELEGATION_DEPTH = 3;
 export const APP_VERSION = '0.1.0';
@@ -46,52 +45,3 @@ export const STATUS_LABELS: Record<ChatMessage['status'], string> = {
   error: '失败',
 };
 
-function makeConfigId(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-export function makeDefaultConnections(): HermesConnection[] {
-  const now = new Date().toISOString();
-  return [
-    {
-      id: makeConfigId('conn'),
-      name: 'Flor',
-      baseUrl: 'https://nianxxz.site/hermes-api',
-      apiKey: DEFAULT_API_KEY,
-      model: DEFAULT_MODEL,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: makeConfigId('conn'),
-      name: 'Laper',
-      baseUrl: 'https://nianxxz.site/laper-api',
-      apiKey: DEFAULT_API_KEY,
-      model: DEFAULT_MODEL,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: makeConfigId('conn'),
-      name: 'Arilphin',
-      baseUrl: 'https://nianxxz.site/arilphin-api',
-      apiKey: DEFAULT_API_KEY,
-      model: DEFAULT_MODEL,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: makeConfigId('conn'),
-      name: 'Derux',
-      baseUrl: 'https://nianxxz.site/derux-api',
-      apiKey: DEFAULT_API_KEY,
-      model: DEFAULT_MODEL,
-      enabled: true,
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-}

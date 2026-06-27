@@ -17,7 +17,7 @@ test('appendDiagnosticLog keeps recent entries sorted and capped', () => {
   }
 
   assert.equal(logs.length, 200);
-  assert.equal(logs[0].id, 'log_5');
+  assert.equal(logs[0]?.id, 'log_5');
   assert.equal(logs.at(-1)?.id, 'log_204');
 });
 
@@ -29,7 +29,7 @@ test('sanitizeDiagnosticLogs drops invalid values and caps output', () => {
   ]);
 
   assert.equal(logs.length, 1);
-  assert.equal(logs[0].id, 'ok');
+  assert.equal(logs[0]?.id, 'ok');
 });
 
 test('buildDiagnosticBundle redacts secrets', () => {

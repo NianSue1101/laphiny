@@ -108,7 +108,9 @@ export function parseCollaborationRitualCommand(text: string): ParsedCollaborati
   const trimmed = text.trim();
   const match = trimmed.match(/^\/(council|redteam|review|retro)(?:\s+|$)([\s\S]*)$/i);
   if (!match) return null;
-  const slash = `/${match[1].toLowerCase()}`;
+  const id = match[1];
+  if (!id) return null;
+  const slash = `/${id.toLowerCase()}`;
   const definition = RITUAL_BY_SLASH.get(slash);
   if (!definition) return null;
   return {

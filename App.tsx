@@ -3,6 +3,7 @@ import 'react-native-url-polyfill/auto';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -21,7 +22,6 @@ import {
   DEFAULT_MODEL,
   MAX_DELEGATION_DEPTH,
   QUICK_COMMANDS,
-  makeDefaultConnections,
 } from './src/config/app_config';
 import {
   AttachmentPreview,
@@ -105,12 +105,13 @@ import * as Clipboard from 'expo-clipboard';
 
 import { pickDocuments, pickImages } from './src/lib/attachments';
 import { buildAgentProfileInquiryMessages, normalizeImportedAgentProfile, parseAgentProfileResponse, summarizeAgentProfile } from './src/lib/agent_profile';
-import { COLLABORATION_RITUALS, buildRitualConsensusMessages, buildRitualPrompt, getRitualHelpText, getRitualTargets, parseCollaborationRitualCommand, type CollaborationRitualId } from './src/lib/collaboration_rituals';
+import { COLLABORATION_RITUALS, buildRitualConsensusMessages, buildRitualPrompt, getRitualHelpText, getRitualTargets, parseCollaborationRitualCommand, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
 import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle, makeDiagnosticLog, sanitizeDiagnosticLogs } from './src/lib/diagnostics';
 import { HermesClient } from './src/lib/hermes_client';
 import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
 import { buildRoomMemoryMessages, formatRoomMemoryForPrompt, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
 import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
+import { buildRoomReplyNotification, type RoomReplyNotification } from './src/lib/room_reply_notifications';
 import { buildSoulDailyDigest } from './src/lib/square_insights';
 import { ROOM_MODES, STARTER_ROOM_TEMPLATES, buildOnboardingSteps, buildRoleplayArchiveMessages, buildSoulRelations, buildTaskBoard, getRoomModeDefinition, getRoomModeLabel, makeDefaultRoleplayArchive, parseRoleplayArchiveResponse, summarizeRoleplayArchive, type StarterRoomTemplate } from './src/lib/stage4_plus';
 import { getSlashCommandSuggestions, getUxCommandKindLabel, UX_SLASH_COMMANDS, type UXCommandDefinition } from './src/lib/ux';
@@ -189,11 +190,23 @@ export default function App() {
   const [memoryGenerating, setMemoryGenerating] = useState(false);
   const [rpArchiveGenerating, setRpArchiveGenerating] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [roomReplyNotification, setRoomReplyNotification] = useState<RoomReplyNotification | null>(null);
   const hydratedRef = useRef(false);
-  const messageScrollRef = useRef<ScrollView | null>(null);
+  const messageScrollRef = useRef<FlatList<ChatMessage> | null>(null);
   const streamControllersRef = useRef<Record<string, AbortController>>({});
+  const streamFlushTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const streamBuffersRef = useRef<Record<string, string>>({});
+  const saveMessagesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const replyNotificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedRoomIdRef = useRef<string | null>(selectedRoomId);
+  const tabRef = useRef<Tab>(tab);
+  const roomsRef = useRef<Room[]>(rooms);
   const pollingSquareEventsRef = useRef(false);
   const { width } = useWindowDimensions();
+
+  selectedRoomIdRef.current = selectedRoomId;
+  tabRef.current = tab;
+  roomsRef.current = rooms;
 
   useEffect(() => {
     let mounted = true;
@@ -225,12 +238,7 @@ export default function App() {
         loadedStorageBackend,
       ]) => {
         if (!mounted) return;
-        let finalConnections = loadedConnections;
-        if (finalConnections.length === 0) {
-          finalConnections = makeDefaultConnections();
-          void saveConnections(finalConnections);
-        }
-        setConnections(finalConnections);
+        setConnections(loadedConnections);
         setRooms(loadedRooms);
         setMessagesByRoom(loadedMessages);
         setSyncConfig(loadedSyncConfig);
@@ -265,7 +273,14 @@ export default function App() {
   }, [rooms]);
 
   useEffect(() => {
-    if (hydratedRef.current) void saveMessages(messagesByRoom);
+    if (!hydratedRef.current) return;
+    if (saveMessagesTimerRef.current) {
+      clearTimeout(saveMessagesTimerRef.current);
+    }
+    saveMessagesTimerRef.current = setTimeout(() => {
+      saveMessagesTimerRef.current = null;
+      void saveMessages(messagesByRoom);
+    }, 350);
   }, [messagesByRoom]);
 
   useEffect(() => {
@@ -296,11 +311,32 @@ export default function App() {
     if (hydratedRef.current) void saveProfileVersions(profileVersions);
   }, [profileVersions]);
 
+  useEffect(() => {
+    return () => {
+      if (saveMessagesTimerRef.current) {
+        clearTimeout(saveMessagesTimerRef.current);
+      }
+      if (replyNotificationTimerRef.current) {
+        clearTimeout(replyNotificationTimerRef.current);
+      }
+      for (const timer of Object.values(streamFlushTimersRef.current)) {
+        clearTimeout(timer);
+      }
+      streamFlushTimersRef.current = {};
+      streamBuffersRef.current = {};
+    };
+  }, []);
+
   const connectionById = useMemo(() => new Map(connections.map((connection) => [connection.id, connection])), [connections]);
   const enabledConnections = useMemo(() => connections.filter((connection) => connection.enabled), [connections]);
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
   const selectedMessages = selectedRoom ? messagesByRoom[selectedRoom.id] ?? [] : [];
   const normalizedSearchQuery = messageSearchQuery.trim().toLowerCase();
+
+  useEffect(() => {
+    if (tab !== 'chat' || !selectedRoomId) return;
+    setRoomReplyNotification((current) => (current?.roomId === selectedRoomId ? null : current));
+  }, [selectedRoomId, tab]);
   const messageSearchResults = useMemo(() => {
     if (!normalizedSearchQuery) return [] as MessageSearchResult[];
     const results: MessageSearchResult[] = [];
@@ -1029,6 +1065,12 @@ export default function App() {
         [roomId]: (current[roomId] ?? 0) + incomingCount,
       }));
     }
+    const latestAgentMessage = [...messages].reverse().find((message) => (
+      message.authorId !== 'user' && message.authorId !== 'system' && message.status !== 'running'
+    ));
+    if (latestAgentMessage) {
+      showRoomReplyNotification(roomId, latestAgentMessage);
+    }
   }
 
   function updateMessageInRoom(roomId: string, messageId: string, patch: Partial<ChatMessage>) {
@@ -1047,8 +1089,41 @@ export default function App() {
           : message
       )),
     }));
-    if (completedMessage) {
-      appendSquareEvent(makeSquareEventFromMessage(roomId, completedMessage));
+    const finishedMessage = completedMessage as ChatMessage | null;
+    if (finishedMessage) {
+      appendSquareEvent(makeSquareEventFromMessage(roomId, finishedMessage));
+      if (finishedMessage.status === 'sent') {
+        showRoomReplyNotification(roomId, finishedMessage);
+      }
+    }
+  }
+
+  function showRoomReplyNotification(roomId: string, message: ChatMessage) {
+    const notification = buildRoomReplyNotification({
+      roomId,
+      message,
+      rooms: roomsRef.current,
+      activeRoomId: selectedRoomIdRef.current,
+      activeTab: tabRef.current,
+    });
+    if (!notification) return;
+    setRoomReplyNotification(notification);
+    if (replyNotificationTimerRef.current) {
+      clearTimeout(replyNotificationTimerRef.current);
+    }
+    replyNotificationTimerRef.current = setTimeout(() => {
+      setRoomReplyNotification((current) => (current?.id === notification.id ? null : current));
+      replyNotificationTimerRef.current = null;
+    }, 8000);
+  }
+
+  function openReplyNotification(notification: RoomReplyNotification) {
+    setSelectedRoomId(notification.roomId);
+    setTab('chat');
+    setRoomReplyNotification(null);
+    if (replyNotificationTimerRef.current) {
+      clearTimeout(replyNotificationTimerRef.current);
+      replyNotificationTimerRef.current = null;
     }
   }
 
@@ -1059,6 +1134,26 @@ export default function App() {
       delete next[messageId];
       return next;
     });
+  }
+
+  function flushStreamMessage(roomId: string, messageId: string) {
+    const content = streamBuffersRef.current[messageId];
+    if (content === undefined) return;
+    delete streamBuffersRef.current[messageId];
+    const timer = streamFlushTimersRef.current[messageId];
+    if (timer) {
+      clearTimeout(timer);
+      delete streamFlushTimersRef.current[messageId];
+    }
+    updateMessageInRoom(roomId, messageId, { content });
+  }
+
+  function queueStreamMessageUpdate(roomId: string, messageId: string, content: string) {
+    streamBuffersRef.current[messageId] = content;
+    if (streamFlushTimersRef.current[messageId]) return;
+    streamFlushTimersRef.current[messageId] = setTimeout(() => {
+      flushStreamMessage(roomId, messageId);
+    }, 80);
   }
 
   function toggleTargetSelection(connectionId: string) {
@@ -1174,14 +1269,16 @@ export default function App() {
         signal: controller.signal,
       })) {
         streamedText += chunk;
-        updateMessageInRoom(room.id, placeholderId, { content: streamedText });
+        queueStreamMessageUpdate(room.id, placeholderId, streamedText);
       }
 
+      flushStreamMessage(room.id, placeholderId);
       updateMessageInRoom(room.id, placeholderId, {
         content: streamedText.trim() || '[Hermes 没有返回内容]',
         status: 'sent',
       });
     } catch (error) {
+      flushStreamMessage(room.id, placeholderId);
       if (isAbortError(error)) {
         updateMessageInRoom(room.id, placeholderId, {
           content: streamedText.trim() || '已停止生成',
@@ -1197,6 +1294,12 @@ export default function App() {
       });
     } finally {
       delete streamControllersRef.current[placeholderId];
+      delete streamBuffersRef.current[placeholderId];
+      const timer = streamFlushTimersRef.current[placeholderId];
+      if (timer) {
+        clearTimeout(timer);
+        delete streamFlushTimersRef.current[placeholderId];
+      }
       setStreamActive(placeholderId, false);
     }
   }
@@ -1442,9 +1545,10 @@ export default function App() {
           signal: controller.signal,
         })) {
           accumulated += chunk;
-          updateMessageInRoom(room.id, placeholder.id, { content: accumulated });
+          queueStreamMessageUpdate(room.id, placeholder.id, accumulated);
         }
 
+        flushStreamMessage(room.id, placeholder.id);
         const answer = accumulated.trim() || '[Hermes 没有返回内容]';
         const completedMessage: ChatMessage = { ...placeholder, content: answer, status: 'sent' };
         turnMessages.push(completedMessage);
@@ -1527,6 +1631,7 @@ export default function App() {
           }
         }
       } catch (error) {
+        flushStreamMessage(room.id, placeholder.id);
         if (isAbortError(error)) {
           const stoppedMessage: ChatMessage = {
             ...placeholder,
@@ -1575,6 +1680,12 @@ export default function App() {
         });
       } finally {
         delete streamControllersRef.current[placeholder.id];
+        delete streamBuffersRef.current[placeholder.id];
+        const timer = streamFlushTimersRef.current[placeholder.id];
+        if (timer) {
+          clearTimeout(timer);
+          delete streamFlushTimersRef.current[placeholder.id];
+        }
         setStreamActive(placeholder.id, false);
       }
     };
@@ -2749,6 +2860,7 @@ ${content}`)]);
   return (
     <SafeAreaView style={styles.shell}>
       <StatusBar style="dark" />
+      {renderRoomReplyNotification()}
       <View style={styles.header}>
         <View style={styles.brandBlock}>
           <Text style={styles.title}>Laphiny</Text>
@@ -2772,12 +2884,13 @@ ${content}`)]);
         </View>
       </View>
 
-      <View style={styles.tabs}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
         <TabButton icon="chatbubble-ellipses-outline" label="聊天" active={tab === 'chat'} onPress={() => setTab('chat')} />
         <TabButton icon="planet-outline" label="灵庭" active={tab === 'square'} onPress={() => setTab('square')} />
         <TabButton icon="albums-outline" label="房间" active={tab === 'rooms'} onPress={() => setTab('rooms')} />
         <TabButton icon="git-network-outline" label="连接" active={tab === 'connections'} onPress={() => setTab('connections')} />
-      </View>
+        <TabButton icon="settings-outline" label="设置" active={tab === 'settings'} onPress={() => setTab('settings')} />
+      </ScrollView>
 
       {renderRuntimeBanner()}
 
@@ -2785,8 +2898,31 @@ ${content}`)]);
       {tab === 'square' ? renderSquare() : null}
       {tab === 'rooms' ? renderRooms() : null}
       {tab === 'connections' ? renderConnections() : null}
+      {tab === 'settings' ? renderSettings() : null}
     </SafeAreaView>
   );
+
+  function renderRoomReplyNotification() {
+    if (!roomReplyNotification) return null;
+    return (
+      <TouchableOpacity
+        activeOpacity={0.9}
+        style={[styles.replyIsland, width < 720 && styles.replyIslandCompact]}
+        onPress={() => openReplyNotification(roomReplyNotification)}
+      >
+        <View style={styles.replyIslandDot}>
+          <Ionicons name="chatbubble-ellipses-outline" size={14} color="#ffffff" />
+        </View>
+        <View style={styles.replyIslandTextBlock}>
+          <Text style={styles.replyIslandTitle} numberOfLines={1}>
+            {roomReplyNotification.roomName} · {roomReplyNotification.authorName}
+          </Text>
+          <Text style={styles.replyIslandPreview} numberOfLines={1}>{roomReplyNotification.preview}</Text>
+        </View>
+        <Ionicons name="arrow-forward-outline" size={15} color="#ffffff" />
+      </TouchableOpacity>
+    );
+  }
 
   function renderRuntimeBanner() {
     if (Platform.OS !== 'web') return null;
@@ -2810,6 +2946,53 @@ ${content}`)]);
           </Text>
         </View>
         {pwaInstallPrompt ? <SecondaryButton icon="download-outline" label="安装" onPress={installPwa} /> : null}
+      </View>
+    );
+  }
+
+  function renderMessageBubble(message: ChatMessage) {
+    return (
+      <View
+        style={[
+          styles.messageBubble,
+          getMessageBubbleStyle(message),
+          isWideLayout && styles.messageBubbleWide,
+        ]}
+      >
+        {message.delegatedFrom ? (
+          <View style={styles.delegationBadge}>
+            <Ionicons name="git-branch-outline" size={12} color="#6b7280" />
+            <Text style={styles.delegationText}>→ {message.delegatedFrom} 委托</Text>
+          </View>
+        ) : null}
+        <View style={styles.messageMeta}>
+          <View style={styles.authorBlock}>
+            {message.authorId !== 'user' && message.authorId !== 'system' ? <AgentAvatar alias={message.authorName} size={22} /> : null}
+            <Text style={styles.author}>{message.authorName}</Text>
+            {message.authorId !== 'user' && message.authorId !== 'system' ? <Text style={styles.messageRoleBadge}>{getMessageRoleBadge(message)}</Text> : null}
+          </View>
+          <Text style={[styles.status, message.status === 'error' && styles.statusError]}>
+            {getStatusLabel(message.status)} · {formatTime(message.createdAt)}
+            {message.error ? ` · ${message.error}` : ''}
+          </Text>
+        </View>
+        <MarkdownText content={message.content} />
+        {message.attachments?.length ? (
+          <View style={styles.attachments}>
+            {message.attachments.map((attachment) => (
+              <AttachmentPreview key={attachment.id} attachment={attachment} />
+            ))}
+          </View>
+        ) : null}
+        {message.authorId !== 'user' && message.authorId !== 'system' ? (
+          <View style={styles.messageActions}>
+            {message.status === 'running' ? (
+              <MiniButton icon="stop-circle-outline" label="停止" onPress={() => stopMessage(message.id)} />
+            ) : (
+              <MiniButton icon="refresh-outline" label="重试" onPress={() => retryMessage(message)} />
+            )}
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -2879,81 +3062,42 @@ ${content}`)]);
           </View>
         ) : null}
 
-        <ScrollView
+        <FlatList
           ref={messageScrollRef}
+          data={selectedRoom ? visibleSelectedMessages : []}
+          keyExtractor={(message) => message.id}
           style={styles.messages}
           contentContainerStyle={styles.messagesContent}
           onContentSizeChange={() => messageScrollRef.current?.scrollToEnd({ animated: true })}
-        >
-          {!selectedRoom ? (
-            <EmptyState
-              icon="albums-outline"
-              title="还没有可聊天的房间"
-              body="先在房间页创建单聊或群聊，再回到这里开始对话。"
-              actionLabel="去创建"
-              onAction={() => setTab('rooms')}
-            />
-          ) : null}
-          {selectedRoom && selectedMessages.length === 0 && !normalizedSearchQuery ? (
-            <EmptyState
-              icon="sparkles-outline"
-              title="新的对话已经就绪"
-              body={selectedRoom.kind === 'group' ? '点成员标签选择回复对象；也可以输入 @成员名、@all/@all-seq、/council 等协作仪式，或在 RP 模式下输入 /rp /scene /ooc。' : '输入消息后发送，Laphiny 会保留最近上下文。'}
-            />
-          ) : null}
-          {selectedRoom && normalizedSearchQuery && visibleSelectedMessages.length === 0 ? (
-            <EmptyState
-              icon="search-outline"
-              title="当前房间没有匹配消息"
-              body="搜索会跨全部房间进行；可以点击上方结果跳转到其他房间。"
-            />
-          ) : null}
-          {visibleSelectedMessages.map((message) => (
-            <View
-              key={message.id}
-              style={[
-                styles.messageBubble,
-                getMessageBubbleStyle(message),
-                isWideLayout && styles.messageBubbleWide,
-              ]}
-            >
-              {message.delegatedFrom ? (
-                <View style={styles.delegationBadge}>
-                  <Ionicons name="git-branch-outline" size={12} color="#6b7280" />
-                  <Text style={styles.delegationText}>↳ {message.delegatedFrom} 委托</Text>
-                </View>
-              ) : null}
-              <View style={styles.messageMeta}>
-                <View style={styles.authorBlock}>
-                  {message.authorId !== 'user' && message.authorId !== 'system' ? <AgentAvatar alias={message.authorName} size={22} /> : null}
-                  <Text style={styles.author}>{message.authorName}</Text>
-                  {message.authorId !== 'user' && message.authorId !== 'system' ? <Text style={styles.messageRoleBadge}>{getMessageRoleBadge(message)}</Text> : null}
-                </View>
-                <Text style={[styles.status, message.status === 'error' && styles.statusError]}>
-                  {getStatusLabel(message.status)} · {formatTime(message.createdAt)}
-                  {message.error ? ` · ${message.error}` : ''}
-                </Text>
-              </View>
-              <MarkdownText content={message.content} />
-              {message.attachments?.length ? (
-                <View style={styles.attachments}>
-                  {message.attachments.map((attachment) => (
-                    <AttachmentPreview key={attachment.id} attachment={attachment} />
-                  ))}
-                </View>
-              ) : null}
-              {message.authorId !== 'user' && message.authorId !== 'system' ? (
-                <View style={styles.messageActions}>
-                  {message.status === 'running' ? (
-                    <MiniButton icon="stop-circle-outline" label="停止" onPress={() => stopMessage(message.id)} />
-                  ) : (
-                    <MiniButton icon="refresh-outline" label="重试" onPress={() => retryMessage(message)} />
-                  )}
-                </View>
-              ) : null}
-            </View>
-          ))}
-        </ScrollView>
+          initialNumToRender={18}
+          maxToRenderPerBatch={10}
+          updateCellsBatchingPeriod={50}
+          windowSize={7}
+          ListEmptyComponent={(
+            !selectedRoom ? (
+              <EmptyState
+                icon="albums-outline"
+                title="还没有可聊天的房间"
+                body="先在房间页创建单聊或群聊，再回到这里开始对话。"
+                actionLabel="去创建"
+                onAction={() => setTab('rooms')}
+              />
+            ) : selectedRoom && normalizedSearchQuery ? (
+              <EmptyState
+                icon="search-outline"
+                title="当前房间没有匹配消息"
+                body="搜索会跨全部房间进行；可以点击上方结果跳转到其他房间。"
+              />
+            ) : (
+              <EmptyState
+                icon="sparkles-outline"
+                title="新的对话已经就绪"
+                body={selectedRoom.kind === 'group' ? '点成员标签选择回复对象；也可以输入 @成员名、@all/@all-seq、/council 等协作仪式，或在 RP 模式下输入 /rp /scene /ooc。' : '输入消息后发送，Laphiny 会保留最近上下文。'}
+              />
+            )
+          )}
+          renderItem={({ item }) => renderMessageBubble(item)}
+        />
 
         <View style={styles.composer}>
           {selectedRoom?.kind === 'group' ? (
@@ -3651,24 +3795,38 @@ ${content}`)]);
     );
   }
 
-  function renderSquare() {
-    const events = [...squareEvents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    const dailyDigest = buildSoulDailyDigest({ rooms, connections, messagesByRoom, collaborationEvents, delegationTasks });
+  function renderSettings() {
     return (
       <ScrollView style={styles.content} contentContainerStyle={styles.panel}>
         <View style={styles.squareHeader}>
           <View>
-            <Text style={styles.sectionTitle}>灵庭</Text>
-            <Text style={styles.help}>沉淀 Hermes 回复、委托任务、房间记忆、诊断与 Soul 小队动态。</Text>
+            <Text style={styles.sectionTitle}>设置</Text>
+            <Text style={styles.help}>管理同步、备份、诊断日志和项目运行信息。</Text>
           </View>
-          <Text style={styles.squareCount}>{events.length} 条事件</Text>
+          <Text style={styles.squareCount}>v{APP_VERSION}</Text>
         </View>
 
         <View style={styles.syncPanel}>
           <View style={styles.syncHeader}>
-            <View>
+            <View style={styles.syncHeaderText}>
+              <Text style={styles.cardTitle}>项目信息</Text>
+              <Text style={styles.help}>Laphiny 是面向多 Hermes Agent 的本地优先协作聊天客户端。</Text>
+            </View>
+            <StatusToken icon="shield-checkmark-outline" label="本地优先" tone="memory" />
+          </View>
+          <View style={styles.storageInfoBox}>
+            <Text style={styles.storageInfoText}>应用版本：{APP_VERSION} · Expo SDK 54 · React Native 0.81</Text>
+            <Text style={styles.storageInfoText}>平台：{Platform.OS} · 布局 {getLayoutModeLabel(layoutMode)} / {Math.round(width)}px · {networkOnline ? '在线' : '离线'}</Text>
+            <Text style={styles.storageInfoText}>Android 包名：site.nianxxz.laphiny · EAS 项目：2970a5e0-248d-49eb-a8b5-90c8c19ed6ee</Text>
+            <Text style={styles.storageInfoText}>连接 {connections.length} 个 · 房间 {rooms.length} 个 · 消息 {storageSummary.messageCount} 条 / {storageSummary.messageSizeLabel}</Text>
+          </View>
+        </View>
+
+        <View style={styles.syncPanel}>
+          <View style={styles.syncHeader}>
+            <View style={styles.syncHeaderText}>
               <Text style={styles.cardTitle}>SQLite 同步后端</Text>
-              <Text style={styles.help}>先按契约连接轻后端，后续设备可以共享房间、消息和灵庭事件。</Text>
+              <Text style={styles.help}>连接自己的轻后端后，可在多设备间共享房间、消息和灵庭事件。</Text>
             </View>
             <TouchableOpacity
               style={[styles.syncToggle, syncConfig.enabled && styles.syncToggleOn]}
@@ -3683,7 +3841,7 @@ ${content}`)]);
             style={styles.input}
             value={syncConfig.baseUrl}
             onChangeText={(baseUrl) => setSyncConfig((current) => ({ ...current, baseUrl, updatedAt: new Date().toISOString() }))}
-            placeholder="https://laper.local/laphiny-sync"
+            placeholder="https://your-sync.example/laphiny-sync"
             autoCapitalize="none"
             keyboardType="url"
           />
@@ -3711,9 +3869,9 @@ ${content}`)]);
 
         <View style={styles.syncPanel}>
           <View style={styles.syncHeader}>
-            <View>
+            <View style={styles.syncHeaderText}>
               <Text style={styles.cardTitle}>本地备份 / 恢复</Text>
-              <Text style={styles.help}>阶段三长期使用能力：一键复制完整备份，或从 JSON 合并恢复。备份可能包含 API Key，请只保存在可信位置。</Text>
+              <Text style={styles.help}>复制完整备份，或从 JSON 合并恢复。备份可能包含 API Key，请只保存在可信位置。</Text>
             </View>
             <Text style={styles.squareCount}>v5</Text>
           </View>
@@ -3733,17 +3891,11 @@ ${content}`)]);
           />
         </View>
 
-        {renderSoulDailyPanel(dailyDigest)}
-
-        {renderCollaborationArchive()}
-
-        {renderSoulRelationsPanel()}
-
         <View style={styles.diagnosticPanel}>
           <View style={styles.syncHeader}>
-            <View>
+            <View style={styles.syncHeaderText}>
               <Text style={styles.cardTitle}>诊断日志</Text>
-              <Text style={styles.help}>记录最近的 Hermes 请求、Agent 委托、连接测试、同步和备份恢复结果。用于阶段三长期排障，不包含 API Key。</Text>
+              <Text style={styles.help}>记录最近的 Hermes 请求、Agent 委托、连接测试、同步和备份恢复结果。复制诊断包时会脱敏 API Key。</Text>
             </View>
             <TouchableOpacity
               style={[styles.syncToggle, diagnosticLogsOpen && styles.syncToggleOn]}
@@ -3761,8 +3913,7 @@ ${content}`)]);
           </View>
           <View style={styles.storageInfoBox}>
             <Text style={styles.storageInfoTitle}>存储后端</Text>
-            <Text style={styles.storageInfoText}>密钥：{storageBackend?.secretBackend ?? '加载中'} · 长期记录：{storageBackend?.durableBackend ?? '加载中'} · 消息 {storageSummary.messageCount} 条 / {storageSummary.messageSizeLabel}</Text>
-            <Text style={styles.storageInfoText}>运行：{Platform.OS} · {networkOnline ? '在线' : '离线'} · 布局 {getLayoutModeLabel(layoutMode)} / {Math.round(width)}px · SW {getServiceWorkerStatusLabel(serviceWorkerStatus)}{pwaInstalled ? ' · 已安装 PWA' : ''}</Text>
+            <Text style={styles.storageInfoText}>密钥：{storageBackend?.secretBackend ?? '加载中'} · 长期记录：{storageBackend?.durableBackend ?? '加载中'} · SW {getServiceWorkerStatusLabel(serviceWorkerStatus)}{pwaInstalled ? ' · 已安装 PWA' : ''}</Text>
             {storageBackend?.durableDirectory ? <Text style={styles.storageInfoPath}>{storageBackend.durableDirectory}</Text> : null}
           </View>
           <View style={styles.buttonRow}>
@@ -3792,6 +3943,28 @@ ${content}`)]);
             </View>
           ) : null}
         </View>
+      </ScrollView>
+    );
+  }
+
+  function renderSquare() {
+    const events = [...squareEvents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const dailyDigest = buildSoulDailyDigest({ rooms, connections, messagesByRoom, collaborationEvents, delegationTasks });
+    return (
+      <ScrollView style={styles.content} contentContainerStyle={styles.panel}>
+        <View style={styles.squareHeader}>
+          <View>
+            <Text style={styles.sectionTitle}>灵庭</Text>
+            <Text style={styles.help}>沉淀 Hermes 回复、委托任务、房间记忆与 Soul 小队动态。</Text>
+          </View>
+          <Text style={styles.squareCount}>{events.length} 条事件</Text>
+        </View>
+
+        {renderSoulDailyPanel(dailyDigest)}
+
+        {renderCollaborationArchive()}
+
+        {renderSoulRelationsPanel()}
 
         {events.length === 0 ? (
           <EmptyState
@@ -4369,6 +4542,57 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: '#f5f7fb',
   },
+  replyIsland: {
+    position: 'absolute',
+    top: 10,
+    left: '50%',
+    zIndex: 50,
+    width: 460,
+    maxWidth: '80%',
+    marginLeft: -230,
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 24,
+    backgroundColor: '#111827',
+    shadowColor: '#111827',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  replyIslandCompact: {
+    left: 16,
+    right: 16,
+    width: 'auto',
+    maxWidth: 'auto',
+    marginLeft: 0,
+  },
+  replyIslandDot: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563eb',
+  },
+  replyIslandTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  replyIslandTitle: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  replyIslandPreview: {
+    marginTop: 1,
+    color: '#cbd5e1',
+    fontSize: 12,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -4400,9 +4624,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    minHeight: 32,
-    paddingHorizontal: 10,
-    borderRadius: 999,
+    minHeight: 30,
+    paddingHorizontal: 9,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     backgroundColor: '#ffffff',
@@ -4423,9 +4647,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    minHeight: 32,
-    paddingHorizontal: 10,
-    borderRadius: 999,
+    minHeight: 30,
+    paddingHorizontal: 9,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#fecaca',
     backgroundColor: '#fef2f2',
@@ -4435,9 +4659,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  tabsScroll: {
+    flexGrow: 0,
+  },
   tabs: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
     paddingHorizontal: 20,
     paddingBottom: 12,
   },
@@ -4476,18 +4703,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    minHeight: 40,
-    paddingHorizontal: 16,
+    gap: 7,
+    minHeight: 38,
+    paddingHorizontal: 13,
     paddingVertical: 8,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     backgroundColor: '#ffffff',
   },
   tabActive: {
-    borderColor: '#2563eb',
-    backgroundColor: '#2563eb',
+    borderColor: '#111827',
+    backgroundColor: '#111827',
   },
   tabText: {
     color: '#4b5563',
@@ -4501,7 +4728,7 @@ const styles = StyleSheet.create({
   },
   chatDesktop: {
     flexDirection: 'row',
-    gap: 14,
+    gap: 12,
     paddingHorizontal: 20,
     paddingBottom: 16,
   },
@@ -4595,12 +4822,12 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   collabDrawer: {
-    width: 330,
-    minWidth: 300,
-    maxWidth: 360,
+    width: 310,
+    minWidth: 290,
+    maxWidth: 340,
     marginRight: 20,
     marginBottom: 14,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#dbeafe',
     backgroundColor: '#ffffff',
@@ -4640,10 +4867,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    minHeight: 36,
-    paddingHorizontal: 14,
+    minHeight: 34,
+    paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     backgroundColor: '#ffffff',
@@ -4675,9 +4902,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    minHeight: 36,
+    minHeight: 34,
     paddingHorizontal: 12,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#bfdbfe',
     backgroundColor: '#eff6ff',
@@ -4723,14 +4950,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 7,
     borderWidth: 1,
   },
   statusTokenDefault: {
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
   },
   statusTokenRp: {
     borderColor: '#ddd6fe',
@@ -4804,13 +5031,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   memberChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#f0fdfa',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
   },
   memberChipSelected: {
-    backgroundColor: '#0f766e',
+    backgroundColor: '#111827',
   },
   memberChipDisabled: {
     opacity: 0.45,
@@ -4835,9 +5062,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   memberChipText: {
-    color: '#0f766e',
+    color: '#374151',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   memberChipTextSelected: {
     color: '#ffffff',
@@ -4867,11 +5094,11 @@ const styles = StyleSheet.create({
     gap: 8,
     minWidth: 150,
     flexGrow: 1,
-    padding: 10,
+    padding: 9,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
   },
   quickCommandDisabled: {
     borderColor: '#e5e7eb',
@@ -4882,8 +5109,8 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   quickCommandTitle: {
-    color: '#1d4ed8',
-    fontWeight: '800',
+    color: '#111827',
+    fontWeight: '700',
   },
   quickCommandTitleDisabled: {
     color: '#9ca3af',
@@ -5078,9 +5305,14 @@ const styles = StyleSheet.create({
   },
   syncHeader: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  syncHeaderText: {
+    flex: 1,
+    minWidth: 0,
   },
   syncToggle: {
     paddingHorizontal: 10,
@@ -5391,9 +5623,9 @@ const styles = StyleSheet.create({
   },
   composer: {
     paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 14,
-    gap: 10,
+    paddingTop: 9,
+    paddingBottom: 12,
+    gap: 8,
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
     backgroundColor: '#ffffff',
@@ -5412,21 +5644,21 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   mentionChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#eef2ff',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
   },
   mentionChipSelected: {
-    backgroundColor: '#3730a3',
+    backgroundColor: '#111827',
   },
   mentionChipDisabled: {
     opacity: 0.45,
   },
   mentionChipText: {
-    color: '#3730a3',
+    color: '#374151',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   mentionChipTextSelected: {
     color: '#ffffff',
@@ -5524,8 +5756,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     minHeight: 30,
-    paddingHorizontal: 10,
-    borderRadius: 999,
+    paddingHorizontal: 9,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     backgroundColor: '#f9fafb',
@@ -5537,18 +5769,18 @@ const styles = StyleSheet.create({
   modeShortcutText: {
     color: '#4b5563',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   modeShortcutTextActive: {
     color: '#ffffff',
   },
   slashPanel: {
     gap: 8,
-    padding: 10,
-    borderRadius: 10,
+    padding: 9,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
+    borderColor: '#e5e7eb',
+    backgroundColor: '#f9fafb',
   },
   slashCommandRow: {
     flexDirection: 'row',
@@ -5564,11 +5796,11 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 8,
-    backgroundColor: '#dbeafe',
+    backgroundColor: '#f3f4f6',
   },
   slashCommandTitle: {
     color: '#111827',
-    fontWeight: '900',
+    fontWeight: '800',
   },
   pendingAttachments: {
     flexDirection: 'row',
@@ -5592,13 +5824,13 @@ const styles = StyleSheet.create({
   composerInputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 8,
+    gap: 7,
   },
   iconButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: 42,
-    height: 42,
+    width: 40,
+    height: 40,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -5610,7 +5842,7 @@ const styles = StyleSheet.create({
   },
   composerInput: {
     flex: 1,
-    minHeight: 42,
+    minHeight: 40,
     maxHeight: 128,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -5644,12 +5876,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 13,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
+    borderColor: '#d1d5db',
+    backgroundColor: '#ffffff',
   },
   secondaryButtonText: {
-    color: '#2563eb',
-    fontWeight: '800',
+    color: '#374151',
+    fontWeight: '700',
   },
   miniButton: {
     flexDirection: 'row',
@@ -5665,7 +5897,7 @@ const styles = StyleSheet.create({
   miniButtonText: {
     color: '#4b5563',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   disabledButton: {
     opacity: 0.45,

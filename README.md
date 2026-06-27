@@ -1,27 +1,33 @@
 # Laphiny
 
-Laphiny 是一个特供 Hermes Agent 的多端聊天客户端：手机端产出 Android APK，其他端使用 Web/PWA。它面向“同时和多个 Hermes 人格/实例对话”的场景，优先实现群聊、@机制、图片与文件上下文上传。
+Laphiny 是一个面向多 Hermes Agent 的本地优先协作聊天客户端，支持 Web/PWA 与 Android APK。它不是普通的多模型聊天壳，而是为多个 Hermes Soul / Agent 共同工作、互相委托、接力讨论和沉淀房间记忆而设计的协作房间。
 
+## 主要能力
 
-## 帮助文档
+- 多 Hermes Gateway 连接管理。
+- 单聊与群聊房间。
+- `@成员名`、`@all`、`@all-seq` 控制回复对象和协作顺序。
+- `/council`、`/redteam`、`/review`、`/retro` 等协作仪式。
+- RP 房间、GM 选择、场景卡和剧本档案。
+- 房间记忆胶囊、共识总结、任务看板、Soul 关系与灵庭动态。
+- 图片与文本附件上下文。
+- 跨房间 Agent 回复提醒：后台房间回复后会显示顶部提醒，点击可跳转。
+- 设置页：同步、备份、诊断日志、项目与存储信息集中管理。
 
-项目审阅、功能说明、文件结构、代码详解、部署要点、排障和未来路线见 [`HELP.md`](./HELP.md)。
+## 隐私说明
 
-## 功能目标
+正式版不会内置任何私人 Hermes 连接、API Key 或个人同步后端地址。首次启动后需要用户自行添加连接。
 
-- 多 Hermes Gateway API 连接管理
-- 单聊 / 群聊房间
-- `@name` / `@all` 控制哪些 Hermes 回复
-- Soul 协作仪式：`/council`、`/redteam`、`/review`、`/retro`
-- 角色扮演 RP 房间：选择一位主 Agent 作为 GM/主持人，其他 Agent 作为角色、NPC 或氛围补充参与
-- 文本聊天
-- 图片上传：以内联 `data:image/...` 发送到 Hermes API Server
-- 文件上传：MVP 将文本类文件转成附件上下文发送
-- Web/PWA 与 Android APK 同一套 Expo 代码
+本地数据默认保存在当前设备：
 
-## Hermes Gateway API 要求
+- Web/PWA 使用浏览器 localStorage。
+- Android 密钥使用 SecureStore，长期聊天记录使用文件系统。
 
-Hermes 端开启 API Server：
+完整备份可能包含 API Key，请只保存在可信位置。诊断包会脱敏连接密钥和常见 token 字段。
+
+## Hermes Gateway API
+
+Hermes 端需要开启 API Server，例如：
 
 ```bash
 hermes config set platforms.api_server.enabled true
@@ -32,7 +38,7 @@ hermes config set platforms.api_server.cors_origins '["http://localhost:8081","h
 hermes gateway restart
 ```
 
-生产环境请使用 HTTPS 反代或 Cloudflare Tunnel / Tailscale Funnel。HTTPS Web 页面不能请求裸 HTTP Hermes 接口。
+生产环境建议使用 HTTPS 反代、Cloudflare Tunnel、Tailscale Funnel 或同等级方案。HTTPS Web 页面不能直接请求未加密的 HTTP Hermes 接口。
 
 ## 本地开发
 
@@ -51,73 +57,54 @@ npm run sync:server
 npm run web:build
 ```
 
-产物目录：`dist/`。
+产物目录为 `dist/`。
 
-## Android APK 构建
+项目部署在 `/laphiny/` 子路径时，请始终使用 `npm run web:build`。该脚本会运行 `scripts/fix-web-paths.mjs` 修正 Web bundle、字体和 favicon 路径。
 
-参考 iHermes 的 Expo/Gradle 路线：
+## Android APK
+
+本地构建：
 
 ```bash
-# 生成 android/ 原生工程
-npx expo prebuild --platform android
-
-# Debug APK
 npm run android:assemble:debug
-
-# Release APK
 npm run android:assemble:release
 ```
 
-产物路径：
+本地 Android 构建建议使用 JDK 17 或 21。JDK 25 可能触发 `Unsupported class file major version 69`。
 
-- Debug: `android/app/build/outputs/apk/debug/`
-- Release: `android/app/build/outputs/apk/release/`
-
-也可以用 EAS 云构建预览 APK：
+EAS 云构建 preview APK：
 
 ```bash
-npm install -g eas-cli
-eas build -p android --profile preview
+npx eas build --platform android --profile preview
 ```
 
-## 开发计划
+## 同步后端
 
-见 [`docs/PLAN.md`](./docs/PLAN.md)。
+开发用 SQLite 同步服务：
 
+```bash
+npm run sync:server
+```
 
-## 核心差异：Soul-native 多 Agent 协作
+前端可在“设置”页填写同步后端地址和 API Key，使用前建议先点击“检查差异”。
 
-Laphiny 的定位不是普通多模型聊天客户端，而是给已有 Hermes Soul / Agent 使用的私人协作房间。
+## 项目结构
 
-- 每个 Agent 保留自己的 Hermes soul、人格和记忆。
-- Laphiny 只提供房间共享上下文、@ 委托、接力讨论和协作任务追踪。
-- Agent 可以自动生成公开协作卡片，其他成员只看到公开摘要，不看到完整 soul。
-- 群聊支持协作时间线、委托任务卡、团队模板和房间共识总结。
+更多文件结构、功能说明和开发约定见：
 
-详见 `docs/STAGE4_SOUL_COLLABORATION.md`。
+- [HELP.md](./HELP.md)
+- [docs/help/03_FILE_GUIDE.md](./docs/help/03_FILE_GUIDE.md)
+- [docs/STAGE4_SOUL_COLLABORATION.md](./docs/STAGE4_SOUL_COLLABORATION.md)
 
+## 发布检查
 
-## Stage 4.2：协作仪式、房间记忆胶囊、今日小队动态
+发布前建议至少运行：
 
-Laphiny 现在支持更强的 Soul-native 协作玩法：
+```bash
+npm run typecheck
+npm test
+npm run web:build
+npx expo-doctor
+```
 
-- `/council` 议会模式：所有 Agent 独立发表观点，再生成最终共识。
-- `/redteam` 红队审查：接力找漏洞、反例、失败场景和修正方案。
-- `/review` 审查模式：按成员能力审查方案、代码、文案或交付物。
-- `/retro` 复盘模式：复盘阶段进展、贡献、问题和下一步。
-- 房间记忆胶囊：沉淀房间目标、共识、待办、偏好、未解决问题，并注入后续群聊上下文。
-- 灵庭今日小队动态：展示当天 Agent 回复、委托、活跃房间、未完成任务和房间记忆状态。
-
-## Stage 4 UX Polish
-
-Laphiny 增加了 Soul Room 体验抛光：房间状态条、slash command 补全、Agent 徽章/状态、RP 场景卡、消息视觉分层、桌面协作侧栏和移动端模式快捷条。目标是让专业协作和桌游店 RP 都能被用户一眼理解、快速启动。
-
-
-### Stage 4 Plus: Soul Room 深度体验
-
-- **RP 剧本档案**：世界观、章节、NPC、地点、道具、线索、谜团、玩家选择和 GM 幕后笔记。
-- **房间模式**：工作室 / 议会 / 审查 / 桌游 / 日常，一键切换默认协作行为。
-- **任务看板**：委托任务按待处理、处理中、已完成、阻塞/失败展示。
-- **Soul 关系图**：根据委托、完成和互相引用生成 Agent 协作关系。
-- **首次启动向导与模板**：用产品设计、代码审查、桌游 RP、日常陪伴模板快速创建房间。
-
+并确认仓库中没有真实 API Key、私人 Gateway 地址或本地连接备份。

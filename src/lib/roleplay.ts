@@ -53,7 +53,7 @@ export function getRoleplayTargets(room: Room): RoomMember[] {
   if (room.kind !== 'group' || !room.roleplay?.enabled) return [];
   const enabledMembers = room.members.filter((member) => member.enabled);
   if (!enabledMembers.length) return [];
-  const gm = enabledMembers.find((member) => member.connectionId === room.roleplay?.gmConnectionId) ?? enabledMembers[0];
+  const gm = enabledMembers.find((member) => member.connectionId === room.roleplay?.gmConnectionId) ?? enabledMembers[0]!;
   const actors = room.roleplay.includeAllAgents === false
     ? []
     : enabledMembers.filter((member) => member.connectionId !== gm.connectionId);

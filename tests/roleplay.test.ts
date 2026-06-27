@@ -44,6 +44,6 @@ test('roleplay routes ordinary group turns to gm first', () => {
 
 test('roleplay prompt and system appendix distinguish gm from actor', () => {
   assert.match(buildRoleplayTurnPrompt(room, '/scene 雨声变大'), /场景设定更新/);
-  assert.match(buildRoleplaySystemAppendix(room, room.members[0]), /主叙事 \/ GM/);
-  assert.match(buildRoleplaySystemAppendix(room, room.members[1]), /不要抢夺主叙事权/);
+  assert.match(buildRoleplaySystemAppendix(room, room.members[0]!), /主叙事 \/ GM/);
+  assert.match(buildRoleplaySystemAppendix(room, room.members[1]!), /不要抢夺主叙事权/);
 });

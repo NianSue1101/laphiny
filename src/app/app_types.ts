@@ -15,7 +15,7 @@ import type {
 import type { ParsedCollaborationRitual } from '../lib/collaboration_rituals';
 import type { ParsedRoleplayCommand } from '../lib/roleplay';
 
-export type Tab = 'chat' | 'connections' | 'rooms' | 'square';
+export type Tab = 'chat' | 'connections' | 'rooms' | 'square' | 'settings';
 export type IconName = string;
 
 export type QuickCommand = {
