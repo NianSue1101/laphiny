@@ -82,16 +82,22 @@ jobs:
               stream: false
             }' > /tmp/laper-request.json
 
-          RESPONSE=$(curl -s -X POST "${{ secrets.LAPER_BASE_URL }}/v1/chat/completions" \
+          set +e
+          curl -s -X POST "${{ secrets.LAPER_BASE_URL }}/v1/chat/completions" \
             -H "Authorization: Bearer ${{ secrets.LAPER_API_KEY }}" \
             -H "Content-Type: application/json" \
             -H "X-Hermes-Session-Key: laphiny-pr-review" \
             --data-binary @/tmp/laper-request.json \
             --connect-timeout 30 \
-            --max-time 120)
+            --max-time 120 \
+            -o /tmp/laper-response.json
+          curl_status=$?
+          set -e
 
-          if jq -e . >/dev/null 2>&1 <<< "$RESPONSE"; then
-            REVIEW=$(jq -r '.choices[0].message.content // "Laper 无法完成审查：" + (.error.message // "unknown error")' <<< "$RESPONSE")
+          if [ "$curl_status" -ne 0 ]; then
+            REVIEW="Laper 无法完成审查：请求失败或超时（curl exit $curl_status）。"
+          elif jq -e . >/dev/null 2>&1 < /tmp/laper-response.json; then
+            REVIEW=$(jq -r '.choices[0].message.content // "Laper 无法完成审查：" + (.error.message // "unknown error")' < /tmp/laper-response.json)
           else
             REVIEW="Laper 无法完成审查：响应不是 JSON。"
           fi
