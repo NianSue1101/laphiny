@@ -177,13 +177,7 @@ export function buildGroupSystemPrompt(room: Room, member: RoomMember, connectio
     buildMemberCapabilityGuide(room, member, connections),
     '',
     '协作协议：',
-    '1. 默认先完成你能完成的部分，保持简洁明确。',
-    '2. 判断“谁更适合”时，优先参考成员公开卡片里的擅长领域、适合委托和不适合委托。',
-    '3. 如果某个子任务明显更适合其他成员，请在单独一行使用「@成员名 请处理……」发起委托。',
-    '4. 委托时要写清楚可执行的子任务、输入材料和期望产物，不要只写一个名字。',
-    '5. 只有真正需要别人处理时才使用 @；如果只是提到成员名字，不要带 @。',
-    '6. 不要 @自己；不要使用 @all；不要为了寒暄或总结而委托。',
-    '7. 如果成员尚未维护公开卡片，除非用户明确指定，否则不要假设其能力。',
+    ...buildCollaborationProtocol({ allowDelegation: true, delegatedFrom: undefined }),
     room.roleplay?.enabled ? ['当前 RP 剧本档案：', formatRoleplayArchiveForPrompt(room.roleplay.archive)].join('\n') : '',
     buildRoleplaySystemAppendix(room, member),
   ].filter(Boolean).join('\n');
@@ -209,14 +203,34 @@ export function buildDelegationSystemPrompt(room: Room, member: RoomMember, dele
     '当前可协作成员公开卡片：',
     buildMemberCapabilityGuide(room, member, connections),
     '',
-    '继续委托规则：',
-    '1. 如果你能处理，就直接处理，不要再次无意义委托。',
-    '2. 只有遇到明显更适合其他成员的独立子任务时，才在单独一行使用「@成员名 请处理……」。',
-    '3. 判断委托对象时参考公开卡片；不要凭名字臆测。',
-    '4. 不要 @自己；不要 @all；不要形成循环委托。',
+    '被委托时的执行协议：',
+    ...buildCollaborationProtocol({ allowDelegation: true, delegatedFrom }),
     room.roleplay?.enabled ? ['当前 RP 剧本档案：', formatRoleplayArchiveForPrompt(room.roleplay.archive)].join('\n') : '',
     buildRoleplaySystemAppendix(room, member),
   ].filter(Boolean).join('\n');
+}
+
+export function buildCollaborationProtocol({
+  allowDelegation,
+  delegatedFrom,
+}: {
+  allowDelegation: boolean;
+  delegatedFrom?: string;
+}): string[] {
+  return [
+    '1. 先判断用户真正要完成的交付物，再直接完成你最擅长、最确定的部分。',
+    '2. 回应要增量推进：避免复述共享记录里已经完成的内容，优先补充新结论、可执行步骤、风险或缺口。',
+    '3. 判断“谁更适合”时，优先参考成员公开卡片里的擅长领域、适合委托和不适合委托；没有卡片时只可依据用户明确指定或近期上下文。',
+    allowDelegation
+      ? '4. 只有某个独立子任务明显更适合其他成员、且你无法高质量完成时，才在单独一行使用「@成员名 请处理……」发起委托。'
+      : '4. 当前不应继续发起委托；请尽量直接完成任务或说明缺少什么输入。',
+    '5. 委托必须写清楚：目标、输入材料、期望产物和边界；不要只写成员名或泛泛地说“帮忙看看”。',
+    '6. 一次最多委托 1 个最关键的子任务；不要 @自己，不要使用 @all，不要为了寒暄、赞同、总结或甩锅而委托。',
+    delegatedFrom
+      ? `7. 避免把任务再委托回 ${delegatedFrom}；只有出现全新的、可独立处理的缺口时才继续委托。`
+      : '7. 如果不需要委托，请不要带 @ 提到成员；普通提名请去掉 @，避免误触发自动转发。',
+    '8. 如果发现上游任务不清楚，请先用一句话说明你的假设，再在该假设下给出当前最有用的产物。',
+  ];
 }
 
 export function buildMemberCapabilityGuide(room: Room, currentMember: RoomMember, connections: HermesConnection[]): string {

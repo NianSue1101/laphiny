@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveAssistantDelegations, resolveMentionTargets } from '../src/lib/mentions';
+import { isActionableAssistantDelegationTask, resolveAssistantDelegations, resolveMentionTargets } from '../src/lib/mentions';
 import { Room } from '../src/types';
 
 const room: Room = {
@@ -82,4 +82,27 @@ test('assistant delegation only triggers from line-start mentions with task text
   assert.equal(delegations.length, 1);
   assert.equal(delegations[0]?.target.connectionId, 'fund');
   assert.equal(delegations[0]?.taskText, '请检查市场风险');
+});
+
+test('assistant delegation ignores bare or vague member mentions', () => {
+  const delegations = resolveAssistantDelegations(
+    room,
+    ['@基金猫娘', '@基金猫娘 看看', '@基金猫娘 帮忙看看'].join('\n'),
+    'catgirl',
+  );
+
+  assert.deepEqual(delegations, []);
+});
+
+test('assistant delegation normalizes punctuation before task text', () => {
+  const delegations = resolveAssistantDelegations(room, '@基金猫娘：请评估这个方案的财务风险', 'catgirl');
+
+  assert.equal(delegations.length, 1);
+  assert.equal(delegations[0]?.taskText, '请评估这个方案的财务风险');
+});
+
+test('assistant delegation task quality gate requires actionable text', () => {
+  assert.equal(isActionableAssistantDelegationTask(''), false);
+  assert.equal(isActionableAssistantDelegationTask('继续'), false);
+  assert.equal(isActionableAssistantDelegationTask('请列出三个失败场景'), true);
 });

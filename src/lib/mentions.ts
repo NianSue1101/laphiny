@@ -6,9 +6,20 @@ const USER_MENTION_PATTERN = new RegExp(
   'giu',
 );
 const ASSISTANT_DELEGATION_PATTERN = new RegExp(
-  String.raw`(^|\n)[\t >*\-•]*[@＠](${MENTION_TOKEN})(?=$|[\s,，:：;；、.!?！？])([,，:：;；、.!?！？]?\s*)([^\n]*)`,
+  String.raw`(^|\n)[\t >*\-•]*[@＠](${MENTION_TOKEN})(?=$|[\s,，:：;；、.!?！？])([,，:：;；、.!?！？]?[\t ]*)([^\n]*)`,
   'giu',
 );
+const MIN_ASSISTANT_DELEGATION_TASK_LENGTH = 6;
+const VAGUE_ASSISTANT_DELEGATION_TASKS = new Set([
+  '看看',
+  '看一下',
+  '帮忙看看',
+  '帮我看看',
+  '处理一下',
+  '继续',
+  '补充',
+  '补充一下',
+]);
 
 export interface AssistantDelegation {
   target: RoomMember;
@@ -128,7 +139,11 @@ export function resolveAssistantDelegations(
     }
 
     const targets = enabledMembers.filter((member) => memberMatchesMention(member, mention));
-    const taskText = (match[4] ?? '').trim();
+    const taskText = normalizeAssistantDelegationTask(match[4] ?? '');
+    if (!isActionableAssistantDelegationTask(taskText)) {
+      continue;
+    }
+
     for (const target of targets) {
       const key = `${target.connectionId}:${taskText}`;
       if (seen.has(key)) continue;
@@ -138,6 +153,20 @@ export function resolveAssistantDelegations(
   }
 
   return delegations;
+}
+
+export function isActionableAssistantDelegationTask(taskText: string): boolean {
+  const normalized = normalizeAssistantDelegationTask(taskText);
+  if (normalized.length < MIN_ASSISTANT_DELEGATION_TASK_LENGTH) return false;
+  if (VAGUE_ASSISTANT_DELEGATION_TASKS.has(normalized)) return false;
+  return /[\p{L}\p{N}\u4e00-\u9fff]/u.test(normalized);
+}
+
+function normalizeAssistantDelegationTask(taskText: string): string {
+  return taskText
+    .replace(/^[,，:：;；、.!?！？\s]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**

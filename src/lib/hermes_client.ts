@@ -70,11 +70,15 @@ export class HermesClient {
       throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('Response body is not readable');
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!response.body?.getReader) {
+      const text = await response.text();
+      const completion = parseNonStreamingChatCompletion(text, contentType);
+      if (completion) yield completion;
+      return;
     }
 
+    const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     const abortReader = () => {
@@ -202,4 +206,20 @@ interface HermesSseChunk {
     };
     finish_reason?: string | null;
   }>;
+}
+
+function parseNonStreamingChatCompletion(text: string, contentType: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+
+  if (contentType.includes('application/json') || trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as HermesChatCompletionResponse;
+      return parsed.choices?.[0]?.message?.content?.trim() ?? '';
+    } catch {
+      return trimmed;
+    }
+  }
+
+  return trimmed;
 }
