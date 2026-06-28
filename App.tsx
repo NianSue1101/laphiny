@@ -3,6 +3,8 @@ import 'react-native-url-polyfill/auto';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
+  AppStateStatus,
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -210,6 +212,8 @@ export default function App() {
   const messageListAtBottomRef = useRef(true);
   const pendingMessageScrollToEndRef = useRef(false);
   const messageListSignatureRef = useRef<MessageListSignature>({ roomId: null, messageCount: 0, lastMessageId: null });
+  const autoPullingSyncRef = useRef(false);
+  const lastAutoPullSyncAtRef = useRef(0);
   const streamControllersRef = useRef<Record<string, AbortController>>({});
   const streamFlushTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const streamBuffersRef = useRef<Record<string, string>>({});
@@ -638,6 +642,33 @@ export default function App() {
       clearInterval(intervalId);
     };
   }, [hydrated, syncConfig.enabled, syncConfig.baseUrl, syncConfig.apiKey, syncConfig.lastEventPulledAt, squareEvents, tab]);
+
+  useEffect(() => {
+    if (!hydrated || !syncConfig.enabled || !syncConfig.baseUrl.trim()) return;
+
+    void autoPullSyncSnapshot('startup');
+
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      if (nextState === 'active') void autoPullSyncSnapshot('foreground');
+    };
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void autoPullSyncSnapshot('foreground');
+      }
+    };
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    return () => {
+      subscription.remove();
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+    };
+  }, [hydrated, syncConfig.enabled, syncConfig.baseUrl, syncConfig.apiKey]);
 
   function normalizeConnectionForm(form: ConnectionFormState): ConnectionFormState | null {
     const name = form.name.trim();
@@ -2752,6 +2783,43 @@ ${content}`)]);
     if (snapshot.delegationTasks?.length) setDelegationTasks((current) => mergeDelegationTasks([...current, ...(snapshot.delegationTasks ?? [])]).slice(-200));
     if (snapshot.teamTemplates?.length) setTeamTemplates((current) => mergeByUpdatedAt(current, snapshot.teamTemplates ?? []));
     if (snapshot.profileVersions?.length) setProfileVersions((current) => mergeProfileVersions([...current, ...(snapshot.profileVersions ?? [])]).slice(-100));
+  }
+
+  async function autoPullSyncSnapshot(reason: 'startup' | 'foreground') {
+    const now = Date.now();
+    if (now - lastAutoPullSyncAtRef.current < 8_000) return;
+    if (autoPullingSyncRef.current || syncing || checkingSyncConflicts) return;
+
+    const client = makeSyncClient();
+    if (!client) return;
+
+    autoPullingSyncRef.current = true;
+    lastAutoPullSyncAtRef.current = now;
+    const startedAt = Date.now();
+    try {
+      const snapshot = await client.pullSnapshot({ timeoutMs: 20_000 });
+      applySyncSnapshot(snapshot);
+      setSyncConfig((current) => ({ ...current, lastPulledAt: new Date().toISOString(), updatedAt: new Date().toISOString() }));
+      appendDiagnosticLog({
+        level: 'success',
+        category: 'sync',
+        title: 'Auto sync completed',
+        message: 'Remote snapshot was merged into this device.',
+        durationMs: Date.now() - startedAt,
+        meta: { reason, rooms: snapshot.rooms.length, connections: snapshot.connections.length },
+      });
+    } catch (error) {
+      appendDiagnosticLog({
+        level: 'warning',
+        category: 'sync',
+        title: 'Auto sync failed',
+        message: getErrorMessage(error),
+        durationMs: Date.now() - startedAt,
+        meta: { reason },
+      });
+    } finally {
+      autoPullingSyncRef.current = false;
+    }
   }
 
   function buildAppBackup(): LaphinyBackup {
