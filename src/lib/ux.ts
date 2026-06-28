@@ -1,4 +1,4 @@
-export type UXCommandKind = 'work' | 'ritual' | 'roleplay' | 'memory';
+export type UXCommandKind = 'work' | 'ritual' | 'roleplay' | 'memory' | 'goal';
 
 export interface UXCommandDefinition {
   id: string;
@@ -10,6 +10,14 @@ export interface UXCommandDefinition {
 }
 
 export const UX_SLASH_COMMANDS: UXCommandDefinition[] = [
+  {
+    id: 'goal',
+    command: '/goal',
+    label: '目标模式',
+    description: '选择一个主 AI 先拆解目标、制定计划、分配成员实现，并在每轮后复盘推进。',
+    insertText: '/goal ',
+    kind: 'goal',
+  },
   {
     id: 'council',
     command: '/council',
@@ -96,6 +104,7 @@ export function getSlashCommandSuggestions(input: string, limit = 8): UXCommandD
 }
 
 export function getUxCommandKindLabel(kind: UXCommandKind): string {
+  if (kind === 'goal') return '目标模式';
   if (kind === 'ritual') return '协作仪式';
   if (kind === 'roleplay') return '角色扮演';
   if (kind === 'memory') return '房间记忆';

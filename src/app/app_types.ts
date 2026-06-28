@@ -13,6 +13,7 @@ import type {
   TeamTemplate,
 } from '../types';
 import type { ParsedCollaborationRitual } from '../lib/collaboration_rituals';
+import type { GoalModeCommand } from '../lib/goal_mode';
 import type { ParsedRoleplayCommand } from '../lib/roleplay';
 
 export type Tab = 'chat' | 'connections' | 'rooms' | 'square' | 'settings';
@@ -33,6 +34,7 @@ export type SendTargetSelection = {
   textForHermes: string;
   mode: CollaborationMode;
   ritual?: ParsedCollaborationRitual;
+  goalMode?: GoalModeCommand;
   roleplayCommand?: ParsedRoleplayCommand;
 };
 
@@ -45,6 +47,8 @@ export type ScheduledReply = {
   delegatedFromConnectionId?: string;
   delegatorMessage?: string;
   taskId?: string;
+  goalMode?: GoalModeCommand;
+  goalReviewRound?: number;
 };
 
 export type ConnectionFormState = {

@@ -32,7 +32,15 @@ export function SecondaryButton({ icon, label, onPress, disabled = false }: { ic
   );
 }
 
-export function AttachmentPreview({ attachment, onPress }: { attachment: Attachment; onPress?: () => void }) {
+export function AttachmentPreview({
+  attachment,
+  onPress,
+  actionIcon = 'close-circle',
+}: {
+  attachment: Attachment;
+  onPress?: () => void;
+  actionIcon?: IconName;
+}) {
   const summary = getAttachmentSummary(attachment);
   const isImage = attachment.kind === 'image' && Boolean(attachment.dataUrl || attachment.uri);
   const content = (
@@ -48,7 +56,7 @@ export function AttachmentPreview({ attachment, onPress }: { attachment: Attachm
         <Text style={styles.attachmentName} numberOfLines={1}>{attachment.name}</Text>
         <Text style={styles.attachmentSummary} numberOfLines={2}>{summary}</Text>
       </View>
-      {onPress ? <Ionicons name="close-circle" size={16} color="#0f766e" /> : null}
+      {onPress ? <Ionicons name={actionIcon} size={16} color="#0f766e" /> : null}
     </>
   );
 
