@@ -2712,9 +2712,11 @@ ${content}`)]);
     if (savedTo) {
       if (Platform.OS === 'web') {
         showNotice('备份下载已开始', '完整备份包含连接、房间、消息和同步配置，可能包含 API Key。请只保存在可信位置。');
+      } else if (savedTo.userVisible) {
+        showNotice('备份文件已导出', `已保存为 ${filename}。完整备份可能包含 API Key，请只保存在可信位置。`);
       } else {
-        await Clipboard.setStringAsync(savedTo);
-        showNotice('备份文件已导出', `完整备份包含连接、房间、消息和同步配置，可能包含 API Key。路径已复制：${savedTo}`);
+        await Clipboard.setStringAsync(savedTo.uri);
+        showNotice('备份文件已导出', `完整备份可能包含 API Key。系统目录选择不可用，已保存到应用私有目录，路径已复制：${savedTo.uri}`);
       }
       return;
     }
@@ -2778,7 +2780,7 @@ ${content}`)]);
     importBackupFromText(text);
   }
 
-  async function saveTextFile(filename: string, text: string, mimeType: string): Promise<string | null> {
+  async function saveTextFile(filename: string, text: string, mimeType: string): Promise<{ uri: string; userVisible: boolean } | null> {
     if (Platform.OS === 'web') {
       try {
         const blob = new Blob([text], { type: mimeType });
@@ -2788,9 +2790,25 @@ ${content}`)]);
         anchor.download = filename;
         anchor.click();
         URL.revokeObjectURL(url);
-        return filename;
+        return { uri: filename, userVisible: true };
       } catch {
         return null;
+      }
+    }
+
+    if (Platform.OS === 'android') {
+      const storage = FileSystem.StorageAccessFramework;
+      try {
+        const initialUri = storage.getUriForDirectoryInRoot('Download');
+        const permission = await storage.requestDirectoryPermissionsAsync(initialUri);
+        if (permission.granted) {
+          const baseName = filename.replace(/\.json$/i, '');
+          const fileUri = await storage.createFileAsync(permission.directoryUri, baseName, mimeType);
+          await storage.writeAsStringAsync(fileUri, text, { encoding: FileSystem.EncodingType.UTF8 });
+          return { uri: fileUri, userVisible: true };
+        }
+      } catch {
+        // Fall back to the app-private directory below.
       }
     }
 
@@ -2798,7 +2816,7 @@ ${content}`)]);
     if (!directory) return null;
     const fileUri = `${directory}${filename}`;
     await FileSystem.writeAsStringAsync(fileUri, text, { encoding: FileSystem.EncodingType.UTF8 });
-    return fileUri;
+    return { uri: fileUri, userVisible: false };
   }
 
   async function testSyncBackend() {
