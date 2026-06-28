@@ -2713,7 +2713,7 @@ ${content}`)]);
       if (Platform.OS === 'web') {
         showNotice('备份下载已开始', '完整备份包含连接、房间、消息和同步配置，可能包含 API Key。请只保存在可信位置。');
       } else if (savedTo.userVisible) {
-        showNotice('备份文件已导出', `已保存为 ${filename}。完整备份可能包含 API Key，请只保存在可信位置。`);
+        showNotice('备份文件已导出', `已保存为 ${filename}。完整备份可能包含 API Key，请只保存在可信位置；如果保存到下载目录，导入完成后建议删除或移到安全位置。`);
       } else {
         await Clipboard.setStringAsync(savedTo.uri);
         showNotice('备份文件已导出', `完整备份可能包含 API Key。系统目录选择不可用，已保存到应用私有目录，路径已复制：${savedTo.uri}`);
@@ -2807,8 +2807,8 @@ ${content}`)]);
           await storage.writeAsStringAsync(fileUri, text, { encoding: FileSystem.EncodingType.UTF8 });
           return { uri: fileUri, userVisible: true };
         }
-      } catch {
-        // Fall back to the app-private directory below.
+      } catch (error) {
+        console.warn('Android backup export via Storage Access Framework failed; falling back to app-private storage.', error);
       }
     }
 
