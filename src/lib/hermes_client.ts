@@ -96,7 +96,7 @@ export class HermesClient {
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
-          const parsed = parseSseLine(line);
+          const parsed = parseStreamLine(line);
           if (parsed === 'done') return;
           if (parsed) {
             yield parsed;
@@ -104,7 +104,7 @@ export class HermesClient {
         }
       }
 
-      const parsed = parseSseLine(buffer);
+      const parsed = parseStreamLine(buffer);
       if (parsed && parsed !== 'done') {
         yield parsed;
       }
@@ -248,19 +248,20 @@ function parseChatCompletionText(text: string, contentType: string): string {
 function parseSseText(text: string): string[] {
   const chunks: string[] = [];
   for (const line of text.split(/\r?\n/)) {
-    const parsed = parseSseLine(line);
+    const parsed = parseStreamLine(line);
     if (parsed === 'done') break;
     if (parsed) chunks.push(parsed);
   }
   return chunks;
 }
 
-function parseSseLine(line: string): string | 'done' | null {
+function parseStreamLine(line: string): string | 'done' | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('event:') || trimmed.startsWith(':')) return null;
-  if (!trimmed.startsWith('data:')) return null;
 
-  const payload = trimmed.replace(/^data:\s*/, '');
+  const payload = trimmed.startsWith('data:')
+    ? trimmed.replace(/^data:\s*/, '')
+    : trimmed;
   if (payload === '[DONE]') return 'done';
 
   try {

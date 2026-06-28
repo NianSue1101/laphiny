@@ -29,6 +29,7 @@ export interface HermesConnection {
   apiKey: string;
   model: string;
   enabled: boolean;
+  avatarUri?: string;
   profile?: AgentProfile;
   createdAt: string;
   updatedAt: string;
