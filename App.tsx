@@ -162,10 +162,13 @@ export default function App() {
   const [draft, setDraft] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [activeStreamIds, setActiveStreamIds] = useState<Record<string, true>>({});
+  const [stoppingStreamIds, setStoppingStreamIds] = useState<Record<string, true>>({});
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
+  const [groupMemberDraftIds, setGroupMemberDraftIds] = useState<string[]>([]);
   const [quickCommandsOpen, setQuickCommandsOpen] = useState(false);
   const [collaborationDrawerOpen, setCollaborationDrawerOpen] = useState(true);
   const [roomToolsOpen, setRoomToolsOpen] = useState(false);
+  const [roomDetailsCollapsed, setRoomDetailsCollapsed] = useState(true);
   const [testingConnectionId, setTestingConnectionId] = useState<string | null>(null);
   const [profilingConnectionId, setProfilingConnectionId] = useState<string | null>(null);
   const [connectionHealth, setConnectionHealth] = useState<Record<string, ConnectionHealth>>({});
@@ -332,6 +335,7 @@ export default function App() {
   const enabledConnections = useMemo(() => connections.filter((connection) => connection.enabled), [connections]);
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
   const selectedMessages = selectedRoom ? messagesByRoom[selectedRoom.id] ?? [] : [];
+  const lastEditableUserMessage = [...selectedMessages].reverse().find((message) => message.authorId === 'user') ?? null;
   const normalizedSearchQuery = messageSearchQuery.trim().toLowerCase();
 
   useEffect(() => {
@@ -401,6 +405,7 @@ export default function App() {
   const sending = Object.keys(activeStreamIds).length > 0;
   const totalUnread = Object.values(unreadByRoom).reduce<number>((total, count) => total + Number(count ?? 0), 0);
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
+  const groupMemberDraftSet = useMemo(() => new Set(groupMemberDraftIds), [groupMemberDraftIds]);
   const slashCommandSuggestions = useMemo(() => getSlashCommandSuggestions(draft), [draft]);
   const healthSummary = useMemo(() => {
     let ok = 0;
@@ -440,6 +445,21 @@ export default function App() {
   useEffect(() => {
     setRoomNameDraft(selectedRoom?.name ?? '');
   }, [selectedRoomId, selectedRoom?.name]);
+
+  useEffect(() => {
+    const enabledIds = enabledConnections.map((connection) => connection.id);
+    setGroupMemberDraftIds((current) => {
+      const kept = current.filter((id) => enabledIds.includes(id));
+      return kept.length > 0 ? kept : enabledIds;
+    });
+  }, [enabledConnections]);
+
+  useEffect(() => {
+    setRoomDetailsCollapsed(!isWideLayout);
+    setQuickCommandsOpen(false);
+    setRoomToolsOpen(false);
+    setMessageSearchQuery('');
+  }, [selectedRoomId, isWideLayout]);
 
   useEffect(() => {
     if (selectedRoomId && tab === 'chat') {
@@ -640,6 +660,7 @@ export default function App() {
         apiKey: String(rawItem.apiKey ?? ''),
         model: String(rawItem.model || DEFAULT_MODEL),
         enabled: rawItem.enabled !== false,
+        avatarUri: typeof rawItem.avatarUri === 'string' ? rawItem.avatarUri : undefined,
         profile: normalizeImportedAgentProfile(rawItem.profile),
         createdAt: now,
         updatedAt: now,
@@ -905,6 +926,27 @@ export default function App() {
     showNotice('连接已更新', `${connection.name} 已保存为 ${normalized.name}。`);
   }
 
+  async function chooseConnectionAvatar(connection: HermesConnection) {
+    try {
+      const images = await pickImages();
+      const image = images[0];
+      if (!image?.dataUrl && !image?.uri) return;
+      const avatarUri = image.dataUrl ?? image.uri;
+      setConnections((current) => current.map((item) => (
+        item.id === connection.id ? { ...item, avatarUri, updatedAt: new Date().toISOString() } : item
+      )));
+      showNotice('头像已更新', connection.name);
+    } catch (error) {
+      showNotice('头像选择失败', getErrorMessage(error));
+    }
+  }
+
+  function clearConnectionAvatar(connection: HermesConnection) {
+    setConnections((current) => current.map((item) => (
+      item.id === connection.id ? { ...item, avatarUri: undefined, updatedAt: new Date().toISOString() } : item
+    )));
+  }
+
   function deleteConnection(connection: HermesConnection) {
     const directRoomIds = rooms
       .filter((room) => room.kind === 'direct' && room.members.some((member) => member.connectionId === connection.id))
@@ -969,7 +1011,8 @@ export default function App() {
   }
 
   function createGroupRoom() {
-    const members = enabledConnections.map<RoomMember>((connection) => ({
+    const selectedConnections = enabledConnections.filter((connection) => groupMemberDraftIds.includes(connection.id));
+    const members = selectedConnections.map<RoomMember>((connection) => ({
       connectionId: connection.id,
       alias: connection.name,
       enabled: true,
@@ -984,6 +1027,7 @@ export default function App() {
     const room: Room = { ...baseRoom, mode: 'studio' };
     setRooms((current) => [...current, room]);
     setSelectedRoomId(room.id);
+    setGroupMemberDraftIds(enabledConnections.map((connection) => connection.id));
     setTab('chat');
   }
 
@@ -1172,6 +1216,8 @@ export default function App() {
   }
 
   function stopMessage(messageId: string) {
+    if (!streamControllersRef.current[messageId]) return;
+    setStoppingStreamIds((current) => ({ ...current, [messageId]: true }));
     streamControllersRef.current[messageId]?.abort();
   }
 
@@ -1302,6 +1348,11 @@ export default function App() {
         delete streamFlushTimersRef.current[placeholderId];
       }
       setStreamActive(placeholderId, false);
+      setStoppingStreamIds((current) => {
+        const next = { ...current };
+        delete next[placeholderId];
+        return next;
+      });
     }
   }
 
@@ -1458,6 +1509,7 @@ export default function App() {
       const requestId = makeId('req');
       const startedAt = Date.now();
       let promptMessagesCount = 0;
+      let accumulated = '';
 
       if (reply.taskId) {
         updateDelegationTask(reply.taskId, { status: 'running' });
@@ -1534,7 +1586,6 @@ export default function App() {
         });
 
         const client = new HermesClient(connection);
-        let accumulated = '';
         for await (const chunk of client.chatCompletionStream({
           model: connection.model,
           messages: historyMessages,
@@ -1634,14 +1685,15 @@ export default function App() {
       } catch (error) {
         flushStreamMessage(room.id, placeholder.id);
         if (isAbortError(error)) {
+          const stoppedContent = accumulated.trim() || '已停止生成';
           const stoppedMessage: ChatMessage = {
             ...placeholder,
-            content: '已停止生成',
+            content: stoppedContent,
             status: 'stopped',
           };
           turnMessages.push(stoppedMessage);
           updateMessageInRoom(room.id, placeholder.id, {
-            content: '已停止生成',
+            content: stoppedContent,
             status: 'stopped',
           });
           updateDelegationTask(reply.taskId, { status: 'cancelled', resultMessageId: stoppedMessage.id });
@@ -1688,6 +1740,11 @@ export default function App() {
           delete streamFlushTimersRef.current[placeholder.id];
         }
         setStreamActive(placeholder.id, false);
+        setStoppingStreamIds((current) => {
+          const next = { ...current };
+          delete next[placeholder.id];
+          return next;
+        });
       }
     };
 
@@ -2474,6 +2531,32 @@ ${content}`)]);
     showNotice('回复已复制', `${message.authorName} 的回复已复制到剪贴板。`);
   }
 
+  function getConnectionAvatarUri(connectionId: string): string | undefined {
+    return connectionById.get(connectionId)?.avatarUri;
+  }
+
+  function beginEditLastUserMessage() {
+    if (!selectedRoom || !lastEditableUserMessage) return;
+    const roomMessages = messagesByRoom[selectedRoom.id] ?? [];
+    const messageIndex = roomMessages.findIndex((message) => message.id === lastEditableUserMessage.id);
+    if (messageIndex < 0) return;
+
+    for (const message of roomMessages.slice(messageIndex + 1)) {
+      if (message.status === 'running') {
+        streamControllersRef.current[message.id]?.abort();
+      }
+    }
+
+    setDraft(lastEditableUserMessage.content.replace(/^\[附件\]$/, ''));
+    setPendingAttachments(lastEditableUserMessage.attachments ?? []);
+    setMessagesByRoom((current) => ({
+      ...current,
+      [selectedRoom.id]: roomMessages.slice(0, messageIndex),
+    }));
+    setSelectedTargetIds([]);
+    showNotice('已回滚到上一条消息', '你可以在输入框里修改后重新发送。');
+  }
+
   function appendSquareEvent(event: SquareEvent) {
     setSquareEvents((current) => mergeSquareEvents([...current, event]).slice(-300));
   }
@@ -2623,8 +2706,21 @@ ${content}`)]);
   }
 
   async function exportAppBackup() {
-    await Clipboard.setStringAsync(JSON.stringify(buildAppBackup(), null, 2));
-    showNotice('备份已复制', '完整备份已复制到剪贴板，包含连接、房间、消息、灵庭事件、同步配置和诊断日志。请妥善保存，其中可能包含 API Key。');
+    const filename = `laphiny-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    const text = JSON.stringify(buildAppBackup(), null, 2);
+    const savedTo = await saveTextFile(filename, text, 'application/json');
+    if (savedTo) {
+      if (Platform.OS === 'web') {
+        showNotice('备份下载已开始', '完整备份包含连接、房间、消息和同步配置，可能包含 API Key。请只保存在可信位置。');
+      } else {
+        await Clipboard.setStringAsync(savedTo);
+        showNotice('备份文件已导出', `完整备份包含连接、房间、消息和同步配置，可能包含 API Key。路径已复制：${savedTo}`);
+      }
+      return;
+    }
+
+    await Clipboard.setStringAsync(text);
+    showNotice('备份已复制', '当前环境无法直接保存文件，完整 JSON 已复制到剪贴板。请妥善保存，其中可能包含 API Key。');
   }
 
   function importBackupFromText(text: string) {
@@ -2680,6 +2776,29 @@ ${content}`)]);
     const text = backupPaste.trim();
     if (!text) return;
     importBackupFromText(text);
+  }
+
+  async function saveTextFile(filename: string, text: string, mimeType: string): Promise<string | null> {
+    if (Platform.OS === 'web') {
+      try {
+        const blob = new Blob([text], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+        URL.revokeObjectURL(url);
+        return filename;
+      } catch {
+        return null;
+      }
+    }
+
+    const directory = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
+    if (!directory) return null;
+    const fileUri = `${directory}${filename}`;
+    await FileSystem.writeAsStringAsync(fileUri, text, { encoding: FileSystem.EncodingType.UTF8 });
+    return fileUri;
   }
 
   async function testSyncBackend() {
@@ -2983,7 +3102,7 @@ ${content}`)]);
         ) : null}
         <View style={styles.messageMeta}>
           <View style={styles.authorBlock}>
-            {message.authorId !== 'user' && message.authorId !== 'system' ? <AgentAvatar alias={message.authorName} size={22} /> : null}
+            {message.authorId !== 'user' && message.authorId !== 'system' ? <AgentAvatar alias={message.authorName} size={22} imageUri={getConnectionAvatarUri(message.authorId)} /> : null}
             <Text style={styles.author}>{message.authorName}</Text>
             {message.authorId !== 'user' && message.authorId !== 'system' ? <Text style={styles.messageRoleBadge}>{getMessageRoleBadge(message)}</Text> : null}
           </View>
@@ -3004,10 +3123,15 @@ ${content}`)]);
           <View style={styles.messageActions}>
             <MiniButton icon="copy-outline" label="复制" onPress={() => copyAgentReply(message)} />
             {message.status === 'running' ? (
-              <MiniButton icon="stop-circle-outline" label="停止" onPress={() => stopMessage(message.id)} />
+              <MiniButton icon="stop-circle-outline" label={stoppingStreamIds[message.id] ? '停止中' : '停止'} onPress={() => stopMessage(message.id)} />
             ) : (
               <MiniButton icon="refresh-outline" label="重试" onPress={() => retryMessage(message)} />
             )}
+          </View>
+        ) : null}
+        {message.authorId === 'user' && message.id === lastEditableUserMessage?.id && !sending ? (
+          <View style={styles.messageActions}>
+            <MiniButton icon="create-outline" label="编辑并回滚" onPress={beginEditLastUserMessage} />
           </View>
         ) : null}
       </View>
@@ -3015,6 +3139,7 @@ ${content}`)]);
   }
 
   function renderChat() {
+    const roomDetailsOpen = !roomDetailsCollapsed;
     return (
       <View style={[styles.content, isWideLayout && styles.chatDesktop]}>
         {isWideLayout ? renderChatSidebar() : renderRoomRail()}
@@ -3032,12 +3157,18 @@ ${content}`)]);
               <MiniButton
                 icon={quickCommandsOpen ? 'flash' : 'flash-outline'}
                 label="模式"
-                onPress={() => setQuickCommandsOpen((open) => !open)}
+                onPress={() => {
+                  setRoomDetailsCollapsed(false);
+                  setQuickCommandsOpen((open) => !open);
+                }}
               />
               <MiniButton
                 icon={roomToolsOpen ? 'options' : 'options-outline'}
                 label="工具"
-                onPress={() => setRoomToolsOpen((open) => !open)}
+                onPress={() => {
+                  setRoomDetailsCollapsed(false);
+                  setRoomToolsOpen((open) => !open);
+                }}
               />
               {isWideLayout && selectedRoom.kind === 'group' ? (
                 <MiniButton
@@ -3046,36 +3177,45 @@ ${content}`)]);
                   onPress={() => setCollaborationDrawerOpen((open) => !open)}
                 />
               ) : null}
+              <MiniButton
+                icon={roomDetailsOpen ? 'chevron-up-outline' : 'chevron-down-outline'}
+                label={roomDetailsOpen ? '收起详情' : '展开详情'}
+                onPress={() => setRoomDetailsCollapsed((collapsed) => !collapsed)}
+              />
             </View>
-            {renderRoomStatusBar()}
-            {renderRoleplaySceneCard()}
-            <View style={styles.memberChips}>
-              {selectedRoom.kind === 'group' ? (
-                <TouchableOpacity
-                  style={[
-                    styles.memberChip,
-                    selectedTargetIds.length === selectedRoom.members.filter((member) => member.enabled).length && styles.memberChipSelected,
-                  ]}
-                  onPress={selectAllTargets}
-                >
-                  <Text style={styles.memberChipText}>@all</Text>
-                </TouchableOpacity>
-              ) : null}
-              {selectedRoom.members.map((member) => (
-                <TouchableOpacity
-                  key={member.connectionId}
-                  style={[styles.memberChip, selectedTargetSet.has(member.connectionId) && styles.memberChipSelected, !member.enabled && styles.memberChipDisabled]}
-                  onPress={() => selectedRoom.kind === 'group' ? toggleTargetSelection(member.connectionId) : insertMention(`@${member.alias}`)}
-                  disabled={selectedRoom.kind === 'group' && !member.enabled}
-                >
-                  <AgentBadge alias={member.alias} active={selectedTargetSet.has(member.connectionId)} status={getMemberRuntimeStatus(member)} />
-                </TouchableOpacity>
-              ))}
-            </View>
-            {quickCommandsOpen ? renderQuickCommands() : null}
-            {roomToolsOpen ? renderRoomTools() : null}
-            {renderMessageSearchPanel()}
-            {!isWideLayout ? renderRoomCollaborationDashboard() : null}
+            {roomDetailsOpen ? (
+              <>
+                {renderRoomStatusBar()}
+                {renderRoleplaySceneCard()}
+                <View style={styles.memberChips}>
+                  {selectedRoom.kind === 'group' ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.memberChip,
+                        selectedTargetIds.length === selectedRoom.members.filter((member) => member.enabled).length && styles.memberChipSelected,
+                      ]}
+                      onPress={selectAllTargets}
+                    >
+                      <Text style={styles.memberChipText}>@all</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {selectedRoom.members.map((member) => (
+                    <TouchableOpacity
+                      key={member.connectionId}
+                      style={[styles.memberChip, selectedTargetSet.has(member.connectionId) && styles.memberChipSelected, !member.enabled && styles.memberChipDisabled]}
+                      onPress={() => selectedRoom.kind === 'group' ? toggleTargetSelection(member.connectionId) : insertMention(`@${member.alias}`)}
+                      disabled={selectedRoom.kind === 'group' && !member.enabled}
+                    >
+                      <AgentBadge alias={member.alias} active={selectedTargetSet.has(member.connectionId)} status={getMemberRuntimeStatus(member)} imageUri={getConnectionAvatarUri(member.connectionId)} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {quickCommandsOpen ? renderQuickCommands() : null}
+                {roomToolsOpen ? renderRoomTools() : null}
+                {renderMessageSearchPanel()}
+                {!isWideLayout ? renderRoomCollaborationDashboard() : null}
+              </>
+            ) : null}
           </View>
         ) : null}
 
@@ -3888,13 +4028,13 @@ ${content}`)]);
           <View style={styles.syncHeader}>
             <View style={styles.syncHeaderText}>
               <Text style={styles.cardTitle}>本地备份 / 恢复</Text>
-              <Text style={styles.help}>复制完整备份，或从 JSON 合并恢复。备份可能包含 API Key，请只保存在可信位置。</Text>
+              <Text style={styles.help}>导出完整 JSON 文件，或在另一台设备上传合并恢复。备份可能包含 API Key，请只保存在可信位置。</Text>
             </View>
             <Text style={styles.squareCount}>v5</Text>
           </View>
           <View style={styles.buttonRow}>
-            <SecondaryButton icon="copy-outline" label="复制完整备份" onPress={exportAppBackup} />
-            <SecondaryButton icon="cloud-upload-outline" label="导入备份文件" onPress={importBackupFile} />
+            <SecondaryButton icon="download-outline" label="导出备份文件" onPress={exportAppBackup} />
+            <SecondaryButton icon="cloud-upload-outline" label="上传备份文件" onPress={importBackupFile} />
             <SecondaryButton icon="clipboard-outline" label="粘贴恢复" onPress={handlePasteBackup} disabled={!backupPaste.trim()} />
           </View>
           <TextInput
@@ -4354,8 +4494,32 @@ ${content}`)]);
 
         <Text style={styles.sectionTitle}>创建群聊</Text>
         <TextInput style={styles.input} value={groupName} onChangeText={setGroupName} placeholder="群聊名称" />
-        <Text style={styles.help}>群聊会加入全部已启用连接。发送时使用 @成员名、@all/@all-seq，或 /council /redteam /review /retro 启动协作仪式。</Text>
-        <PrimaryButton icon="people-outline" label="创建群聊" onPress={createGroupRoom} disabled={enabledConnections.length < 2} />
+        <View style={styles.roomEditPanel}>
+          <View style={styles.conflictHeader}>
+            <Text style={styles.panelLabel}>选择初始成员 · {groupMemberDraftIds.length}/{enabledConnections.length}</Text>
+            <View style={styles.stepper}>
+              <MiniButton icon="checkmark-done-outline" label="全选" onPress={() => setGroupMemberDraftIds(enabledConnections.map((connection) => connection.id))} />
+              <MiniButton icon="remove-circle-outline" label="清空" onPress={() => setGroupMemberDraftIds([])} />
+            </View>
+          </View>
+          <View style={styles.memberChips}>
+            {enabledConnections.map((connection) => (
+              <TouchableOpacity
+                key={connection.id}
+                style={[styles.memberChip, groupMemberDraftSet.has(connection.id) && styles.memberChipSelected]}
+                onPress={() => setGroupMemberDraftIds((current) => (
+                  current.includes(connection.id)
+                    ? current.filter((id) => id !== connection.id)
+                    : [...current, connection.id]
+                ))}
+              >
+                <AgentBadge alias={connection.name} active={groupMemberDraftSet.has(connection.id)} imageUri={connection.avatarUri} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+        <Text style={styles.help}>群聊只会加入上面选中的连接。发送时使用 @成员名、@all/@all-seq，或 /council /redteam /review /retro 启动协作仪式。</Text>
+        <PrimaryButton icon="people-outline" label="创建群聊" onPress={createGroupRoom} disabled={groupMemberDraftIds.length < 2} />
 
         <Text style={styles.sectionTitle}>已有房间</Text>
         {rooms.map((room) => (
@@ -4491,6 +4655,7 @@ ${content}`)]);
               ) : (
                 <>
                   <View style={styles.connectionHeader}>
+                    <AgentAvatar alias={connection.name} size={42} imageUri={connection.avatarUri} />
                     <View style={styles.rowMain}>
                       <Text style={styles.cardTitle}>{connection.name}</Text>
                       <Text style={styles.muted}>{connection.baseUrl}</Text>
@@ -4508,6 +4673,8 @@ ${content}`)]);
                   <View style={styles.buttonRow}>
                     <SecondaryButton icon={connection.enabled ? 'pause-circle-outline' : 'play-circle-outline'} label={connection.enabled ? '停用' : '启用'} onPress={() => toggleConnection(connection.id)} />
                     <SecondaryButton icon="create-outline" label="编辑" onPress={() => beginEditConnection(connection)} />
+                    <SecondaryButton icon="image-outline" label="换头像" onPress={() => chooseConnectionAvatar(connection)} />
+                    {connection.avatarUri ? <SecondaryButton icon="close-circle-outline" label="清除头像" onPress={() => clearConnectionAvatar(connection)} /> : null}
                     <SecondaryButton
                       icon="pulse-outline"
                       label={testingConnectionId === connection.id ? '测试中...' : '测试'}

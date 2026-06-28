@@ -108,8 +108,20 @@ export function StatusToken({ icon, label, tone = 'default' }: { icon: IconName;
   );
 }
 
-export function AgentAvatar({ alias, size = 24 }: { alias: string; size?: number }) {
+export function AgentAvatar({ alias, size = 24, imageUri }: { alias: string; size?: number; imageUri?: string }) {
   const theme = getAgentTheme(alias);
+  if (imageUri) {
+    return (
+      <Image
+        source={{ uri: imageUri }}
+        style={[
+          styles.agentAvatar,
+          { width: size, height: size, borderRadius: size / 2, borderColor: theme.border, backgroundColor: theme.bg },
+        ]}
+      />
+    );
+  }
+
   return (
     <View style={[styles.agentAvatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: theme.bg, borderColor: theme.border }]}> 
       <Text style={[styles.agentAvatarText, { color: theme.text, fontSize: Math.max(10, Math.floor(size * 0.42)) }]}>{theme.symbol}</Text>
@@ -117,11 +129,11 @@ export function AgentAvatar({ alias, size = 24 }: { alias: string; size?: number
   );
 }
 
-export function AgentBadge({ alias, active = false, status = 'idle' }: { alias: string; active?: boolean; status?: 'idle' | 'running' | 'delegated' | 'gm' | 'disabled' }) {
+export function AgentBadge({ alias, active = false, status = 'idle', imageUri }: { alias: string; active?: boolean; status?: 'idle' | 'running' | 'delegated' | 'gm' | 'disabled'; imageUri?: string }) {
   const theme = getAgentTheme(alias);
   return (
     <View style={styles.agentBadgeRow}>
-      <AgentAvatar alias={alias} size={20} />
+      <AgentAvatar alias={alias} size={20} imageUri={imageUri} />
       <Text style={[styles.memberChipText, active && styles.memberChipTextSelected, status === 'disabled' && styles.memberChipTextDisabled]}>@{alias}</Text>
       <Text style={[styles.agentStatusDot, { backgroundColor: getAgentStatusColor(status), borderColor: active ? '#ffffff' : theme.border }]} />
     </View>

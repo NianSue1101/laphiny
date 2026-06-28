@@ -84,6 +84,27 @@ test('chatCompletionStream parses text/event-stream fallback bodies', async () =
   assert.deepEqual(chunks, ['你好']);
 });
 
+test('chatCompletionStream parses readable JSONL chunks without data prefix', async () => {
+  globalThis.fetch = (async () => new Response([
+    '{"choices":[{"delta":{"content":"流"}}]}',
+    '{"choices":[{"delta":{"content":"式"}}]}',
+    '{"choices":[{"message":{"role":"assistant","content":"完成"}}]}',
+    '[DONE]',
+    '',
+  ].join('\n'), {
+    status: 200,
+    headers: { 'content-type': 'application/x-ndjson' },
+  })) as typeof fetch;
+
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  const chunks: string[] = [];
+  for await (const chunk of client.chatCompletionStream({ model: 'test-model', messages: [], stream: true })) {
+    chunks.push(chunk);
+  }
+
+  assert.deepEqual(chunks, ['流', '式', '完成']);
+});
+
 test('normalizeHermesReplyText cleans stored raw SSE replies', () => {
   const raw = [
     'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',

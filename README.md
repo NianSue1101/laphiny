@@ -353,6 +353,7 @@ LAPHINY_SYNC_API_KEY='your-secret' LAPHINY_SYNC_PORT=8787 node scripts/sync-serv
 | v0.1.0  | 2026-06    | 初始发布：基础工程、Hermes 客户端、@ 路由、附件、群聊        |
 | v0.11.0 | 2026-06-27 | 协作提示词优化、委托质量门槛、Hermes 响应兼容修复、CORS 修复 |
 | v0.11.1 | 2026-06-27 | Android SSE 回复解析、复制 Agent 回复、状态栏避让、Laper 审阅工作流加固 |
+| v0.11.2 | 2026-06-28 | JSON 迁移备份、群聊成员选择、聊天详情折叠、流式/停止反馈、AI 头像和上一条消息编辑回滚 |
 
 ### 参与贡献
 

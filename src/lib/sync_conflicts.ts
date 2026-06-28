@@ -46,6 +46,7 @@ export function buildSyncConflictReport(local: SyncSnapshot, remote: SyncSnapsho
       baseUrl: connection.baseUrl,
       model: connection.model,
       enabled: connection.enabled,
+      avatarUri: connection.avatarUri,
       profile: connection.profile,
     }),
     items,
