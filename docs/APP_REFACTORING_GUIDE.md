@@ -43,6 +43,27 @@
 - 不维护预览状态；当前附件和关闭行为由 App 控制。
 - 需要跟随字体时使用外层传入的 `TextComponent`。
 
+### `src/components/ActiveGoalPanel.tsx`
+
+目标模式面板，负责展示当前 Goal、计划项、状态、最近复盘，以及继续/结束/调整按钮。
+
+约束：
+
+- 不直接 dispatch 消息；继续、结束、调整必须通过外层回调完成。
+- 不解析 Goal 结果；只展示已经存在的 `activeGoal`。
+
+### `src/components/ChatCommandPanels.tsx`
+
+聊天输入区的命令 UI，包括：
+
+- `ComposerModeBar`
+- `SlashCommandPanel`
+
+约束：
+
+- 只负责展示和触发 `onInsertCommand`。
+- 不改写 draft，不直接读取 App state。
+
 ### `src/components/ChatSidebar.tsx`
 
 桌面聊天页左侧房间列表，负责房间切换、新建入口、未读和最后一条消息预览。
@@ -76,6 +97,23 @@ Web/PWA 运行状态横幅，负责离线、Service Worker 和安装提示。
 约束：
 
 - 只展示状态和触发安装回调，不处理网络状态监听。
+
+### `src/components/RoleplaySceneCard.tsx`
+
+RP 当前场景卡片，负责展示 GM、类型、语气、当前场景和剧本档案摘要。
+
+约束：
+
+- 不修改 RP 状态；场景写入仍由 App/RP 流程处理。
+
+### `src/components/RoomStatusBar.tsx`
+
+房间状态条，负责展示模式、成员可用数、GM、总结者、记忆版本、档案版本和开放委托数量。
+
+约束：
+
+- 只读 `room` 和 delegation tasks。
+- 不触发任何写入。
 
 ### `src/components/RoomManagementPanel.tsx`
 
