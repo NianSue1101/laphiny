@@ -1,286 +1,186 @@
 # Laphiny
 
-> 把已有的 Hermes Soul / Agent 放进同一个房间，让它们保留各自人格与记忆，通过共享上下文、@ 委托、接力讨论、房间记忆、任务看板和协作仪式，像一支真正的 AI 小队那样共同工作。
+> 把已有的 Hermes Soul / Agent 放进同一个房间，让它们保留各自人格与记忆，通过共享上下文、@ 路由、接力讨论、房间记忆、任务看板和协作仪式，像一支真正的 AI 小队那样共同工作。
 
-Laphiny 是一个面向多 Hermes Agent 的本地优先协作聊天客户端，支持 **Web/PWA** 与 **Android APK**。
+Laphiny 是一个本地优先的多 Agent 协作聊天客户端，支持 **Web/PWA** 与 **Android APK**。它不是普通的多模型聊天壳，而是为已经存在的 Hermes Soul / Agent 提供房间、共享 transcript、协作协议、附件、同步和移动端使用体验。
 
-它不是普通的"多模型聊天壳"。每个 Agent 都已经拥有自己的 Hermes soul、人格和长期记忆；Laphiny 只提供房间、共享 transcript 和协作协议，不覆盖 Agent 的底层灵魂。
+本项目采用自然语言编程，也就是全程大量使用 AI 生成与维护代码。
 
-本项目采用自然语言编程--也就是**全程使用AI生成代码**。
+English documentation: [README.en.md](./README.en.md)
 
 ---
 
 ## 目录
 
-- [立项的意义](#立项的意义)
-- [文件结构说明](#文件结构说明)
-- [已完成功能](#已完成功能)
-- [待完成功能](#待完成功能)
-- [部署帮助](#部署帮助)
+- [项目定位](#项目定位)
+- [主要功能](#主要功能)
+- [v0.13.0 更新](#v0130-更新)
+- [文件结构](#文件结构)
+- [快速开始](#快速开始)
+- [构建与发布](#构建与发布)
+- [同步服务](#同步服务)
+- [Hermes Gateway](#hermes-gateway)
+- [隐私说明](#隐私说明)
 - [贡献鸣谢](#贡献鸣谢)
 
 ---
 
-## 立项的意义
+## 项目定位
 
-### 问题
-
-~~今天我们有多个强大的 AI Agent（Hermes Soul），每个都有自己的专业领域、人格和记忆。但当我们想让它们一起工作时，通常只能靠人工复制粘贴对话片段——效率低下、上下文丢失、无法追溯。~~
-
-~~现有"多模型聊天客户端"把 Agent 当作可切换的模型选项，而不是独立协作成员。它们缺少：~~
-
-- ~~多人共享的群聊上下文~~
-- ~~Agent 之间的自动委托与接力~~
-- ~~结构化的协作仪式（议会、红队、审查、复盘）~~
-- ~~房间级别的长期记忆与共识沉淀~~
-- ~~Agent 自维护的公开协作卡片~~
-
-最开始是因为Ds大人不支持视觉识别，然后基于此又想到，为什么不直接把ai抓过来开大会，然后我当什么都不懂的甲方，工作就是狠狠压力一个管事的ai，让她分配工作--->于是这个项目诞生了。
-
-将性格迥异的ai接入laphiny，一起完成你的工作--或者一起创作什么--再或者只是想跑个团--laphiny提供的是一个房间，你可以直接把已经存在的，你喜欢的，个性化的，你需要的agent叫进来。
-
-~~也许可以有galgame展开？~~
-
-### 定位
+最开始是因为想把多个已经存在、各有性格和能力的 AI Agent 拉到同一个空间里工作。Laphiny 提供的是一个房间：你可以把自己喜欢的、个性化的、已经拥有长期记忆的 Agent 叫进来，让它们一起评审代码、拆解需求、写作、跑团，或者只是开会。
 
 Laphiny 的核心设计理念是 **Soul-native，而不是 Prompt-native**：
 
-| 传统多 Agent 客户端           | Laphiny                                          |
-| ----------------------------- | ------------------------------------------------ |
-| 在客户端里临时创建角色 prompt | Agent 已存在，有自己的 soul、人格和记忆          |
-| 模型切换                      | Agent 协作                                       |
-| 对话记录混在一起              | 每个 Agent 独立维护自己的人格                    |
-| 无结构化协作流程              | `/council` `/redteam` `/review` `/retro` |
-| 无长期房间记忆                | 房间记忆胶囊、共识总结、任务看板                 |
+| 传统多 Agent 客户端 | Laphiny |
+| --- | --- |
+| 在客户端里临时创建角色 prompt | Agent 已存在，有自己的 soul、人格和记忆 |
+| 模型切换 | Agent 协作 |
+| 对话记录混在一起 | 每个 Agent 保持独立身份和会话 |
+| 无结构化协作流程 | `/council` `/redteam` `/review` `/retro` |
+| 无长期房间记忆 | 房间记忆胶囊、共识总结、任务看板 |
 
-### 适合谁
+适合：
 
-- **开发者 / 技术团队**：让多个 Agent 审查代码、评审方案、拆解需求、分析风险
-- **创作者 / 写作者**：让多个 Agent 接力写作、角色扮演、世界观共创
-- **任何想建设私人 AI 小队的人**：把自己的 Agent 放进同一个房间，让它们真正协作
-
----
-
-## 文件结构说明
-
-```
-laphiny/
-├── App.tsx                  # 主应用入口（UI、状态、调度、房间、灵庭、设置）
-├── index.ts                 # Expo 入口注册
-├── package.json             # 依赖与脚本
-├── app.json                 # Expo / PWA / Android 配置
-├── eas.json                 # EAS 云构建配置
-├── tsconfig.json            # TypeScript 严格模式配置
-│
-├── src/
-│   ├── types.ts             # 核心类型定义（Connection、Room、Message 等）
-│   ├── app/                 # App 层逻辑
-│   │   ├── app_types.ts     # Tab、表单、运行时、备份等 App 层类型
-│   │   ├── app_utils.ts     # ID、时间、导入导出、合并恢复、消息工厂
-│   │   └── chat_history.ts  # 构造发给 Hermes 的 messages / system prompt / 群聊 transcript
-│   ├── lib/                 # 纯逻辑模块（可测试、无 UI 依赖）
-│   │   ├── hermes_client.ts           # Hermes API 客户端（health/models/chat/SSE）
-│   │   ├── mentions.ts                # @ 路由与 Agent 委托解析
-│   │   ├── payload.ts                 # 文本/图片/附件组装为 Hermes 请求体
-│   │   ├── attachments.ts             # 图片/文件选择与读取
-│   │   ├── agent_profile.ts           # Agent 协作卡片生成、解析、格式化
-│   │   ├── collaboration_rituals.ts   # /council /redteam /review /retro
-│   │   ├── roleplay.ts                # RP 命令解析、GM 路由、system prompt
-│   │   ├── room_memory.ts             # 房间记忆胶囊
-│   │   ├── room_reply_notifications.ts # 跨房间 Agent 回复提醒
-│   │   ├── square_insights.ts         # 灵庭小队动态统计
-│   │   ├── stage4_plus.ts             # 房间模式、剧本档案、任务看板、Soul 关系图
-│   │   ├── diagnostics.ts             # 诊断日志与脱敏
-│   │   ├── sync_client.ts             # 同步服务前端客户端
-│   │   ├── sync_conflicts.ts          # 本地/远端差异预检
-│   │   └── ux.ts                      # Slash command 补全与 UX 定义
-│   ├── storage/             # 存储抽象层
-│   │   ├── kv.ts            # 跨平台 KV（Web localStorage / Native SecureStore+文件）
-│   │   └── repository.ts    # 连接/房间/消息/事件/任务 的 load/save
-│   ├── config/
-│   │   └── app_config.ts    # 默认模型、上下文长度、最大委托深度、快捷命令
-│   └── components/          # 可复用 UI 组件
-│       ├── Primitives.tsx   # 按钮、徽章、头像、空状态等
-│       ├── SafeIcon.tsx     # Ionicons 包装
-│       └── MarkdownText.tsx # 轻量 Markdown 渲染
-│
-├── scripts/
-│   ├── sync-server.mjs      # Node + SQLite 同步服务（/v1/snapshot、/v1/events）
-│   ├── fix-web-paths.mjs    # 修正 Web 构建产物在 /laphiny/ 子路径的资源路径
-│   └── run-gradle.mjs       # 跨平台 Gradle wrapper 调用
-│
-├── public/
-│   ├── sw.js                # PWA Service Worker
-│   └── offline.html         # 离线兜底页
-│
-├── android/                 # Android 原生工程（Expo prebuild 生成）
-├── tests/                   # 测试文件（42 tests，覆盖所有 lib/ 纯逻辑模块）
-├── docs/                    # 帮助文档与设计文档
-│   ├── PLAN.md              # 实现计划
-│   ├── STAGE4_SOUL_COLLABORATION.md
-│   └── help/                # 01~08 系列帮助文档
-└── dist/                    # Web 构建产物（npm run web:build）
-```
+- 开发者 / 技术团队：多 Agent 审查代码、评审方案、拆解需求、分析风险
+- 创作者 / 写作者：接力写作、角色扮演、世界观共创
+- 私人 AI 小队用户：把自己的 Agent 放进同一个房间，让它们真正协作
 
 ---
 
-## 已完成功能
+## 主要功能
 
-### 连接管理
+### 连接与房间
 
 - 添加 / 编辑 / 删除 Hermes Gateway 连接
-- 单个连接测试 / 批量健康检查
-- Agent 自维护公开协作卡片（soulName、擅长领域、适合/不适合委托）
-- 协作卡片版本历史
-
-### 房间
-
 - 单聊 / 群聊房间
-- 房间重命名、成员增删、alias 修改、成员启用/停用
-- 上下文条数调整、房间模式切换（工作室/议会/审查/桌游/日常）
+- 成员 alias、启用/停用、上下文条数、房间模式配置
+- Agent 协作卡片与版本历史
 - 房间导出 JSON / Markdown、清空记录与会话记忆
 
-### 聊天
+### 聊天与协作
 
 - Hermes SSE 流式回复、停止生成、失败重试
-- 图片上传（`image_url` content part）、文本文件注入 `<attachment>` 上下文
-- 消息状态展示（pending/running/sent/error）
-
-### @ 路由与委托
-
-- `@成员名` 指定响应 Agent
-- `@all` 并行调用所有成员、`@all-seq` 接力调用
-- 中文全角 `＠` 支持
+- `@成员名` 指定 Agent，`@all` 并行，`@all-seq` 接力
 - Agent 行首 `@成员名 任务` 自动创建委托任务并转发
-- 委托质量门槛（过滤空 @、泛泛指令）
-- 最大委托深度限制，防止循环委托
-- 无 @ 的群聊消息默认不自动发送
+- 委托质量门槛和最大委托深度限制
+- `/council` 议会、`/redteam` 红队、`/review` 审查、`/retro` 复盘
+- Goal 模式：目标执行、复盘、自动完成/停止后的通知
 
-### 协作仪式
+### 文件与附件
 
-- `/council` 议会模式：多 Agent 独立观点 → 总结共识
-- `/redteam` 红队审查：找漏洞、风险、失败场景、修正方案
-- `/review` 审查模式：多视角审查方案/代码/交付物
-- `/retro` 复盘模式：总结进展、问题、贡献、下一步
+- 图片上传为 `image_url` content part
+- 文本文件作为 `<attachment>` 上下文注入
+- Agent 可使用 `laphiny-file` 代码块返回 `.txt`、`.md`、`.png`、`.jpg/.jpeg`
+- Laphiny 会把 Agent 返回的文件识别为消息后的附件卡片，点击即可下载
 
-### 房间记忆与任务
+### 移动端体验
 
-- 房间记忆胶囊（目标、决策、待办、偏好、未解决问题）
-- 任务看板（待处理/处理中/已完成/阻塞）
-- 团队模板（成员顺序、默认模式、委托设置）
-- 共识总结生成
+- 小屏手机选择房间后进入专注聊天界面
+- 底部主导航保留，顶部只保留当前聊天名和返回
+- 房间设置、成员、工具在进入聊天前处理
+- 输入框随键盘抬升，减少被输入法遮挡的情况
 
-### RP 桌游店模式
+### 通知与权限确认
 
-- GM/主持人 Agent、玩家称呼
-- 类型、基调、世界观、当前场景
-- `/rp`、`/scene`、`/ooc`、`/rp-stop` 命令
-- 剧本档案、GM 幕后笔记
+- Agent 完成完整回复后可通过系统通知提醒
+- Goal 模式只在自动完成或停止后通知
+- 如果 Agent 回复需要用户同意、拒绝或总是同意，消息下方会出现权限确认卡片
+- 需要确认的权限请求会通知用户；用户在 App 前台时不会弹系统通知
+- 用户点击卡片按钮即可继续，不需要手动再发一条确认消息
 
-### 灵庭 (Soul Atrium)
-
-- 今日小队动态、任务统计、Soul 关系图
-- 协作事件时间线
-- 诊断日志与脱敏诊断包
-
-### 数据管理
+### 数据与同步
 
 - 全局搜索
 - 全量备份 / 合并恢复
-- SQLite 同步服务（快照推送/拉取、差异预检、事件轮询）
 - PWA 离线支持
-
-### 跨平台
-
-- Web/PWA（三栏宽屏布局）
-- Android APK（本地 Gradle 构建 + EAS 云构建）
-- Web localStorage / Native SecureStore + 文件系统
+- 可选 Node.js + SQLite 同步服务：快照推送/拉取、差异预检、事件轮询
 
 ---
 
-## 待完成功能
+## v0.13.0 更新
 
-### 近期优化
-
-- [ ] **UI 组件拆分**：`App.tsx` 过大，拆分为独立 Screen 和 Component 文件
-- [ ] **状态管理抽离**：`useConnections`、`useRooms`、`useMessages` 等 hooks
-- [ ] **本地 SQLite 升级**：消息分片、全文搜索、按 room 分页
-- [ ] **委托质量分析**：识别重复发言和低效委托，根据成功率推荐目标 Agent
-
-### 任务系统增强
-
-- [ ] 手动创建任务
-- [ ] 任务截止时间、依赖、评论
-- [ ] 任务转房间记忆
-
-### RP 深度增强
-
-- [ ] 角色卡、关系值、骰子/判定系统
-- [ ] 剧情分支树、章节结算
-- [ ] GM 线索只对 GM 可见
-
-### 模板生态
-
-- [ ] 团队模板导出/导入
-- [ ] 房间模板、RP 世界观模板、审查流程模板
-
-### 部署产品化
-
-- [ ] `.env.example`
-- [ ] Dockerfile / docker-compose
-- [ ] nginx 示例配置
-- [ ] 首次启动配置向导
-
-### 扩展性
-
-* [ ] 不止hermes，对更多已经准备好的agent平台的适配
+- 移动端房间入口改为专注聊天模式，小屏聊天区域更大
+- 修复 Android 附件下载路径，Agent 返回的 txt/md/image 文件可通过附件卡片保存
+- 新增本地通知：完整 Agent 回复、Goal 结束/停止、权限请求待确认
+- 前台使用 App 时禁用系统通知，避免重复打扰
+- 新增 Agent 权限请求识别与操作卡片：同意、拒绝、总是同意
+- 新增英文 README
 
 ---
 
-## 部署帮助
+## 文件结构
 
-### 技术栈
+```text
+laphiny/
+├── App.tsx                    # 主应用入口：UI、状态、调度、房间、灵庭、设置
+├── index.ts                   # Expo 入口注册
+├── package.json               # 依赖与脚本
+├── app.json                   # Expo / PWA / Android 配置
+├── android/                   # Android 原生工程
+├── public/                    # PWA Service Worker 与离线页
+├── scripts/
+│   ├── sync-server.mjs        # Node + SQLite 同步服务
+│   ├── fix-web-paths.mjs      # 修正 /laphiny/ 子路径 Web 资源路径
+│   └── run-gradle.mjs         # 跨平台 Gradle wrapper 调用
+├── src/
+│   ├── app/                   # App 层类型、工具、聊天历史构造
+│   ├── components/            # UI 基础组件与 Markdown 渲染
+│   ├── config/                # 版本、默认模型、快捷命令
+│   ├── lib/                   # 可测试纯逻辑模块
+│   ├── storage/               # Web / Native 存储抽象
+│   └── types.ts               # 核心类型定义
+├── tests/                     # Node test + tsx 测试
+├── docs/                      # 帮助文档与设计文档
+└── dist/                      # Web 构建产物
+```
 
-| 层       | 技术                                                 |
-| -------- | ---------------------------------------------------- |
-| 框架     | Expo SDK 54 + React 19 + React Native 0.81           |
-| 语言     | TypeScript 严格模式                                  |
-| Web      | react-native-web                                     |
-| 存储     | localStorage (Web) / SecureStore + 文件系统 (Native) |
-| API      | OpenAI Chat Completions 兼容接口                     |
-| 构建     | Metro Bundler + EAS Cloud Build                      |
-| 同步后端 | Node.js + SQLite                                     |
+关键纯逻辑模块：
 
-### 快速开始
+- `src/lib/hermes_client.ts`：Hermes API 客户端
+- `src/lib/mentions.ts`：@ 路由与 Agent 委托解析
+- `src/lib/agent_files.ts`：Agent 文件块识别
+- `src/lib/agent_permissions.ts`：Agent 权限请求识别
+- `src/lib/goal_mode.ts`：Goal 模式提示词与状态解析
+- `src/lib/sync_client.ts` / `src/lib/sync_conflicts.ts`：同步客户端与冲突预检
+
+---
+
+## 快速开始
 
 ```bash
-# 克隆
 git clone https://github.com/NianSue1101/laphiny.git
 cd laphiny
-
-# 安装
 npm install
 
-# 开发
-npm run start       # Expo 开发服务器
-npm run web         # Web 开发模式
-
-# 验证
-npm run typecheck   # 类型检查
-npm test            # 运行测试（42 tests）
+npm run start
+npm run web
 ```
 
-### Web 构建与部署
+验证：
 
 ```bash
-# 构建（必须用此命令，不要直接 expo export）
+npm run typecheck
+npm test
 npm run web:build
-
-# 产物在 dist/ 目录
-# 部署在 /laphiny/ 子路径时，脚本已自动修正资源路径
 ```
 
-示例 nginx 配置：
+当前测试覆盖 54 个用例，主要覆盖 `src/lib/*` 的纯逻辑模块。
+
+---
+
+## 构建与发布
+
+### Web / PWA
+
+始终使用：
+
+```bash
+npm run web:build
+```
+
+不要直接运行 `npx expo export --platform web`。项目部署在 `/laphiny/` 子路径下时，`npm run web:build` 会先导出 Web 产物，再运行 `scripts/fix-web-paths.mjs` 修正 `/_expo`、`/assets` 和 favicon 路径。
+
+示例 nginx：
 
 ```nginx
 location /laphiny/ {
@@ -292,20 +192,40 @@ location /laphiny/ {
 
 ### Android APK
 
-**本地构建**（需 JDK 17/21）：
+本地 Gradle 构建建议使用 JDK 17 或 21：
 
 ```bash
 npm run android:assemble:debug
 npm run android:assemble:release
 ```
 
-**EAS 云构建**（推荐，无需本地 JDK）：
+Windows 和 Unix 都会通过 `scripts/run-gradle.mjs` 调用 Gradle wrapper。
+
+---
+
+## 同步服务
+
+同步服务是可选的，适合在自己的云服务器上保存一份远端快照，并在 App 启动或回到前台时同步。
 
 ```bash
-npx eas build --platform android --profile preview
+LAPHINY_SYNC_API_KEY='your-secret' LAPHINY_SYNC_PORT=8787 node scripts/sync-server.mjs
 ```
 
-### Hermes Gateway 准备
+接口：
+
+- `GET /v1/health`
+- `GET /v1/snapshot`
+- `PUT /v1/snapshot`
+- `GET /v1/events`
+- `POST /v1/events`
+
+生产环境建议使用 systemd 保活，并通过 nginx HTTPS 反代。
+
+---
+
+## Hermes Gateway
+
+示例配置：
 
 ```bash
 hermes config set platforms.api_server.enabled true
@@ -316,15 +236,16 @@ hermes config set platforms.api_server.cors_origins '["https://your-domain.com"]
 hermes gateway restart
 ```
 
-生产环境建议通过 nginx HTTPS 反代暴露 Hermes API，并配置 CORS 头允许 `X-Hermes-Session-Id` 和 `X-Hermes-Session-Key`。
+生产环境建议通过 HTTPS 暴露 Gateway，并配置 CORS 允许 `X-Hermes-Session-Id` 和 `X-Hermes-Session-Key`。
 
-### 同步服务（可选）
+---
 
-```bash
-LAPHINY_SYNC_API_KEY='your-secret' LAPHINY_SYNC_PORT=8787 node scripts/sync-server.mjs
-```
+## 隐私说明
 
-接口：`GET /v1/health` · `GET /v1/snapshot` · `PUT /v1/snapshot` · `GET /v1/events` · `POST /v1/events`
+- 正式版不内置任何私人 Hermes 地址、API Key、个人同步后端地址或本地连接备份
+- 完整备份可能包含 API Key，请只保存在可信位置
+- 诊断包会自动脱敏连接密钥和 Token 字段
+- 默认本地数据只保存在当前设备；启用同步服务后，远端会保存你的快照数据
 
 ---
 
@@ -332,42 +253,24 @@ LAPHINY_SYNC_API_KEY='your-secret' LAPHINY_SYNC_PORT=8787 node scripts/sync-serv
 
 ### 项目成员
 
-- **NianSue1101** — 项目发起人，架构设计，核心开发
-- **Flor** — Hermes Agent，加油鼓劲，顺便压力其他Agent的猫娘-喵
-- **Laper** — Hermes Agent，最不吃压力之Agent，负责直接操控修改服务器和代码-咕咕咕
-- **Arilphin** — Hermes Agent，吉祥物
-- **Derux** — Hermes Agent，吉祥物，记录开发过程
-- **Deepseek+Chatgpt+Glm5.2** — 真正的代码大王
+- **NianSue1101**：项目发起人、架构设计、核心开发
+- **Flor**：Hermes Agent，协作与鼓劲
+- **Laper**：Hermes Agent，代码和服务器执行
+- **Arilphin**：Hermes Agent，吉祥物
+- **Derux**：Hermes Agent，记录开发过程
+- **Deepseek + ChatGPT + GLM**：真正的代码大王
 
 ### 技术基础
 
-- [Expo](https://expo.dev/) — 跨平台 React Native 框架
-- [React Native](https://reactnative.dev/) — 移动端 UI 框架
-- [Hermes Agent](https://github.com/NianSue1101/hermes-agent) — 上游 AI Agent 框架
-- [Ionicons](https://ionic.io/ionicons) — 图标库
-
-### 版本历史
-
-| 版本    | 日期       | 主要内容                                                     |
-| ------- | ---------- | ------------------------------------------------------------ |
-| v0.1.0  | 2026-06    | 初始发布：基础工程、Hermes 客户端、@ 路由、附件、群聊        |
-| v0.11.0 | 2026-06-27 | 协作提示词优化、委托质量门槛、Hermes 响应兼容修复、CORS 修复 |
-| v0.11.1 | 2026-06-27 | Android SSE 回复解析、复制 Agent 回复、状态栏避让、Laper 审阅工作流加固 |
-| v0.11.2 | 2026-06-28 | JSON 迁移备份、群聊成员选择、聊天详情折叠、流式/停止反馈、AI 头像和上一条消息编辑回滚 |
+- [Expo](https://expo.dev/)
+- [React Native](https://reactnative.dev/)
+- [Hermes Agent](https://github.com/NianSue1101/hermes-agent)
+- [Ionicons](https://ionic.io/ionicons)
 
 ### 参与贡献
 
 欢迎提交 Issue 和 Pull Request。提交前请：
 
-1. 运行 `npm run typecheck` 和 `npm test` 确保通过
-2. 不要提交真实的 API Key、Gateway 地址或私人连接备份
-3. 修改群聊/协作逻辑时优先调整 `src/lib/*` 纯逻辑模块并补充测试
-
----
-
-## 隐私说明
-
-- 正式版不内置任何私人 Hermes 连接、API Key 或个人同步后端地址
-- 完整备份可能包含 API Key，请只保存在可信位置
-- 诊断包会自动脱敏连接密钥和 Token 字段
-- 本地数据仅保存在当前设备
+1. 运行 `npm run typecheck`、`npm test`、`npm run web:build`
+2. 不要提交真实 API Key、Gateway 地址或私人连接备份
+3. 修改群聊、委托或协作逻辑时优先调整 `src/app/chat_history.ts` 和 `src/lib/*` 纯逻辑模块，并补充测试
