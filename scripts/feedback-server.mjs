@@ -38,13 +38,6 @@ export function createApp({
         return;
       }
 
-      if (request.method === 'GET' && url.pathname === '/v1/feedback') {
-        const limit = Number(url.searchParams.get('limit') ?? 30);
-        const entries = await readFeedbackEntries(dataDir, Number.isFinite(limit) ? limit : 30);
-        sendJson(response, 200, entries);
-        return;
-      }
-
       sendJson(response, 404, { error: 'Not found' });
     } catch (error) {
       sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
@@ -82,17 +75,6 @@ async function appendFeedbackEntry(dataDir, entry) {
   const line = `${JSON.stringify(entry)}\n`;
   const previous = await readFile(filePath, 'utf8').catch(() => '');
   await writeFile(filePath, previous + line, 'utf8');
-}
-
-async function readFeedbackEntries(dataDir, limit) {
-  const filePath = path.join(dataDir, 'feedback.jsonl');
-  const raw = await readFile(filePath, 'utf8').catch(() => '');
-  return raw
-    .split('\n')
-    .filter(Boolean)
-    .slice(-Math.max(1, Math.min(100, limit)))
-    .map((line) => JSON.parse(line))
-    .reverse();
 }
 
 async function readJson(request) {

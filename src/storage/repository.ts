@@ -122,12 +122,18 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<v
 }
 
 export async function loadFeedbackConfig(): Promise<FeedbackConfig> {
-  return getJson<FeedbackConfig>(FEEDBACK_CONFIG_KEY, {
-    enabled: false,
-    baseUrl: '',
+  const fallback: FeedbackConfig = {
+    enabled: true,
+    baseUrl: '/laphiny-feedback',
     apiKey: '',
     updatedAt: new Date().toISOString(),
-  });
+  };
+  const config = await getJson<FeedbackConfig>(FEEDBACK_CONFIG_KEY, fallback);
+  return {
+    ...config,
+    enabled: config.enabled ?? true,
+    baseUrl: config.baseUrl?.trim() ? config.baseUrl : fallback.baseUrl,
+  };
 }
 
 export async function saveFeedbackConfig(config: FeedbackConfig): Promise<void> {

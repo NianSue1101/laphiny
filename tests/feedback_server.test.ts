@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import { createApp } from '../scripts/feedback-server.mjs';
 
-test('feedback server stores and lists authenticated feedback entries', async () => {
+test('feedback server only accepts authenticated feedback uploads', async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'laphiny-feedback-'));
   const server = createServer(createApp({ dataDir, apiKey: 'secret' }));
   await listen(server);
@@ -23,7 +23,7 @@ test('feedback server stores and lists authenticated feedback entries', async ()
     headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
     body: JSON.stringify({
       source: 'Laphiny App',
-      appVersion: '0.14.0',
+      appVersion: '0.14.1',
       platform: 'android',
       summary: 'diagnostic smoke test',
       diagnostics: { connections: [], rooms: [] },
@@ -34,11 +34,10 @@ test('feedback server stores and lists authenticated feedback entries', async ()
   assert.equal(posted.source, 'Laphiny App');
   assert.equal(posted.summary, 'diagnostic smoke test');
 
-  const entries = await fetch(`${baseUrl}/v1/feedback?limit=10`, {
+  const listed = await fetch(`${baseUrl}/v1/feedback?limit=10`, {
     headers: { authorization: 'Bearer secret' },
-  }).then((response) => response.json());
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].id, posted.id);
+  });
+  assert.equal(listed.status, 404);
 
   await close(server);
   await rm(dataDir, { recursive: true, force: true });

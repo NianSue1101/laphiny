@@ -41,6 +41,8 @@ export type AppFontFamily = 'system' | 'lxgw-wenkai';
 export interface AppPreferences {
   themeMode: AppThemeMode;
   fontFamily: AppFontFamily;
+  downloadDirectoryUri?: string;
+  downloadDirectoryLabel?: string;
   updatedAt: string;
 }
 

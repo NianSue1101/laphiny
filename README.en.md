@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.14.1](#what-is-new-in-v0141)
 - [What Is New In v0.14.0](#what-is-new-in-v0140)
 - [Project Layout](#project-layout)
 - [Quick Start](#quick-start)
@@ -70,7 +71,8 @@ Laphiny is useful for:
 - Text files injected as bounded `<attachment>` context
 - Agents can return downloadable files through `laphiny-file` blocks
 - Supported returned file types: `.txt`, `.md`, `.png`, `.jpg`, `.jpeg`
-- Returned files appear as attachment cards after the message and can be downloaded with one tap
+- Returned files appear as attachment cards after the message; tapping opens a preview first, with a download button in the upper-right corner
+- On Android, the first selected download directory is reused for later attachments, backups, and diagnostics JSON exports
 
 ### Mobile Experience
 
@@ -85,7 +87,7 @@ Laphiny is useful for:
 - Light and dark mode
 - System font and LXGW WenKai font selection, with room for more fonts later
 - Agent avatars can be changed from the connections page or the mobile room picker
-- Optional feedback server for uploading redacted diagnostics and pulling server logs back into the app
+- Default feedback server for upload-only redacted diagnostics; server logs are not pulled back into the app
 
 ### Notifications And Permission Requests
 
@@ -102,6 +104,16 @@ Laphiny is useful for:
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.14.1
+
+- Attachment cards now open a preview surface first; file name, type, size, and the upper-right download action are kept visible
+- Android download directory selection is persisted and reused for attachments, backups, and diagnostics JSON exports
+- Feedback logs are upload-only by default; the feedback server no longer exposes the log list endpoint
+- Diagnostics export now writes a redacted JSON file instead of copying JSON to the clipboard
+- Project info now includes a GitHub author summary and small-screen UI polish
 
 ---
 

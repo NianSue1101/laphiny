@@ -23,14 +23,6 @@ export class LaphinyFeedbackClient {
     });
   }
 
-  async listFeedback(options?: { limit?: number; timeoutMs?: number }): Promise<FeedbackLogEntry[]> {
-    const limit = Math.max(1, Math.min(100, options?.limit ?? 30));
-    return this.request(`/v1/feedback?limit=${limit}`, {
-      method: 'GET',
-      timeoutMs: options?.timeoutMs,
-    });
-  }
-
   private async request<T>(path: string, options: { method: string; body?: string; timeoutMs?: number }): Promise<T> {
     if (!this.baseUrl) throw new Error('Feedback server URL is empty.');
     const controller = new AbortController();
