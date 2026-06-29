@@ -266,6 +266,7 @@ export default function App() {
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [roomReplyNotification, setRoomReplyNotification] = useState<RoomReplyNotification | null>(null);
   const [mobileFocusedRoomId, setMobileFocusedRoomId] = useState<string | null>(null);
+  const [mobileRoomDetailsOpen, setMobileRoomDetailsOpen] = useState(false);
   const [fontsLoaded] = useFonts({
     LXGWWenKai: require('./assets/fonts/LXGWWenKai-Regular.ttf'),
   });
@@ -288,6 +289,7 @@ export default function App() {
   const selectedRoomIdRef = useRef<string | null>(selectedRoomId);
   const tabRef = useRef<Tab>(tab);
   const roomsRef = useRef<Room[]>(rooms);
+  const mobileDetailsTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const pollingSquareEventsRef = useRef(false);
   const { width, height } = useWindowDimensions();
   const maxWindowHeightRef = useRef(height);
@@ -617,6 +619,10 @@ export default function App() {
   useEffect(() => {
     if (Platform.OS !== 'android') return undefined;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (mobileRoomDetailsOpen) {
+        setMobileRoomDetailsOpen(false);
+        return true;
+      }
       if (mobileFocusedChat) {
         leaveFocusedChat();
         return true;
@@ -632,7 +638,7 @@ export default function App() {
       return false;
     });
     return () => subscription.remove();
-  }, [expandedMobileRoomId, mobileFocusedChat, tab]);
+  }, [expandedMobileRoomId, mobileFocusedChat, mobileRoomDetailsOpen, tab]);
 
   const healthSummary = useMemo(() => {
     let ok = 0;
@@ -672,12 +678,14 @@ export default function App() {
   useEffect(() => {
     if (isWideLayout || tab !== 'chat') {
       setMobileFocusedRoomId(null);
+      setMobileRoomDetailsOpen(false);
     }
   }, [isWideLayout, tab]);
 
   useEffect(() => {
     if (mobileFocusedRoomId && !rooms.some((room) => room.id === mobileFocusedRoomId)) {
       setMobileFocusedRoomId(null);
+      setMobileRoomDetailsOpen(false);
     }
   }, [mobileFocusedRoomId, rooms]);
 
@@ -1446,6 +1454,7 @@ export default function App() {
     setTab('chat');
     if (!isWideLayout) {
       setMobileFocusedRoomId(roomId);
+      setMobileRoomDetailsOpen(false);
       setRoomDetailsCollapsed(true);
       setQuickCommandsOpen(false);
       setRoomToolsOpen(false);
@@ -1457,11 +1466,13 @@ export default function App() {
     setSelectedRoomId(roomId);
     setTab('chat');
     setMobileFocusedRoomId(null);
+    setMobileRoomDetailsOpen(false);
     setRoomDetailsCollapsed(false);
     setRoomToolsOpen(true);
   }
 
   function leaveFocusedChat() {
+    setMobileRoomDetailsOpen(false);
     setMobileFocusedRoomId(null);
     Keyboard.dismiss();
   }
@@ -4412,7 +4423,7 @@ ${content}`)]);
             {message.error ? ` · ${message.error}` : ''}
           </Text>
         </View>
-        <MarkdownText content={displayContent} />
+        <MarkdownText content={displayContent} fontFamily={selectedFontFamily} />
         {renderable.attachments.length ? (
           <View style={styles.attachments}>
             {renderable.attachments.map((attachment) => (
@@ -4503,9 +4514,12 @@ ${content}`)]);
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
           enabled={keyboardAvoidanceEnabled}
+          onTouchStart={focused ? handleMobileDetailsTouchStart : undefined}
+          onTouchEnd={focused ? handleMobileDetailsTouchEnd : undefined}
         >
 
         {focused ? renderFocusedChatHeader() : null}
+        {focused ? renderMobileRoomDetailsDrawer() : null}
 
         {selectedRoom && !focused ? (
           <View style={styles.chatHeader}>
@@ -4720,6 +4734,88 @@ ${content}`)]);
             {selectedRoom.kind === 'group' ? '群聊' : '单聊'} · {selectedRoom.members.filter((member) => member.enabled).length}/{selectedRoom.members.length}
           </Text>
         </View>
+        <TouchableOpacity
+          style={[styles.focusedDetailsButton, mobileRoomDetailsOpen && styles.focusedDetailsButtonActive]}
+          onPress={() => setMobileRoomDetailsOpen((open) => !open)}
+          accessibilityRole="button"
+          accessibilityLabel={mobileRoomDetailsOpen ? '关闭房间详情' : '打开房间详情'}
+        >
+          <Ionicons name={mobileRoomDetailsOpen ? 'close-outline' : 'albums-outline'} size={18} color={mobileRoomDetailsOpen ? '#ffffff' : '#2563eb'} />
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  function renderMobileRoomDetailsDrawer() {
+    if (!selectedRoom || !mobileRoomDetailsOpen) return null;
+    return (
+      <View style={styles.mobileDetailsLayer} pointerEvents="box-none">
+        <TouchableOpacity
+          style={styles.mobileDetailsBackdrop}
+          activeOpacity={1}
+          onPress={() => setMobileRoomDetailsOpen(false)}
+          accessibilityRole="button"
+          accessibilityLabel="关闭房间详情"
+        />
+        <View style={[styles.mobileDetailsCard, isDarkMode && styles.mobileDetailsCardDark]}>
+          <View style={styles.mobileDetailsHeader}>
+            <View style={styles.rowMain}>
+              <Text style={[styles.cardTitle, isDarkMode && styles.titleDark]} numberOfLines={1}>房间详情</Text>
+              <Text style={[styles.help, isDarkMode && styles.subtitleDark]} numberOfLines={1}>左滑打开 · 右滑或点击空白关闭</Text>
+            </View>
+            <TouchableOpacity style={styles.sidebarIconButton} onPress={() => setMobileRoomDetailsOpen(false)}>
+              <Ionicons name="close" size={18} color="#4b5563" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            style={styles.mobileDetailsScroll}
+            contentContainerStyle={styles.mobileDetailsContent}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator
+          >
+            {renderRoomStatusBar()}
+            {renderActiveGoalPanel()}
+            {renderRoleplaySceneCard()}
+
+            {selectedRoom.lastSummary ? (
+              <View style={styles.summaryBox}>
+                <Text style={styles.summaryTitle}>最近共识 · {selectedRoom.lastSummary.authorName}</Text>
+                <MarkdownText content={selectedRoom.lastSummary.content} fontFamily={selectedFontFamily} />
+              </View>
+            ) : null}
+
+            {selectedRoom.kind === 'group' ? (
+              <View style={styles.roomEditPanel}>
+                <Text style={styles.panelLabel}>房间记忆胶囊</Text>
+                {selectedRoom.pendingMemoryCapsule ? (
+                  <View style={styles.summaryBox}>
+                    <Text style={styles.summaryTitle}>待确认记忆草案 · v{selectedRoom.pendingMemoryCapsule.version}</Text>
+                    <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.pendingMemoryCapsule)}</Text>
+                    <View style={styles.toolActions}>
+                      <MiniButton icon="checkmark-circle-outline" label="确认沉淀" onPress={confirmPendingRoomMemoryCapsule} />
+                      <MiniButton icon="close-circle-outline" label="丢弃草案" onPress={discardPendingRoomMemoryCapsule} />
+                    </View>
+                  </View>
+                ) : null}
+                {selectedRoom.memoryCapsule ? (
+                  <View style={styles.summaryBox}>
+                    <Text style={styles.summaryTitle}>v{selectedRoom.memoryCapsule.version} · {selectedRoom.memoryCapsule.authorName ?? 'Laphiny'} · {formatDateTime(selectedRoom.memoryCapsule.updatedAt)}</Text>
+                    <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.help}>还没有房间记忆。生成并确认后，会沉淀到成长层并进入后续群聊上下文。</Text>
+                )}
+                <View style={styles.toolActions}>
+                  <MiniButton icon="sparkles-outline" label={memoryGenerating ? '生成中...' : selectedRoom.memoryCapsule ? '更新记忆' : '生成记忆'} onPress={generateRoomMemoryCapsule} />
+                </View>
+              </View>
+            ) : null}
+
+            {renderRoomGrowthPanel()}
+            {renderTaskBoardPanel()}
+            {!isWideLayout ? renderRoomCollaborationDashboard() : null}
+          </ScrollView>
+        </View>
       </View>
     );
   }
@@ -4930,6 +5026,29 @@ ${content}`)]);
     return 'Soul';
   }
 
+  function handleMobileDetailsTouchStart(event: any) {
+    if (!mobileFocusedChat) return;
+    const touch = event.nativeEvent.touches?.[0];
+    if (!touch) return;
+    mobileDetailsTouchStartRef.current = { x: touch.pageX, y: touch.pageY };
+  }
+
+  function handleMobileDetailsTouchEnd(event: any) {
+    const start = mobileDetailsTouchStartRef.current;
+    mobileDetailsTouchStartRef.current = null;
+    if (!mobileFocusedChat || !start) return;
+    const touch = event.nativeEvent.changedTouches?.[0];
+    if (!touch) return;
+    const dx = touch.pageX - start.x;
+    const dy = touch.pageY - start.y;
+    if (Math.abs(dy) > 80 || Math.abs(dx) < 58) return;
+    if (dx < 0) {
+      setMobileRoomDetailsOpen(true);
+    } else if (dx > 0 && mobileRoomDetailsOpen) {
+      setMobileRoomDetailsOpen(false);
+    }
+  }
+
   function renderRoomStatusBar() {
     if (!selectedRoom) return null;
     const enabledCount = selectedRoom.members.filter((member) => member.enabled).length;
@@ -5097,7 +5216,7 @@ ${content}`)]);
           {selectedRoom.lastSummary ? (
             <View style={styles.summaryBox}>
               <Text style={styles.summaryTitle}>最近共识 · {selectedRoom.lastSummary.authorName}</Text>
-              <MarkdownText content={selectedRoom.lastSummary.content} />
+              <MarkdownText content={selectedRoom.lastSummary.content} fontFamily={selectedFontFamily} />
             </View>
           ) : <Text style={styles.help}>还没有最近共识。可在工具里生成总结。</Text>}
           {selectedRoom.memoryCapsule ? (
@@ -5213,7 +5332,7 @@ ${content}`)]);
             {latestSummary ? (
               <View style={styles.summaryBox}>
                 <Text style={styles.summaryTitle}>最近共识 · {latestSummary.authorName} · {formatDateTime(latestSummary.createdAt)}</Text>
-                <MarkdownText content={latestSummary.content} />
+                <MarkdownText content={latestSummary.content} fontFamily={selectedFontFamily} />
               </View>
             ) : <Text style={styles.help}>还没有房间共识。可在“工具 → 团队模板与总结”里生成。</Text>}
             {selectedRoom.roleplay?.enabled ? (
@@ -5521,7 +5640,7 @@ ${content}`)]);
               <View style={styles.summaryBox}>
                 <Text style={styles.summaryTitle}>待确认记忆草案 · v{selectedRoom.pendingMemoryCapsule.version}</Text>
                 <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.pendingMemoryCapsule)}</Text>
-                <MarkdownText content={formatRoomMemoryForPrompt(selectedRoom.pendingMemoryCapsule)} />
+                <MarkdownText content={formatRoomMemoryForPrompt(selectedRoom.pendingMemoryCapsule)} fontFamily={selectedFontFamily} />
                 <View style={styles.toolActions}>
                   <MiniButton icon="checkmark-circle-outline" label="确认沉淀" onPress={confirmPendingRoomMemoryCapsule} />
                   <MiniButton icon="close-circle-outline" label="丢弃草案" onPress={discardPendingRoomMemoryCapsule} />
@@ -5532,7 +5651,7 @@ ${content}`)]);
               <View style={styles.summaryBox}>
                 <Text style={styles.summaryTitle}>v{selectedRoom.memoryCapsule.version} · {selectedRoom.memoryCapsule.authorName ?? 'Laphiny'} · {formatDateTime(selectedRoom.memoryCapsule.updatedAt)}</Text>
                 <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
-                <MarkdownText content={formatRoomMemoryForPrompt(selectedRoom.memoryCapsule)} />
+                <MarkdownText content={formatRoomMemoryForPrompt(selectedRoom.memoryCapsule)} fontFamily={selectedFontFamily} />
               </View>
             ) : (
               <Text style={styles.help}>还没有房间记忆。生成后会把目标、共识、待办、偏好和未解决问题注入后续群聊上下文。</Text>
@@ -5864,7 +5983,7 @@ ${content}`)]);
             <Text style={styles.squareEventMeta}>
               {event.source}{event.roomName ? ` · ${event.roomName}` : ''}{event.target ? ` → ${event.target}` : ''}
             </Text>
-            <MarkdownText content={event.body} />
+            <MarkdownText content={event.body} fontFamily={selectedFontFamily} />
           </View>
         ))}
       </ScrollView>
@@ -6927,6 +7046,69 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     fontSize: 11,
     fontWeight: '700',
+  },
+  focusedDetailsButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  focusedDetailsButtonActive: {
+    borderColor: '#2563eb',
+    backgroundColor: '#2563eb',
+  },
+  mobileDetailsLayer: {
+    position: 'absolute',
+    top: 50,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 20,
+  },
+  mobileDetailsBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.18)',
+  },
+  mobileDetailsCard: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    bottom: 8,
+    width: '88%',
+    maxWidth: 390,
+    minWidth: 280,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#ffffff',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+    overflow: 'hidden',
+  },
+  mobileDetailsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#f8fafc',
+  },
+  mobileDetailsScroll: {
+    flex: 1,
+  },
+  mobileDetailsContent: {
+    gap: 10,
+    padding: 12,
+    paddingBottom: 22,
   },
   collabDrawer: {
     width: 310,
@@ -8822,6 +9004,10 @@ const styles = StyleSheet.create({
     color: '#f8fafc',
   },
   mobileRoomCardDark: {
+    borderColor: '#334155',
+    backgroundColor: '#111827',
+  },
+  mobileDetailsCardDark: {
     borderColor: '#334155',
     backgroundColor: '#111827',
   },

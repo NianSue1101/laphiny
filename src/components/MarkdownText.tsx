@@ -1,12 +1,13 @@
 import { type ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-export function MarkdownText({ content }: { content: string }) {
+export function MarkdownText({ content, fontFamily }: { content: string; fontFamily?: string }) {
+  const textFontStyle = fontFamily ? { fontFamily } : undefined;
   if (!content) {
     return (
       <View style={styles.streamingLine}>
         <ActivityIndicator size="small" color="#2563eb" />
-        <Text style={styles.streamingText}>正在生成...</Text>
+        <Text style={[styles.streamingText, textFontStyle]}>正在生成...</Text>
       </View>
     );
   }
@@ -47,15 +48,15 @@ export function MarkdownText({ content }: { content: string }) {
         tableLines.push(lines[index] ?? '');
         index += 1;
       }
-      blocks.push(<MarkdownTable key={`table-${index}`} lines={tableLines} />);
+      blocks.push(<MarkdownTable key={`table-${index}`} lines={tableLines} fontFamily={fontFamily} />);
       continue;
     }
 
     const headingMatch = /^(#{1,3})\s+(.+)$/.exec(line);
     if (headingMatch) {
       blocks.push(
-        <Text key={`heading-${index}`} style={[styles.markdownText, styles.markdownHeading]}>
-          {renderInlineMarkdown(headingMatch[2] ?? '')}
+        <Text key={`heading-${index}`} style={[styles.markdownText, styles.markdownHeading, textFontStyle]}>
+          {renderInlineMarkdown(headingMatch[2] ?? '', fontFamily)}
         </Text>,
       );
       index += 1;
@@ -66,8 +67,8 @@ export function MarkdownText({ content }: { content: string }) {
     if (listMatch) {
       blocks.push(
         <View key={`list-${index}`} style={styles.markdownListRow}>
-          <Text style={styles.markdownBullet}>{listMatch[2]}</Text>
-          <Text style={[styles.markdownText, styles.markdownListText]}>{renderInlineMarkdown(listMatch[3] ?? '')}</Text>
+          <Text style={[styles.markdownBullet, textFontStyle]}>{listMatch[2]}</Text>
+          <Text style={[styles.markdownText, styles.markdownListText, textFontStyle]}>{renderInlineMarkdown(listMatch[3] ?? '', fontFamily)}</Text>
         </View>,
       );
       index += 1;
@@ -78,7 +79,7 @@ export function MarkdownText({ content }: { content: string }) {
     if (quoteMatch) {
       blocks.push(
         <View key={`quote-${index}`} style={styles.markdownQuote}>
-          <Text style={styles.markdownText}>{renderInlineMarkdown(quoteMatch[1] ?? '')}</Text>
+          <Text style={[styles.markdownText, textFontStyle]}>{renderInlineMarkdown(quoteMatch[1] ?? '', fontFamily)}</Text>
         </View>,
       );
       index += 1;
@@ -101,8 +102,8 @@ export function MarkdownText({ content }: { content: string }) {
     }
 
     blocks.push(
-      <Text key={`p-${index}`} style={styles.markdownText}>
-        {renderInlineMarkdown(paragraphLines.join('\n'))}
+      <Text key={`p-${index}`} style={[styles.markdownText, textFontStyle]}>
+        {renderInlineMarkdown(paragraphLines.join('\n'), fontFamily)}
       </Text>,
     );
   }
@@ -110,15 +111,16 @@ export function MarkdownText({ content }: { content: string }) {
   return <View style={styles.markdown}>{blocks}</View>;
 }
 
-function MarkdownTable({ lines }: { lines: string[] }) {
+function MarkdownTable({ lines, fontFamily }: { lines: string[]; fontFamily?: string }) {
+  const textFontStyle = fontFamily ? { fontFamily } : undefined;
   const rows = lines.map((line) => splitTableRow(line));
   return (
     <View style={styles.markdownTable}>
       {rows.map((row, rowIndex) => (
         <View key={`row-${rowIndex}`} style={[styles.markdownTableRow, rowIndex === 0 && styles.markdownTableHeader]}>
           {row.map((cell, cellIndex) => (
-            <Text key={`cell-${cellIndex}`} style={styles.markdownTableCell}>
-              {renderInlineMarkdown(cell)}
+            <Text key={`cell-${cellIndex}`} style={[styles.markdownTableCell, textFontStyle]}>
+              {renderInlineMarkdown(cell, fontFamily)}
             </Text>
           ))}
         </View>
@@ -142,7 +144,7 @@ function splitTableRow(line: string): string[] {
     .map((cell) => cell.trim());
 }
 
-function renderInlineMarkdown(text: string): ReactNode[] {
+function renderInlineMarkdown(text: string, fontFamily?: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
   let cursor = 0;
