@@ -35,6 +35,7 @@ import { ActiveGoalPanel } from './src/components/ActiveGoalPanel';
 import { AppText as Text, AppTextInput as TextInput, setAppTextFontFamily } from './src/components/AppText';
 import { AttachmentPreviewModal } from './src/components/AttachmentPreviewModal';
 import { ChatSidebar } from './src/components/ChatSidebar';
+import { CollaborationDrawer } from './src/components/CollaborationDrawer';
 import { ComposerModeBar, SlashCommandPanel } from './src/components/ChatCommandPanels';
 import {
   AttachmentPreview,
@@ -57,12 +58,14 @@ import { MarkdownText } from './src/components/MarkdownText';
 import { MessageSearchPanel } from './src/components/MessageSearchPanel';
 import { MobileRoomPicker } from './src/components/MobileRoomPicker';
 import { RoleplayArchivePanel } from './src/components/RoleplayArchivePanel';
+import { RoomCollaborationDashboard } from './src/components/RoomCollaborationDashboard';
 import { RoomGrowthPanel } from './src/components/RoomGrowthPanel';
 import { RoomManagementPanel } from './src/components/RoomManagementPanel';
 import { RoomRail } from './src/components/RoomRail';
 import { RoomStatusBar } from './src/components/RoomStatusBar';
 import { RoleplaySceneCard } from './src/components/RoleplaySceneCard';
 import { RuntimeBanner } from './src/components/RuntimeBanner';
+import { SoulRelationsPanel } from './src/components/SoulRelationsPanel';
 import { TaskBoardPanel } from './src/components/TaskBoardPanel';
 import { Ionicons } from './src/components/SafeIcon';
 import {
@@ -4991,77 +4994,19 @@ ${content}`)]);
   }
 
   function renderCollaborationDrawer() {
-    if (!selectedRoom || selectedRoom.kind !== 'group') return null;
     return (
-      <View style={styles.collabDrawer}>
-        <ScrollView style={styles.collabDrawerScroll} contentContainerStyle={styles.collabDrawerContent}>
-          <View style={styles.drawerHeader}>
-            <View>
-              <Text style={styles.drawerTitle}>Soul 房间侧栏</Text>
-              <Text style={styles.help}>协作、委托、记忆和 RP 场景集中在这里。</Text>
-            </View>
-            <TouchableOpacity style={styles.sidebarIconButton} onPress={() => setCollaborationDrawerOpen(false)}>
-              <Ionicons name="close" size={18} color="#4b5563" />
-            </TouchableOpacity>
-          </View>
-          {renderRoomStatusBar()}
-          {renderRoleplaySceneCard()}
-          {selectedRoom.lastSummary ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>最近共识 · {selectedRoom.lastSummary.authorName}</Text>
-              <MarkdownText content={selectedRoom.lastSummary.content} fontFamily={selectedFontFamily} />
-            </View>
-          ) : <Text style={styles.help}>还没有最近共识。可在工具里生成总结。</Text>}
-          {selectedRoom.memoryCapsule ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>房间记忆胶囊 · v{selectedRoom.memoryCapsule.version}</Text>
-              <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
-            </View>
-          ) : null}
-          {selectedRoomGrowth ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>房间成长层 · {selectedRoomGrowth.label}</Text>
-              <Text style={styles.help}>知识 {selectedRoomGrowth.knowledgeCount} · 开放黑板 {selectedRoomGrowth.blackboardOpenCount} · 决策 {selectedRoomGrowth.decisionCount}{selectedRoomGrowth.pendingMemory ? ' · 有待确认记忆草案' : ''}</Text>
-            </View>
-          ) : null}
-          {selectedRoom.roleplay?.archive ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>RP 剧本档案 · v{selectedRoom.roleplay.archive.version}</Text>
-              <Text style={styles.help}>{summarizeRoleplayArchive(selectedRoom.roleplay.archive)}</Text>
-              <Text style={styles.help}>主线：{selectedRoom.roleplay.archive.currentQuest}</Text>
-            </View>
-          ) : null}
-          <Text style={styles.panelLabel}>任务看板</Text>
-          {selectedTaskBoard.map((column) => (
-            <View key={column.id} style={styles.drawerTaskColumn}>
-              <Text style={styles.taskBoardTitle}>{column.label} · {column.tasks.length}</Text>
-              {column.tasks.slice(0, 3).map((task) => (
-                <Text key={task.id} style={styles.help} numberOfLines={2}>• {task.toAlias}：{task.taskText}</Text>
-              ))}
-            </View>
-          ))}
-          <Text style={styles.panelLabel}>委托任务</Text>
-          {selectedRoomDelegationTasks.length ? selectedRoomDelegationTasks.slice(0, 8).map((task) => (
-            <View key={task.id} style={styles.taskCard}>
-              <View style={styles.conflictHeader}>
-                <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias}</Text>
-                <Text style={[styles.badge, getDelegationTaskStatusStyle(task.status)]}>{getDelegationTaskStatusLabel(task.status)}</Text>
-              </View>
-              <Text style={styles.help} numberOfLines={3}>{task.taskText}</Text>
-            </View>
-          )) : <Text style={styles.help}>暂无委托任务。</Text>}
-          <Text style={styles.panelLabel}>最近协作</Text>
-          {selectedRoomCollaborationEvents.length ? selectedRoomCollaborationEvents.slice(0, 10).map((event) => (
-            <View key={event.id} style={styles.timelineItem}>
-              <Ionicons name={getCollaborationEventIcon(event.kind)} size={14} color="#2563eb" />
-              <View style={styles.timelineBody}>
-                <Text style={styles.timelineTitle}>{event.title}</Text>
-                <Text style={styles.timelineMeta}>{formatDateTime(event.createdAt)}{event.source ? ` · ${event.source}` : ''}{event.target ? ` → ${event.target}` : ''}</Text>
-              </View>
-            </View>
-          )) : <Text style={styles.help}>暂无协作时间线。</Text>}
-        </ScrollView>
-      </View>
+      <CollaborationDrawer
+        room={selectedRoom}
+        taskBoard={selectedTaskBoard}
+        delegationTasks={selectedRoomDelegationTasks}
+        collaborationEvents={selectedRoomCollaborationEvents}
+        growth={selectedRoomGrowth}
+        selectedFontFamily={selectedFontFamily}
+        styles={styles}
+        TextComponent={Text}
+        getDelegationTaskStatusStyle={getDelegationTaskStatusStyle}
+        onClose={() => setCollaborationDrawerOpen(false)}
+      />
     );
   }
 
@@ -5081,70 +5026,19 @@ ${content}`)]);
   }
 
   function renderRoomCollaborationDashboard() {
-    if (!selectedRoom || selectedRoom.kind !== 'group') return null;
-    const latestSummary = selectedRoom.lastSummary;
     return (
-      <View style={styles.collabPanel}>
-        <TouchableOpacity style={styles.collabPanelHeader} onPress={() => setCollaborationPanelOpen((open) => !open)}>
-          <View style={styles.squareEventSource}>
-            <Ionicons name="git-network-outline" size={16} color="#2563eb" />
-            <Text style={styles.panelLabel}>Soul 协作时间线</Text>
-          </View>
-          <Text style={styles.help}>{collaborationPanelOpen ? '收起' : '展开'}</Text>
-        </TouchableOpacity>
-        {collaborationPanelOpen ? (
-          <>
-            {latestSummary ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>最近共识 · {latestSummary.authorName} · {formatDateTime(latestSummary.createdAt)}</Text>
-                <MarkdownText content={latestSummary.content} fontFamily={selectedFontFamily} />
-              </View>
-            ) : <Text style={styles.help}>还没有房间共识。可在“工具 → 团队模板与总结”里生成。</Text>}
-            {selectedRoom.roleplay?.enabled ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>RP 房间 · {selectedRoom.members.find((member) => member.connectionId === selectedRoom.roleplay?.gmConnectionId)?.alias ?? 'GM'} 主持</Text>
-                <Text style={styles.help}>{summarizeRoleplayConfig(selectedRoom.roleplay)}</Text>
-                {selectedRoom.roleplay.currentScene ? <Text style={styles.help}>当前场景：{selectedRoom.roleplay.currentScene}</Text> : null}
-              </View>
-            ) : null}
-            {selectedRoom.memoryCapsule ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>房间记忆胶囊 · v{selectedRoom.memoryCapsule.version}</Text>
-                <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
-              </View>
-            ) : null}
-            {selectedRoomGrowth ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>房间成长层 · {selectedRoomGrowth.label}</Text>
-                <Text style={styles.help}>知识 {selectedRoomGrowth.knowledgeCount} · 黑板 {selectedRoomGrowth.blackboardOpenCount} · 决策 {selectedRoomGrowth.decisionCount}{selectedRoomGrowth.pendingMemory ? ' · 待确认记忆' : ''}</Text>
-              </View>
-            ) : null}
-            {selectedRoomDelegationTasks.length ? (
-              <View style={styles.taskList}>
-                {selectedRoomDelegationTasks.slice(0, 4).map((task) => (
-                  <View key={task.id} style={styles.taskCard}>
-                    <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias} · {getDelegationTaskStatusLabel(task.status)}</Text>
-                    <Text style={styles.help} numberOfLines={2}>{task.taskText}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-            {selectedRoomCollaborationEvents.length ? (
-              <View style={styles.timelineList}>
-                {selectedRoomCollaborationEvents.slice(0, 6).map((event) => (
-                  <View key={event.id} style={styles.timelineItem}>
-                    <Ionicons name={getCollaborationEventIcon(event.kind)} size={14} color="#2563eb" />
-                    <View style={styles.timelineBody}>
-                      <Text style={styles.timelineTitle}>{event.title}</Text>
-                      <Text style={styles.timelineMeta}>{formatDateTime(event.createdAt)}{event.source ? ` · ${event.source}` : ''}{event.target ? ` → ${event.target}` : ''}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            ) : <Text style={styles.help}>本房间还没有协作事件。</Text>}
-          </>
-        ) : null}
-      </View>
+      <RoomCollaborationDashboard
+        room={selectedRoom}
+        open={collaborationPanelOpen}
+        growth={selectedRoomGrowth}
+        delegationTasks={selectedRoomDelegationTasks}
+        collaborationEvents={selectedRoomCollaborationEvents}
+        selectedFontFamily={selectedFontFamily}
+        styles={styles}
+        TextComponent={Text}
+        getDelegationTaskStatusStyle={getDelegationTaskStatusStyle}
+        onToggleOpen={() => setCollaborationPanelOpen((open) => !open)}
+      />
     );
   }
 
@@ -6026,35 +5920,7 @@ ${content}`)]);
   }
 
   function renderSoulRelationsPanel() {
-    return (
-      <View style={styles.diagnosticPanel}>
-        <View style={styles.syncHeader}>
-          <View>
-            <Text style={styles.cardTitle}>Soul 关系图</Text>
-            <Text style={styles.help}>根据委托、完成、互相引用统计 Agent 之间的协作关系。</Text>
-          </View>
-          <Text style={styles.squareCount}>{soulRelations.length} 条关系</Text>
-        </View>
-        {soulRelations.length ? soulRelations.map((edge) => (
-          <View key={edge.id} style={styles.relationCard}>
-            <View style={styles.relationHeader}>
-              <AgentAvatar alias={edge.fromName} size={26} />
-              <Text style={styles.relationArrow}>→</Text>
-              <AgentAvatar alias={edge.toName} size={26} />
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{edge.fromName} → {edge.toName}</Text>
-                <Text style={styles.help}>{edge.label} · 强度 {edge.strength}</Text>
-              </View>
-            </View>
-            <View style={styles.healthMetricRow}>
-              <HealthMetric label="委托" value={edge.delegations} tone={edge.delegations ? 'checking' : 'unknown'} />
-              <HealthMetric label="完成" value={edge.completions} tone={edge.completions ? 'ok' : 'unknown'} />
-              <HealthMetric label="引用" value={edge.mentions} tone={edge.mentions ? 'checking' : 'unknown'} />
-            </View>
-          </View>
-        )) : <Text style={styles.help}>还没有足够的协作数据。多进行几次委托或接力后，这里会出现关系图。</Text>}
-      </View>
-    );
+    return <SoulRelationsPanel relations={soulRelations} styles={styles} TextComponent={Text} />;
   }
 
   function renderRooms() {
