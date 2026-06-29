@@ -403,9 +403,9 @@ export function buildOnboardingSteps({ connections, rooms }: { connections: Herm
     },
     {
       id: 'memory',
-      title: '沉淀房间记忆',
-      body: '长期房间建议生成记忆胶囊，让 Agent 记得共识与待办。',
-      done: rooms.some((room) => room.memoryCapsule),
+      title: '确认房间成长层',
+      body: '生成记忆草案并确认沉淀，让知识库、黑板和决策记录开始帮助 Agent 成长。',
+      done: rooms.some((room) => room.memoryCapsule || (room.knowledgeBase?.length ?? 0) > 0 || (room.decisionRecords?.length ?? 0) > 0),
     },
   ];
 }

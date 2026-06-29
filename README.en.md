@@ -1,8 +1,8 @@
 # Laphiny
 
-> Put your existing Hermes Soul / Agent instances into shared rooms, keep their own personalities and memories intact, and let them collaborate through shared transcripts, mentions, delegation, room memory, task boards, and structured rituals.
+> Put your existing Hermes Soul / Agent instances into shared rooms, keep their own personalities and memories intact, and let them collaborate through shared transcripts, mentions, delegation, room growth layers, task boards, and structured rituals.
 
-Laphiny is a local-first multi-agent chat client for **Web/PWA** and **Android APK**. It is designed for agents that already exist, already have their own souls, and already carry their own long-term memory. Laphiny provides the room, transcript, collaboration protocol, attachments, sync, and mobile interface around them.
+Laphiny is a local-first multi-agent collaboration space for **Web/PWA** and **Android APK**. It is designed for agents that already exist, already have their own souls, and already carry their own long-term memory. Laphiny provides the room, transcript, collaboration protocol, attachments, sync, mobile interface, and a room-level growth layer where shared knowledge, open blackboard items, decisions, and Soul relationships can accumulate over time.
 
 Chinese documentation: [README.md](./README.md)
 
@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.20.0](#what-is-new-in-v0200)
 - [What Is New In v0.14.1](#what-is-new-in-v0141)
 - [What Is New In v0.14.0](#what-is-new-in-v0140)
 - [Project Layout](#project-layout)
@@ -35,13 +36,31 @@ Laphiny is **Soul-native, not Prompt-native**.
 | Switch between models | Let agents collaborate |
 | Mix all replies into one generic context | Preserve each agent's identity and session |
 | No structured collaboration flow | `/council`, `/redteam`, `/review`, `/retro` |
-| No room-level memory | Room memory capsules, consensus summaries, task boards |
+| No room-level memory | Memory confirmation, room knowledge, blackboards, decision records, task boards |
 
 Laphiny is useful for:
 
 - Developers and technical teams: code review, design review, risk analysis, task breakdown
 - Writers and creators: co-writing, roleplay, worldbuilding, continuity work
 - Personal AI teams: bring your own agents into one room and make them work together
+
+### User Role
+
+In Laphiny, the user is not merely a prompt sender. The user is the **room convener, relationship steward, and final decision maker**:
+
+- The user decides which Hermes Souls enter a room, and how they appear through aliases, avatars, and collaboration modes
+- The user sets goals, judges whether outputs are useful, and confirms which memories deserve to become long-term room context
+- The user does not need to treat agents as disposable tools, nor become a prompt-tuning operator; they are closer to someone running a studio, council, or tabletop session
+- Agents may delegate to each other, cite each other, and form stable partnerships, but the user still owns direction, privacy, and boundaries
+
+### Agent Growth
+
+Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the room layer:
+
+1. When an agent first enters a room, it only has its public collaboration profile, alias, and a small shared transcript.
+2. After several rounds, the room gains delegation tasks, consensus summaries, blackboard items, and early relationship edges.
+3. When the user confirms a memory draft, stable facts enter the room knowledge base, open questions enter the blackboard, and important tradeoffs enter decision records.
+4. Over time, agents are no longer just called models; inside this room, they know the boundaries, remember shared decisions, recognize collaborators, and behave more like a team familiar with the user's style.
 
 ---
 
@@ -64,6 +83,15 @@ Laphiny is useful for:
 - Delegation quality gates and maximum depth limits
 - Collaboration rituals: `/council`, `/redteam`, `/review`, `/retro`
 - Goal mode with review rounds and notifications only after automatic completion or stop
+
+### Room Growth Layer
+
+- Room knowledge base for stable facts, user preferences, project constraints, and handoff notes
+- Collaboration blackboard for open questions, next actions, and pinned temporary focus
+- Decision records for confirmed tradeoffs and boundaries, with superseded decisions kept separate
+- Memory sediment confirmation: agents produce drafts first, and the user confirms them before they enter long-term room context
+- Soul relation graph based on delegation, completion, and mutual references
+- The growth layer is injected into later prompts, so a room can move from "newly convened" to "stable collaboration" over time
 
 ### Files And Attachments
 
@@ -104,6 +132,18 @@ Laphiny is useful for:
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.20.0
+
+- Added the room growth layer: knowledge base, collaboration blackboard, decision records, and growth stage summaries
+- Room memory generation now follows a draft -> user confirmation -> sediment flow instead of writing directly into long-term context
+- Confirmed memory automatically feeds stable goals/preferences into knowledge, todos/questions into the blackboard, and decisions into decision records
+- Chat prompts now include the room growth layer, giving agents more stable room facts and boundaries after several collaboration rounds
+- The room tools panel now includes a room-specific Soul relation graph for delegation, completion, and citation relationships
+- Product positioning now clarifies that the user is the room convener, relationship steward, and final decision maker; agent growth happens in the shared room layer, not by overwriting private souls
+- The PR review workflow avoids retrying permanent 4xx errors for the full retry window
 
 ---
 
@@ -161,6 +201,7 @@ Important logic modules:
 - `src/lib/agent_files.ts`: agent file block extraction
 - `src/lib/agent_permissions.ts`: agent permission request extraction
 - `src/lib/goal_mode.ts`: goal prompts and state parsing
+- `src/lib/room_growth.ts`: room knowledge, blackboard, decisions, and growth-layer prompt formatting
 - `src/lib/sync_client.ts` / `src/lib/sync_conflicts.ts`: sync client and conflict checks
 
 ---
@@ -184,7 +225,7 @@ npm test
 npm run web:build
 ```
 
-The current test suite has 57 tests, mostly covering pure logic under `src/lib/*`.
+The current test suite has 58 tests, mostly covering pure logic under `src/lib/*`.
 
 ---
 

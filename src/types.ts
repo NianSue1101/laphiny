@@ -139,6 +139,40 @@ export interface RoomMemoryCapsule {
   updatedAt: string;
 }
 
+export interface RoomKnowledgeItem {
+  id: string;
+  title: string;
+  body: string;
+  tags: string[];
+  source: 'manual' | 'memory' | 'summary' | 'import';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RoomBlackboardItemStatus = 'open' | 'pinned' | 'resolved';
+
+export interface RoomBlackboardItem {
+  id: string;
+  text: string;
+  authorName: string;
+  status: RoomBlackboardItemStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RoomDecisionRecordStatus = 'active' | 'superseded';
+
+export interface RoomDecisionRecord {
+  id: string;
+  title: string;
+  rationale?: string;
+  ownerName?: string;
+  source: 'manual' | 'memory' | 'summary' | 'goal';
+  status: RoomDecisionRecordStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RoomSummary {
   id: string;
   roomId: string;
@@ -201,6 +235,10 @@ export interface Room {
   maxDelegationDepth?: number;
   lastSummary?: RoomSummary;
   memoryCapsule?: RoomMemoryCapsule;
+  pendingMemoryCapsule?: RoomMemoryCapsule;
+  knowledgeBase?: RoomKnowledgeItem[];
+  blackboardItems?: RoomBlackboardItem[];
+  decisionRecords?: RoomDecisionRecord[];
   activeGoal?: GoalSession;
   roleplay?: RoleplayConfig;
   roleplaySession?: RoleplaySession;

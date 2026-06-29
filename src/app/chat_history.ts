@@ -1,6 +1,7 @@
 import { formatAgentProfileForPrompt } from '../lib/agent_profile';
 import { buildAgentFilePromptAppendix } from '../lib/agent_files';
 import { buildHermesUserContent } from '../lib/payload';
+import { formatRoomGrowthForPrompt } from '../lib/room_growth';
 import { formatRoomMemoryForPrompt } from '../lib/room_memory';
 import { buildRoleplaySystemAppendix } from '../lib/roleplay';
 import { formatRoleplayArchiveForPrompt, getRoomModePrompt } from '../lib/stage4_plus';
@@ -31,6 +32,9 @@ export function buildSummaryMessages(
         '',
         '当前房间记忆胶囊：',
         formatRoomMemoryForPrompt(room.memoryCapsule),
+        '',
+        '当前房间成长层：',
+        formatRoomGrowthForPrompt(room),
         '',
         '当前可协作成员公开卡片：',
         buildMemberCapabilityGuide(room, member, connections),
@@ -72,7 +76,15 @@ export function buildChatHistory(
     return [
       {
         role: 'system',
-        content: buildAgentFilePromptAppendix(),
+        content: [
+          buildAgentFilePromptAppendix(),
+          '',
+          '当前房间记忆胶囊：',
+          formatRoomMemoryForPrompt(room.memoryCapsule),
+          '',
+          '当前房间成长层：',
+          formatRoomGrowthForPrompt(room),
+        ].join('\n'),
       },
       ...history,
       {
@@ -178,6 +190,9 @@ export function buildGroupSystemPrompt(room: Room, member: RoomMember, connectio
     '当前房间记忆胶囊：',
     formatRoomMemoryForPrompt(room.memoryCapsule),
     '',
+    '当前房间成长层：',
+    formatRoomGrowthForPrompt(room),
+    '',
     '当前可协作成员公开卡片：',
     buildMemberCapabilityGuide(room, member, connections),
     '',
@@ -204,6 +219,9 @@ export function buildDelegationSystemPrompt(room: Room, member: RoomMember, dele
     '',
     '当前房间记忆胶囊：',
     formatRoomMemoryForPrompt(room.memoryCapsule),
+    '',
+    '当前房间成长层：',
+    formatRoomGrowthForPrompt(room),
     '',
     '当前可协作成员公开卡片：',
     buildMemberCapabilityGuide(room, member, connections),

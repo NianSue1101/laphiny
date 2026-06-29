@@ -149,6 +149,7 @@ import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle,
 import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
 import { buildGoalModePrompt, buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
+import { applyMemoryCapsuleToRoomGrowth, summarizeRoomGrowth } from './src/lib/room_growth';
 import { buildRoomMemoryMessages, formatRoomMemoryForPrompt, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
 import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
 import { buildRoomReplyNotification, type RoomReplyNotification } from './src/lib/room_reply_notifications';
@@ -185,7 +186,7 @@ import {
   saveSyncConfig,
 } from './src/storage/repository';
 import { describeStorageBackend } from './src/storage/kv';
-import { AgentPermissionDecision, AgentPermissionRequest, AgentProfile, AgentProfileVersion, AppPreferences, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, FeedbackConfig, FeedbackLogEntry, GoalSession, GoalStatusSignal, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
+import { AgentPermissionDecision, AgentPermissionRequest, AgentProfile, AgentProfileVersion, AppPreferences, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, FeedbackConfig, FeedbackLogEntry, GoalSession, GoalStatusSignal, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomBlackboardItemStatus, RoomDecisionRecordStatus, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
 
 const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
 const MAX_GOAL_REVIEW_ROUNDS = 3;
@@ -255,6 +256,11 @@ export default function App() {
   const [teamTemplateName, setTeamTemplateName] = useState('默认 Soul 小队');
   const [summaryGenerating, setSummaryGenerating] = useState(false);
   const [memoryGenerating, setMemoryGenerating] = useState(false);
+  const [knowledgeTitleDraft, setKnowledgeTitleDraft] = useState('');
+  const [knowledgeBodyDraft, setKnowledgeBodyDraft] = useState('');
+  const [blackboardDraft, setBlackboardDraft] = useState('');
+  const [decisionTitleDraft, setDecisionTitleDraft] = useState('');
+  const [decisionRationaleDraft, setDecisionRationaleDraft] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [rpArchiveGenerating, setRpArchiveGenerating] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
@@ -574,6 +580,18 @@ export default function App() {
   }, [profileVersions]);
   const selectedTaskBoard = useMemo(() => buildTaskBoard(selectedRoomDelegationTasks), [selectedRoomDelegationTasks]);
   const soulRelations = useMemo(() => buildSoulRelations({ rooms, connections, collaborationEvents, delegationTasks, messagesByRoom }), [rooms, connections, collaborationEvents, delegationTasks, messagesByRoom]);
+  const selectedRoomSoulRelations = useMemo(() => (
+    selectedRoom
+      ? buildSoulRelations({
+          rooms: [selectedRoom],
+          connections,
+          collaborationEvents: selectedRoomCollaborationEvents,
+          delegationTasks: selectedRoomDelegationTasks,
+          messagesByRoom: { [selectedRoom.id]: messagesByRoom[selectedRoom.id] ?? [] },
+        })
+      : []
+  ), [connections, messagesByRoom, selectedRoom, selectedRoomCollaborationEvents, selectedRoomDelegationTasks]);
+  const selectedRoomGrowth = useMemo(() => selectedRoom ? summarizeRoomGrowth(selectedRoom) : null, [selectedRoom]);
   const onboardingSteps = useMemo(() => buildOnboardingSteps({ connections, rooms }), [connections, rooms]);
   const onboardingComplete = onboardingSteps.every((step) => step.done);
   const layoutMode = width >= 1200 ? 'desktop' : width >= 900 ? 'wide' : width >= 700 ? 'tablet' : 'compact';
@@ -1450,9 +1468,6 @@ export default function App() {
 
   function updateRoomInline(roomId: string, patch: Partial<Room>) {
     updateRoomById(roomId, patch);
-    if (selectedRoomId !== roomId) {
-      setSelectedRoomId(roomId);
-    }
   }
 
   function adjustRoomContextLimit(room: Room, delta: number) {
@@ -2546,6 +2561,150 @@ export default function App() {
     showNotice('房间已重命名', name);
   }
 
+  function addRoomKnowledgeItem() {
+    if (!selectedRoom) return;
+    const title = knowledgeTitleDraft.trim();
+    const body = knowledgeBodyDraft.trim();
+    if (!title || !body) {
+      showNotice('知识条目不完整', '请填写标题和内容。');
+      return;
+    }
+    const now = new Date().toISOString();
+    updateSelectedRoom({
+      knowledgeBase: [
+        ...(selectedRoom.knowledgeBase ?? []),
+        {
+          id: makeId('knowledge'),
+          title,
+          body,
+          tags: ['manual'],
+          source: 'manual' as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ].slice(-80),
+    });
+    setKnowledgeTitleDraft('');
+    setKnowledgeBodyDraft('');
+    appendCollaborationEvent({
+      kind: 'memory_updated',
+      roomId: selectedRoom.id,
+      roomName: selectedRoom.name,
+      source: 'Laphiny',
+      title: '房间知识库已补充',
+      body: title,
+    });
+  }
+
+  function removeRoomKnowledgeItem(itemId: string) {
+    if (!selectedRoom) return;
+    updateSelectedRoom({
+      knowledgeBase: (selectedRoom.knowledgeBase ?? []).filter((item) => item.id !== itemId),
+    });
+  }
+
+  function addRoomBlackboardItem() {
+    if (!selectedRoom) return;
+    const text = blackboardDraft.trim();
+    if (!text) {
+      showNotice('黑板内容不能为空');
+      return;
+    }
+    const now = new Date().toISOString();
+    updateSelectedRoom({
+      blackboardItems: [
+        ...(selectedRoom.blackboardItems ?? []),
+        {
+          id: makeId('blackboard'),
+          text,
+          authorName: '用户',
+          status: 'open' as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ].slice(-120),
+    });
+    setBlackboardDraft('');
+    appendCollaborationEvent({
+      kind: 'memory_updated',
+      roomId: selectedRoom.id,
+      roomName: selectedRoom.name,
+      source: '用户',
+      title: '协作黑板已更新',
+      body: text,
+    });
+  }
+
+  function updateRoomBlackboardItemStatus(itemId: string, status: RoomBlackboardItemStatus) {
+    if (!selectedRoom) return;
+    const now = new Date().toISOString();
+    updateSelectedRoom({
+      blackboardItems: (selectedRoom.blackboardItems ?? []).map((item) => (
+        item.id === itemId ? { ...item, status, updatedAt: now } : item
+      )),
+    });
+  }
+
+  function removeRoomBlackboardItem(itemId: string) {
+    if (!selectedRoom) return;
+    updateSelectedRoom({
+      blackboardItems: (selectedRoom.blackboardItems ?? []).filter((item) => item.id !== itemId),
+    });
+  }
+
+  function addRoomDecisionRecord() {
+    if (!selectedRoom) return;
+    const title = decisionTitleDraft.trim();
+    const rationale = decisionRationaleDraft.trim();
+    if (!title) {
+      showNotice('决策标题不能为空');
+      return;
+    }
+    const now = new Date().toISOString();
+    updateSelectedRoom({
+      decisionRecords: [
+        ...(selectedRoom.decisionRecords ?? []),
+        {
+          id: makeId('decision'),
+          title,
+          rationale: rationale || undefined,
+          ownerName: '用户',
+          source: 'manual' as const,
+          status: 'active' as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ].slice(-80),
+    });
+    setDecisionTitleDraft('');
+    setDecisionRationaleDraft('');
+    appendCollaborationEvent({
+      kind: 'memory_updated',
+      roomId: selectedRoom.id,
+      roomName: selectedRoom.name,
+      source: '用户',
+      title: '决策记录已新增',
+      body: title,
+    });
+  }
+
+  function updateRoomDecisionStatus(itemId: string, status: RoomDecisionRecordStatus) {
+    if (!selectedRoom) return;
+    const now = new Date().toISOString();
+    updateSelectedRoom({
+      decisionRecords: (selectedRoom.decisionRecords ?? []).map((item) => (
+        item.id === itemId ? { ...item, status, updatedAt: now } : item
+      )),
+    });
+  }
+
+  function removeRoomDecisionRecord(itemId: string) {
+    if (!selectedRoom) return;
+    updateSelectedRoom({
+      decisionRecords: (selectedRoom.decisionRecords ?? []).filter((item) => item.id !== itemId),
+    });
+  }
+
   function deleteSelectedRoom() {
     if (!selectedRoom) return;
     const roomToDelete = selectedRoom;
@@ -3092,20 +3251,20 @@ ${content}`)]);
         ...parseRoomMemoryResponse(text, selectedRoom.id, memoryMember.alias),
         version: previousVersion + 1,
       };
-      updateSelectedRoom({ memoryCapsule: capsule });
-      appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, `房间记忆胶囊已更新（v${capsule.version}）：\n${summarizeRoomMemory(capsule)}`)]);
+      updateSelectedRoom({ pendingMemoryCapsule: capsule });
+      appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, `房间记忆草案已生成（v${capsule.version}），请在房间工具里确认后再沉淀：\n${summarizeRoomMemory(capsule)}`)]);
       appendCollaborationEvent({
         kind: 'memory_updated',
         roomId: selectedRoom.id,
         roomName: selectedRoom.name,
         source: memoryMember.alias,
-        title: '房间记忆胶囊已更新',
+        title: '房间记忆草案待确认',
         body: summarizeRoomMemory(capsule),
       });
       appendDiagnosticLog({
         level: 'success',
         category: 'chat',
-        title: '房间记忆胶囊已更新',
+        title: '房间记忆草案已生成',
         message: summarizeRoomMemory(capsule),
         roomId: selectedRoom.id,
         roomName: selectedRoom.name,
@@ -3114,7 +3273,7 @@ ${content}`)]);
         requestId,
         durationMs: Date.now() - startedAt,
       });
-      showNotice('房间记忆已更新', summarizeRoomMemory(capsule));
+      showNotice('记忆草案已生成', '请在房间工具里确认后再写入长期房间记忆。');
     } catch (error) {
       appendDiagnosticLog({
         level: 'error',
@@ -3145,6 +3304,45 @@ ${content}`)]);
         source: 'Laphiny',
         title: '房间记忆胶囊已清空',
         body: '用户清空了当前房间的共享记忆胶囊。',
+      });
+    });
+  }
+
+  function confirmPendingRoomMemoryCapsule() {
+    if (!selectedRoom?.pendingMemoryCapsule) return;
+    const now = new Date().toISOString();
+    const capsule: RoomMemoryCapsule = {
+      ...selectedRoom.pendingMemoryCapsule,
+      updatedAt: now,
+    };
+    const growth = applyMemoryCapsuleToRoomGrowth(selectedRoom, capsule, now, makeId);
+    updateSelectedRoom({
+      ...growth,
+      memoryCapsule: capsule,
+      pendingMemoryCapsule: undefined,
+    });
+    appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, `房间记忆已确认并沉淀（v${capsule.version}）：\n${summarizeRoomMemory(capsule)}`)]);
+    appendCollaborationEvent({
+      kind: 'memory_updated',
+      roomId: selectedRoom.id,
+      roomName: selectedRoom.name,
+      source: '用户',
+      title: '房间记忆已确认沉淀',
+      body: summarizeRoomMemory(capsule),
+    });
+    showNotice('记忆已沉淀', '知识库、协作黑板和决策记录已根据这次记忆同步更新。');
+  }
+
+  function discardPendingRoomMemoryCapsule() {
+    if (!selectedRoom?.pendingMemoryCapsule) return;
+    requestConfirm('丢弃记忆草案', '这只会丢弃当前待确认的房间记忆草案，不影响已确认记忆。', () => {
+      updateSelectedRoom({ pendingMemoryCapsule: undefined });
+      appendCollaborationEvent({
+        kind: 'memory_updated',
+        roomId: selectedRoom.id,
+        roomName: selectedRoom.name,
+        source: '用户',
+        title: '房间记忆草案已丢弃',
       });
     });
   }
@@ -3424,7 +3622,7 @@ ${content}`)]);
     };
     updateRoomById(room.id, {
       activeGoal: completedGoal,
-      memoryCapsule: buildGoalMemoryCapsule(room, completedGoal, now),
+      pendingMemoryCapsule: buildGoalMemoryCapsule(room, completedGoal, now),
     });
     notifyGoalSessionFinished(room, completedGoal);
     appendCollaborationEvent({
@@ -3432,7 +3630,7 @@ ${content}`)]);
       roomId: room.id,
       roomName: room.name,
       source: 'Laphiny',
-      title: '目标已沉淀到房间记忆',
+      title: '目标记忆草案待确认',
       body: completedGoal.goal,
     });
   }
@@ -3544,7 +3742,7 @@ ${content}`)]);
   }
 
   function buildSanitizedDiagnosticObject(): Record<string, unknown> {
-    return JSON.parse(buildDiagnosticBundle({
+    const bundle = buildDiagnosticBundle({
       connections,
       rooms,
       messagesByRoom,
@@ -3559,7 +3757,24 @@ ${content}`)]);
         width,
         layoutMode,
       },
-    })) as Record<string, unknown>;
+    });
+
+    try {
+      return JSON.parse(bundle) as Record<string, unknown>;
+    } catch (error) {
+      appendDiagnosticLog({
+        level: 'warning',
+        category: 'system',
+        title: '诊断包解析失败',
+        message: getErrorMessage(error),
+      });
+      return {
+        version: 1,
+        appVersion: APP_VERSION,
+        exportedAt: new Date().toISOString(),
+        error: 'diagnostic_bundle_parse_failed',
+      };
+    }
   }
 
   async function uploadFeedbackLogs() {
@@ -4891,6 +5106,12 @@ ${content}`)]);
               <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
             </View>
           ) : null}
+          {selectedRoomGrowth ? (
+            <View style={styles.summaryBox}>
+              <Text style={styles.summaryTitle}>房间成长层 · {selectedRoomGrowth.label}</Text>
+              <Text style={styles.help}>知识 {selectedRoomGrowth.knowledgeCount} · 开放黑板 {selectedRoomGrowth.blackboardOpenCount} · 决策 {selectedRoomGrowth.decisionCount}{selectedRoomGrowth.pendingMemory ? ' · 有待确认记忆草案' : ''}</Text>
+            </View>
+          ) : null}
           {selectedRoom.roleplay?.archive ? (
             <View style={styles.summaryBox}>
               <Text style={styles.summaryTitle}>RP 剧本档案 · v{selectedRoom.roleplay.archive.version}</Text>
@@ -5006,6 +5227,12 @@ ${content}`)]);
               <View style={styles.summaryBox}>
                 <Text style={styles.summaryTitle}>房间记忆胶囊 · v{selectedRoom.memoryCapsule.version}</Text>
                 <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
+              </View>
+            ) : null}
+            {selectedRoomGrowth ? (
+              <View style={styles.summaryBox}>
+                <Text style={styles.summaryTitle}>房间成长层 · {selectedRoomGrowth.label}</Text>
+                <Text style={styles.help}>知识 {selectedRoomGrowth.knowledgeCount} · 黑板 {selectedRoomGrowth.blackboardOpenCount} · 决策 {selectedRoomGrowth.decisionCount}{selectedRoomGrowth.pendingMemory ? ' · 待确认记忆' : ''}</Text>
               </View>
             ) : null}
             {selectedRoomDelegationTasks.length ? (
@@ -5222,6 +5449,7 @@ ${content}`)]);
 
         {renderRoleplayArchivePanel()}
         {renderTaskBoardPanel()}
+        {renderRoomGrowthPanel()}
 
         {selectedRoom.kind === 'group' ? (
           <View style={styles.roomEditPanel}>
@@ -5289,6 +5517,17 @@ ${content}`)]);
         {selectedRoom.kind === 'group' ? (
           <View style={styles.roomEditPanel}>
             <Text style={styles.panelLabel}>房间记忆胶囊</Text>
+            {selectedRoom.pendingMemoryCapsule ? (
+              <View style={styles.summaryBox}>
+                <Text style={styles.summaryTitle}>待确认记忆草案 · v{selectedRoom.pendingMemoryCapsule.version}</Text>
+                <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.pendingMemoryCapsule)}</Text>
+                <MarkdownText content={formatRoomMemoryForPrompt(selectedRoom.pendingMemoryCapsule)} />
+                <View style={styles.toolActions}>
+                  <MiniButton icon="checkmark-circle-outline" label="确认沉淀" onPress={confirmPendingRoomMemoryCapsule} />
+                  <MiniButton icon="close-circle-outline" label="丢弃草案" onPress={discardPendingRoomMemoryCapsule} />
+                </View>
+              </View>
+            ) : null}
             {selectedRoom.memoryCapsule ? (
               <View style={styles.summaryBox}>
                 <Text style={styles.summaryTitle}>v{selectedRoom.memoryCapsule.version} · {selectedRoom.memoryCapsule.authorName ?? 'Laphiny'} · {formatDateTime(selectedRoom.memoryCapsule.updatedAt)}</Text>
@@ -5922,6 +6161,128 @@ ${content}`)]);
     );
   }
 
+  function renderRoomGrowthPanel() {
+    if (!selectedRoom || !selectedRoomGrowth) return null;
+    const knowledgeItems = [...(selectedRoom.knowledgeBase ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const blackboardItems = [...(selectedRoom.blackboardItems ?? [])].sort((a, b) => {
+      const statusRank = (item: typeof a) => item.status === 'pinned' ? 2 : item.status === 'open' ? 1 : 0;
+      return statusRank(b) - statusRank(a) || b.updatedAt.localeCompare(a.updatedAt);
+    });
+    const decisionRecords = [...(selectedRoom.decisionRecords ?? [])].sort((a, b) => {
+      const statusRank = (item: typeof a) => item.status === 'active' ? 1 : 0;
+      return statusRank(b) - statusRank(a) || b.updatedAt.localeCompare(a.updatedAt);
+    });
+
+    return (
+      <View style={styles.roomEditPanel}>
+        <View style={styles.syncHeader}>
+          <View style={styles.syncHeaderText}>
+            <Text style={styles.panelLabel}>房间成长层</Text>
+            <Text style={styles.help}>把几轮协作后的稳定知识、开放问题、决策和 Agent 关系沉淀下来；确认后的内容会进入后续群聊上下文。</Text>
+          </View>
+          <StatusToken icon="leaf-outline" label={selectedRoomGrowth.label} tone="memory" />
+        </View>
+        <View style={styles.healthMetricRow}>
+          <HealthMetric label="知识" value={selectedRoomGrowth.knowledgeCount} tone={selectedRoomGrowth.knowledgeCount ? 'ok' : 'unknown'} />
+          <HealthMetric label="黑板" value={selectedRoomGrowth.blackboardOpenCount} tone={selectedRoomGrowth.blackboardOpenCount ? 'checking' : 'unknown'} />
+          <HealthMetric label="决策" value={selectedRoomGrowth.decisionCount} tone={selectedRoomGrowth.decisionCount ? 'ok' : 'unknown'} />
+          <HealthMetric label="草案" value={selectedRoomGrowth.pendingMemory ? 1 : 0} tone={selectedRoomGrowth.pendingMemory ? 'checking' : 'unknown'} />
+        </View>
+
+        <Text style={styles.panelLabel}>房间知识库</Text>
+        <TextInput style={styles.input} value={knowledgeTitleDraft} onChangeText={setKnowledgeTitleDraft} placeholder="知识标题，例如：发布约束 / 用户偏好 / 项目定位" />
+        <TextInput
+          style={[styles.input, styles.jsonPasteInput]}
+          multiline
+          value={knowledgeBodyDraft}
+          onChangeText={setKnowledgeBodyDraft}
+          placeholder="稳定事实、偏好、约束或交接信息"
+          textAlignVertical="top"
+        />
+        <View style={styles.toolActions}>
+          <MiniButton icon="add-circle-outline" label="加入知识库" onPress={addRoomKnowledgeItem} />
+        </View>
+        {knowledgeItems.length ? knowledgeItems.slice(0, 8).map((item) => (
+          <View key={item.id} style={styles.conflictItem}>
+            <View style={styles.conflictHeader}>
+              <View style={styles.rowMain}>
+                <Text style={styles.conflictItemTitle}>{item.title}</Text>
+                <Text style={styles.help}>{item.source} · {formatDateTime(item.updatedAt)}{item.tags.length ? ` · ${item.tags.join('、')}` : ''}</Text>
+                <Text style={styles.diagnosticMessage}>{item.body}</Text>
+              </View>
+              <MiniButton icon="trash-outline" label="删除" onPress={() => removeRoomKnowledgeItem(item.id)} />
+            </View>
+          </View>
+        )) : <Text style={styles.help}>还没有结构化知识。确认记忆草案或手动添加后，这里会成为房间的长期参考层。</Text>}
+
+        <Text style={styles.panelLabel}>协作黑板</Text>
+        <View style={styles.inlineFormRow}>
+          <TextInput style={[styles.input, styles.inlineInput]} value={blackboardDraft} onChangeText={setBlackboardDraft} placeholder="开放问题、待办、下一步动作" />
+          <MiniButton icon="add-circle-outline" label="贴上" onPress={addRoomBlackboardItem} />
+        </View>
+        {blackboardItems.length ? blackboardItems.slice(0, 10).map((item) => (
+          <View key={item.id} style={styles.conflictItem}>
+            <View style={styles.conflictHeader}>
+              <View style={styles.rowMain}>
+                <Text style={styles.conflictItemTitle}>{getBlackboardStatusLabel(item.status)} · {item.text}</Text>
+                <Text style={styles.help}>{item.authorName} · {formatDateTime(item.updatedAt)}</Text>
+              </View>
+              <View style={styles.buttonRowCompact}>
+                <MiniButton icon="pin-outline" label="置顶" onPress={() => updateRoomBlackboardItemStatus(item.id, 'pinned')} />
+                <MiniButton icon="checkmark-outline" label="完成" onPress={() => updateRoomBlackboardItemStatus(item.id, 'resolved')} />
+                <MiniButton icon="trash-outline" label="删" onPress={() => removeRoomBlackboardItem(item.id)} />
+              </View>
+            </View>
+          </View>
+        )) : <Text style={styles.help}>黑板适合放还没进入正式结论的开放事项。</Text>}
+
+        <Text style={styles.panelLabel}>决策记录</Text>
+        <TextInput style={styles.input} value={decisionTitleDraft} onChangeText={setDecisionTitleDraft} placeholder="决策标题，例如：采用本地优先架构" />
+        <TextInput
+          style={[styles.input, styles.jsonPasteInput]}
+          multiline
+          value={decisionRationaleDraft}
+          onChangeText={setDecisionRationaleDraft}
+          placeholder="决策理由、取舍和适用边界"
+          textAlignVertical="top"
+        />
+        <View style={styles.toolActions}>
+          <MiniButton icon="ribbon-outline" label="记录决策" onPress={addRoomDecisionRecord} />
+        </View>
+        {decisionRecords.length ? decisionRecords.slice(0, 8).map((item) => (
+          <View key={item.id} style={styles.conflictItem}>
+            <View style={styles.conflictHeader}>
+              <View style={styles.rowMain}>
+                <Text style={styles.conflictItemTitle}>{getDecisionStatusLabel(item.status)} · {item.title}</Text>
+                <Text style={styles.help}>{item.source}{item.ownerName ? ` · ${item.ownerName}` : ''} · {formatDateTime(item.updatedAt)}</Text>
+                {item.rationale ? <Text style={styles.diagnosticMessage}>{item.rationale}</Text> : null}
+              </View>
+              <View style={styles.buttonRowCompact}>
+                <MiniButton icon="archive-outline" label="过期" onPress={() => updateRoomDecisionStatus(item.id, 'superseded')} />
+                <MiniButton icon="trash-outline" label="删" onPress={() => removeRoomDecisionRecord(item.id)} />
+              </View>
+            </View>
+          </View>
+        )) : <Text style={styles.help}>重要结论放到决策记录里，后续 Agent 会把它当作稳定边界，而不是普通聊天噪音。</Text>}
+
+        <Text style={styles.panelLabel}>本房间 Soul 关系图</Text>
+        {selectedRoomSoulRelations.length ? selectedRoomSoulRelations.slice(0, 6).map((edge) => (
+          <View key={edge.id} style={styles.relationCard}>
+            <View style={styles.relationHeader}>
+              <AgentAvatar alias={edge.fromName} size={24} />
+              <Text style={styles.relationArrow}>→</Text>
+              <AgentAvatar alias={edge.toName} size={24} />
+              <View style={styles.rowMain}>
+                <Text style={styles.conflictItemTitle}>{edge.fromName} → {edge.toName}</Text>
+                <Text style={styles.help}>{edge.label} · 强度 {edge.strength} · 委托 {edge.delegations} / 完成 {edge.completions} / 引用 {edge.mentions}</Text>
+              </View>
+            </View>
+          </View>
+        )) : <Text style={styles.help}>几轮委托、接力或互相引用后，这里会显示当前房间里的 Agent 关系变化。</Text>}
+      </View>
+    );
+  }
+
   function renderSoulRelationsPanel() {
     return (
       <View style={styles.diagnosticPanel}>
@@ -6204,6 +6565,17 @@ function getGoalPlanItemStatusLabel(status: GoalSession['planItems'][number]['st
   if (status === 'running') return '进行中';
   if (status === 'blocked') return '受阻';
   return '待办';
+}
+
+function getBlackboardStatusLabel(status: RoomBlackboardItemStatus): string {
+  if (status === 'pinned') return '置顶';
+  if (status === 'resolved') return '已完成';
+  return '开放';
+}
+
+function getDecisionStatusLabel(status: RoomDecisionRecordStatus): string {
+  if (status === 'superseded') return '已过期';
+  return '生效中';
 }
 
 function getGoalPlanItemStatusStyle(status: GoalSession['planItems'][number]['status']) {

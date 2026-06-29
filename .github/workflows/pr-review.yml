@@ -97,7 +97,7 @@ jobs:
             --max-time 300 \
             --retry 2 \
             --retry-delay 8 \
-            --retry-all-errors \
+            --retry-max-time 60 \
             -o /tmp/laper-response.json
           curl_status=$?
           set -e
