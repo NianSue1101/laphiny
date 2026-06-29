@@ -33,6 +33,50 @@
 
 后续不要在 `App.tsx` 里重新声明自定义 Text / TextInput。需要跟随字体设置的组件可以接收 `TextComponent` / `TextInputComponent`，或者直接使用该模块。
 
+### `src/components/AttachmentPreviewModal.tsx`
+
+附件预览弹窗组件，负责附件名称、类型、大小、图片/文本预览、下载和关闭按钮。
+
+约束：
+
+- 不直接持久化附件；下载通过 `onDownload` 回调交给 App。
+- 不维护预览状态；当前附件和关闭行为由 App 控制。
+- 需要跟随字体时使用外层传入的 `TextComponent`。
+
+### `src/components/ChatSidebar.tsx`
+
+桌面聊天页左侧房间列表，负责房间切换、新建入口、未读和最后一条消息预览。
+
+约束：
+
+- 不修改房间，只通过 `onOpenRoom` / `onCreateRoom` 回调通知 App。
+- 不放房间管理表单；基础设置统一在 `RoomManagementPanel`。
+
+### `src/components/MobileRoomPicker.tsx`
+
+移动端专注聊天前的房间选择器，负责移动端房间卡片、未读、最后消息预览、进入和管理跳转。
+
+约束：
+
+- “管理”只能调用 `onManageRoom`，不在移动选择器内展开第二套表单。
+- “进入”只调用 `onOpenRoom`。
+
+### `src/components/RoomRail.tsx`
+
+聊天页顶部/移动端横向房间 rail，负责快速切换房间和新建入口。
+
+约束：
+
+- 只展示和切换，不承载房间管理逻辑。
+
+### `src/components/RuntimeBanner.tsx`
+
+Web/PWA 运行状态横幅，负责离线、Service Worker 和安装提示。
+
+约束：
+
+- 只展示状态和触发安装回调，不处理网络状态监听。
+
 ### `src/components/RoomManagementPanel.tsx`
 
 房间管理中心组件，负责房间页里的原地管理体验：
@@ -94,8 +138,9 @@ import { styles } from './src/app/app_styles';
 1. `renderRoomGrowthPanel` → `src/components/RoomGrowthPanel.tsx`
 2. `renderTaskBoardPanel` → `src/components/TaskBoardPanel.tsx`
 3. `renderRoleplayArchivePanel` → `src/components/RoleplayArchivePanel.tsx`
-4. `renderSettings` 内部的设置卡片 → `src/components/settings/*`
-5. `renderMessageBubble` → `src/components/chat/MessageBubble.tsx`
+4. `renderActiveGoalPanel` → `src/components/GoalPanel.tsx`
+5. `renderSettings` 内部的设置卡片 → `src/components/settings/*`
+6. `renderMessageBubble` → `src/components/chat/MessageBubble.tsx`
 
 原则：先拆展示型组件，后拆会触发请求/写入的组件。
 
