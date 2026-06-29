@@ -57,6 +57,7 @@ import { MarkdownText } from './src/components/MarkdownText';
 import { MessageSearchPanel } from './src/components/MessageSearchPanel';
 import { MobileRoomPicker } from './src/components/MobileRoomPicker';
 import { RoleplayArchivePanel } from './src/components/RoleplayArchivePanel';
+import { RoomGrowthPanel } from './src/components/RoomGrowthPanel';
 import { RoomManagementPanel } from './src/components/RoomManagementPanel';
 import { RoomRail } from './src/components/RoomRail';
 import { RoomStatusBar } from './src/components/RoomStatusBar';
@@ -5994,124 +5995,33 @@ ${content}`)]);
   }
 
   function renderRoomGrowthPanel() {
-    if (!selectedRoom || !selectedRoomGrowth) return null;
-    const knowledgeItems = [...(selectedRoom.knowledgeBase ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    const blackboardItems = [...(selectedRoom.blackboardItems ?? [])].sort((a, b) => {
-      const statusRank = (item: typeof a) => item.status === 'pinned' ? 2 : item.status === 'open' ? 1 : 0;
-      return statusRank(b) - statusRank(a) || b.updatedAt.localeCompare(a.updatedAt);
-    });
-    const decisionRecords = [...(selectedRoom.decisionRecords ?? [])].sort((a, b) => {
-      const statusRank = (item: typeof a) => item.status === 'active' ? 1 : 0;
-      return statusRank(b) - statusRank(a) || b.updatedAt.localeCompare(a.updatedAt);
-    });
-
     return (
-      <View style={styles.roomEditPanel}>
-        <View style={styles.syncHeader}>
-          <View style={styles.syncHeaderText}>
-            <Text style={styles.panelLabel}>房间成长层</Text>
-            <Text style={styles.help}>把几轮协作后的稳定知识、开放问题、决策和 Agent 关系沉淀下来；确认后的内容会进入后续群聊上下文。</Text>
-          </View>
-          <StatusToken icon="leaf-outline" label={selectedRoomGrowth.label} tone="memory" />
-        </View>
-        <View style={styles.healthMetricRow}>
-          <HealthMetric label="知识" value={selectedRoomGrowth.knowledgeCount} tone={selectedRoomGrowth.knowledgeCount ? 'ok' : 'unknown'} />
-          <HealthMetric label="黑板" value={selectedRoomGrowth.blackboardOpenCount} tone={selectedRoomGrowth.blackboardOpenCount ? 'checking' : 'unknown'} />
-          <HealthMetric label="决策" value={selectedRoomGrowth.decisionCount} tone={selectedRoomGrowth.decisionCount ? 'ok' : 'unknown'} />
-          <HealthMetric label="草案" value={selectedRoomGrowth.pendingMemory ? 1 : 0} tone={selectedRoomGrowth.pendingMemory ? 'checking' : 'unknown'} />
-        </View>
-
-        <Text style={styles.panelLabel}>房间知识库</Text>
-        <TextInput style={styles.input} value={knowledgeTitleDraft} onChangeText={setKnowledgeTitleDraft} placeholder="知识标题，例如：发布约束 / 用户偏好 / 项目定位" />
-        <TextInput
-          style={[styles.input, styles.jsonPasteInput]}
-          multiline
-          value={knowledgeBodyDraft}
-          onChangeText={setKnowledgeBodyDraft}
-          placeholder="稳定事实、偏好、约束或交接信息"
-          textAlignVertical="top"
-        />
-        <View style={styles.toolActions}>
-          <MiniButton icon="add-circle-outline" label="加入知识库" onPress={addRoomKnowledgeItem} />
-        </View>
-        {knowledgeItems.length ? knowledgeItems.slice(0, 8).map((item) => (
-          <View key={item.id} style={styles.conflictItem}>
-            <View style={styles.conflictHeader}>
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{item.title}</Text>
-                <Text style={styles.help}>{item.source} · {formatDateTime(item.updatedAt)}{item.tags.length ? ` · ${item.tags.join('、')}` : ''}</Text>
-                <Text style={styles.diagnosticMessage}>{item.body}</Text>
-              </View>
-              <MiniButton icon="trash-outline" label="删除" onPress={() => removeRoomKnowledgeItem(item.id)} />
-            </View>
-          </View>
-        )) : <Text style={styles.help}>还没有结构化知识。确认记忆草案或手动添加后，这里会成为房间的长期参考层。</Text>}
-
-        <Text style={styles.panelLabel}>协作黑板</Text>
-        <View style={styles.inlineFormRow}>
-          <TextInput style={[styles.input, styles.inlineInput]} value={blackboardDraft} onChangeText={setBlackboardDraft} placeholder="开放问题、待办、下一步动作" />
-          <MiniButton icon="add-circle-outline" label="贴上" onPress={addRoomBlackboardItem} />
-        </View>
-        {blackboardItems.length ? blackboardItems.slice(0, 10).map((item) => (
-          <View key={item.id} style={styles.conflictItem}>
-            <View style={styles.conflictHeader}>
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{getBlackboardStatusLabel(item.status)} · {item.text}</Text>
-                <Text style={styles.help}>{item.authorName} · {formatDateTime(item.updatedAt)}</Text>
-              </View>
-              <View style={styles.buttonRowCompact}>
-                <MiniButton icon="pin-outline" label="置顶" onPress={() => updateRoomBlackboardItemStatus(item.id, 'pinned')} />
-                <MiniButton icon="checkmark-outline" label="完成" onPress={() => updateRoomBlackboardItemStatus(item.id, 'resolved')} />
-                <MiniButton icon="trash-outline" label="删" onPress={() => removeRoomBlackboardItem(item.id)} />
-              </View>
-            </View>
-          </View>
-        )) : <Text style={styles.help}>黑板适合放还没进入正式结论的开放事项。</Text>}
-
-        <Text style={styles.panelLabel}>决策记录</Text>
-        <TextInput style={styles.input} value={decisionTitleDraft} onChangeText={setDecisionTitleDraft} placeholder="决策标题，例如：采用本地优先架构" />
-        <TextInput
-          style={[styles.input, styles.jsonPasteInput]}
-          multiline
-          value={decisionRationaleDraft}
-          onChangeText={setDecisionRationaleDraft}
-          placeholder="决策理由、取舍和适用边界"
-          textAlignVertical="top"
-        />
-        <View style={styles.toolActions}>
-          <MiniButton icon="ribbon-outline" label="记录决策" onPress={addRoomDecisionRecord} />
-        </View>
-        {decisionRecords.length ? decisionRecords.slice(0, 8).map((item) => (
-          <View key={item.id} style={styles.conflictItem}>
-            <View style={styles.conflictHeader}>
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{getDecisionStatusLabel(item.status)} · {item.title}</Text>
-                <Text style={styles.help}>{item.source}{item.ownerName ? ` · ${item.ownerName}` : ''} · {formatDateTime(item.updatedAt)}</Text>
-                {item.rationale ? <Text style={styles.diagnosticMessage}>{item.rationale}</Text> : null}
-              </View>
-              <View style={styles.buttonRowCompact}>
-                <MiniButton icon="archive-outline" label="过期" onPress={() => updateRoomDecisionStatus(item.id, 'superseded')} />
-                <MiniButton icon="trash-outline" label="删" onPress={() => removeRoomDecisionRecord(item.id)} />
-              </View>
-            </View>
-          </View>
-        )) : <Text style={styles.help}>重要结论放到决策记录里，后续 Agent 会把它当作稳定边界，而不是普通聊天噪音。</Text>}
-
-        <Text style={styles.panelLabel}>本房间 Soul 关系图</Text>
-        {selectedRoomSoulRelations.length ? selectedRoomSoulRelations.slice(0, 6).map((edge) => (
-          <View key={edge.id} style={styles.relationCard}>
-            <View style={styles.relationHeader}>
-              <AgentAvatar alias={edge.fromName} size={24} />
-              <Text style={styles.relationArrow}>→</Text>
-              <AgentAvatar alias={edge.toName} size={24} />
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{edge.fromName} → {edge.toName}</Text>
-                <Text style={styles.help}>{edge.label} · 强度 {edge.strength} · 委托 {edge.delegations} / 完成 {edge.completions} / 引用 {edge.mentions}</Text>
-              </View>
-            </View>
-          </View>
-        )) : <Text style={styles.help}>几轮委托、接力或互相引用后，这里会显示当前房间里的 Agent 关系变化。</Text>}
-      </View>
+      <RoomGrowthPanel
+        room={selectedRoom}
+        growth={selectedRoomGrowth}
+        soulRelations={selectedRoomSoulRelations}
+        knowledgeTitleDraft={knowledgeTitleDraft}
+        knowledgeBodyDraft={knowledgeBodyDraft}
+        blackboardDraft={blackboardDraft}
+        decisionTitleDraft={decisionTitleDraft}
+        decisionRationaleDraft={decisionRationaleDraft}
+        styles={styles}
+        TextComponent={Text}
+        TextInputComponent={TextInput}
+        onChangeKnowledgeTitle={setKnowledgeTitleDraft}
+        onChangeKnowledgeBody={setKnowledgeBodyDraft}
+        onAddKnowledgeItem={addRoomKnowledgeItem}
+        onRemoveKnowledgeItem={removeRoomKnowledgeItem}
+        onChangeBlackboardDraft={setBlackboardDraft}
+        onAddBlackboardItem={addRoomBlackboardItem}
+        onUpdateBlackboardStatus={updateRoomBlackboardItemStatus}
+        onRemoveBlackboardItem={removeRoomBlackboardItem}
+        onChangeDecisionTitle={setDecisionTitleDraft}
+        onChangeDecisionRationale={setDecisionRationaleDraft}
+        onAddDecisionRecord={addRoomDecisionRecord}
+        onUpdateDecisionStatus={updateRoomDecisionStatus}
+        onRemoveDecisionRecord={removeRoomDecisionRecord}
+      />
     );
   }
 
