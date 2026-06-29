@@ -9,6 +9,7 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
+  Keyboard,
   KeyboardAvoidingView,
   SafeAreaView,
   ScrollView,
@@ -209,6 +210,7 @@ export default function App() {
   const [teamTemplateName, setTeamTemplateName] = useState('默认 Soul 小队');
   const [summaryGenerating, setSummaryGenerating] = useState(false);
   const [memoryGenerating, setMemoryGenerating] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [rpArchiveGenerating, setRpArchiveGenerating] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [roomReplyNotification, setRoomReplyNotification] = useState<RoomReplyNotification | null>(null);
@@ -228,11 +230,31 @@ export default function App() {
   const tabRef = useRef<Tab>(tab);
   const roomsRef = useRef<Room[]>(rooms);
   const pollingSquareEventsRef = useRef(false);
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const maxWindowHeightRef = useRef(height);
 
   selectedRoomIdRef.current = selectedRoomId;
   tabRef.current = tab;
   roomsRef.current = rooms;
+  if (height > maxWindowHeightRef.current) {
+    maxWindowHeightRef.current = height;
+  }
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    const showSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -470,6 +492,17 @@ export default function App() {
   const onboardingComplete = onboardingSteps.every((step) => step.done);
   const layoutMode = width >= 1200 ? 'desktop' : width >= 900 ? 'wide' : width >= 700 ? 'tablet' : 'compact';
   const isWideLayout = width >= 900;
+  const keyboardAvoidanceEnabled = Platform.OS !== 'web' && !isWideLayout;
+  const androidWindowAlreadyResized = Platform.OS === 'android'
+    && keyboardHeight > 0
+    && height < maxWindowHeightRef.current - 80;
+  const androidKeyboardLift = Platform.OS === 'android' && keyboardAvoidanceEnabled && !androidWindowAlreadyResized
+    ? Math.min(keyboardHeight, Math.floor(height * 0.45))
+    : 0;
+  const roomDetailsMaxHeight = Math.max(
+    180,
+    Math.floor(height * (keyboardAvoidanceEnabled && keyboardHeight > 0 ? 0.28 : 0.42)),
+  );
   const sending = Object.keys(activeStreamIds).length > 0;
   const totalUnread = Object.values(unreadByRoom).reduce<number>((total, count) => total + Number(count ?? 0), 0);
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
@@ -3716,9 +3749,9 @@ ${content}`)]);
         {isWideLayout ? renderChatSidebar() : renderRoomRail()}
         <KeyboardAvoidingView
           style={styles.chatMain}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-          enabled={!isWideLayout && Platform.OS !== 'web'}
+          enabled={keyboardAvoidanceEnabled}
         >
 
         {selectedRoom ? (
@@ -3760,7 +3793,13 @@ ${content}`)]);
               />
             </View>
             {roomDetailsOpen ? (
-              <>
+              <ScrollView
+                style={[styles.roomDetailsScroll, { maxHeight: roomDetailsMaxHeight }]}
+                contentContainerStyle={styles.roomDetailsContent}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator
+              >
                 {renderRoomStatusBar()}
                 {renderActiveGoalPanel()}
                 {renderRoleplaySceneCard()}
@@ -3791,7 +3830,7 @@ ${content}`)]);
                 {roomToolsOpen ? renderRoomTools() : null}
                 {renderMessageSearchPanel()}
                 {!isWideLayout ? renderRoomCollaborationDashboard() : null}
-              </>
+              </ScrollView>
             ) : null}
           </View>
         ) : null}
@@ -3835,7 +3874,7 @@ ${content}`)]);
           renderItem={({ item }) => renderMessageBubble(item)}
         />
 
-        <View style={styles.composer}>
+        <View style={[styles.composer, androidKeyboardLift > 0 && { marginBottom: androidKeyboardLift }]}>
           {selectedRoom?.kind === 'group' ? (
             <View style={styles.mentionBar}>
               <Text style={styles.mentionHint}>本次回复</Text>
@@ -5777,6 +5816,13 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
     backgroundColor: '#ffffff',
     gap: 10,
+  },
+  roomDetailsScroll: {
+    flexGrow: 0,
+  },
+  roomDetailsContent: {
+    gap: 10,
+    paddingBottom: 4,
   },
   roomHeaderActions: {
     flexDirection: 'row',
