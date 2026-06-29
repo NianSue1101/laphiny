@@ -42,3 +42,19 @@ test('leaves unsupported file blocks visible', () => {
   assert.equal(result.attachments.length, 0);
   assert.equal(result.content, raw);
 });
+
+test('extracts filename plus text code block fallback', () => {
+  const result = extractAgentFileAttachments([
+    '下面是文件：',
+    '文件名：notes.txt',
+    '```txt',
+    'hello from agent',
+    '```',
+  ].join('\n'));
+
+  assert.equal(result.attachments.length, 1);
+  assert.equal(result.attachments[0]?.name, 'notes.txt');
+  assert.equal(result.attachments[0]?.kind, 'text');
+  assert.equal(result.attachments[0]?.text, 'hello from agent');
+  assert.equal(result.content, '下面是文件：');
+});

@@ -7,6 +7,7 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
@@ -20,9 +21,13 @@ jobs:
           pr_number='${{ github.event.pull_request.number }}'
           gh pr view "$pr_number" --json title --jq '.title' > /tmp/pr-title.md
           gh pr view "$pr_number" --json body --jq '.body // "(no description)"' > /tmp/pr-body.md
-          gh pr diff "$pr_number" > /tmp/pr.diff
-          head -c 60000 /tmp/pr.diff > /tmp/pr.diff.truncated
+          timeout 45s gh pr diff "$pr_number" > /tmp/pr.diff || {
+            echo "PR diff collection timed out; using changed file summary." > /tmp/pr.diff
+            gh pr view "$pr_number" --json files --jq '.files[].path' >> /tmp/pr.diff
+          }
+          head -c 35000 /tmp/pr.diff > /tmp/pr.diff.truncated
           echo "diff_lines=$(wc -l < /tmp/pr.diff)" >> "$GITHUB_OUTPUT"
+          echo "diff_bytes=$(wc -c < /tmp/pr.diff.truncated)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -88,14 +93,17 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-Hermes-Session-Key: laphiny-pr-review" \
             --data-binary @/tmp/laper-request.json \
-            --connect-timeout 30 \
-            --max-time 120 \
+            --connect-timeout 20 \
+            --max-time 300 \
+            --retry 2 \
+            --retry-delay 8 \
+            --retry-all-errors \
             -o /tmp/laper-response.json
           curl_status=$?
           set -e
 
           if [ "$curl_status" -ne 0 ]; then
-            REVIEW="Laper 无法完成审查：请求失败或超时（curl exit $curl_status）。"
+            REVIEW="Laper 无法完成审查：请求失败或超时（curl exit $curl_status）。本次已将 diff 压缩到 ${{ steps.pr.outputs.diff_bytes }} bytes；如果经常发生，请检查平板 Hermes 是否在前台、网络是否稳定，以及服务端是否允许 300 秒请求。"
           elif jq -e . >/dev/null 2>&1 < /tmp/laper-response.json; then
             REVIEW=$(jq -r '.choices[0].message.content // "Laper 无法完成审查：" + (.error.message // "unknown error")' < /tmp/laper-response.json)
           else

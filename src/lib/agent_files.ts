@@ -6,6 +6,7 @@ export interface AgentFileExtraction {
 }
 
 const FILE_BLOCK_PATTERN = /```laphiny-file\s*([^\n]*)\n([\s\S]*?)```/gi;
+const FILENAME_CODE_BLOCK_PATTERN = /(?:^|\n)(?:文件名|檔名|filename|file)\s*[:：]\s*([^\n]+\.(?:txt|md))\s*\n```(?:txt|text|md|markdown)?\s*\n([\s\S]*?)```/gi;
 const SUPPORTED_TEXT_EXTENSIONS = new Set(['txt', 'md']);
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
 const TEXT_MIME_BY_EXTENSION: Record<string, string> = {
@@ -20,11 +21,18 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
 
 export function extractAgentFileAttachments(rawContent: string): AgentFileExtraction {
   const attachments: Attachment[] = [];
-  const content = rawContent.replace(FILE_BLOCK_PATTERN, (full, rawAttrs: string, rawBody: string) => {
+  let content = rawContent.replace(FILE_BLOCK_PATTERN, (full, rawAttrs: string, rawBody: string) => {
     const attachment = buildAttachmentFromBlock(rawAttrs, rawBody);
     if (!attachment) return full;
     attachments.push(attachment);
     return '';
+  });
+
+  content = content.replace(FILENAME_CODE_BLOCK_PATTERN, (full, rawName: string, rawBody: string) => {
+    const attachment = buildAttachmentFromBlock(`name="${rawName.trim()}"`, rawBody);
+    if (!attachment) return full;
+    attachments.push(attachment);
+    return '\n';
   }).replace(/\n{3,}/g, '\n\n').trim();
 
   return { content, attachments };

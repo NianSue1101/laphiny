@@ -1,4 +1,4 @@
-import { AgentProfileVersion, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, HermesConnection, Room, SquareEvent, SyncConfig, TeamTemplate } from '../types';
+import { AgentProfileVersion, AppPreferences, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, FeedbackConfig, HermesConnection, Room, SquareEvent, SyncConfig, TeamTemplate } from '../types';
 import { getDurableJson, migrateSecureStoreValueToDurable, setDurableJson, getJson, setJson } from './kv';
 
 const CONNECTIONS_KEY = 'laphiny.connections.v1';
@@ -11,6 +11,8 @@ const COLLABORATION_EVENTS_KEY = 'laphiny.collaborationEvents.v1';
 const DELEGATION_TASKS_KEY = 'laphiny.delegationTasks.v1';
 const TEAM_TEMPLATES_KEY = 'laphiny.teamTemplates.v1';
 const PROFILE_VERSIONS_KEY = 'laphiny.profileVersions.v1';
+const APP_PREFERENCES_KEY = 'laphiny.appPreferences.v1';
+const FEEDBACK_CONFIG_KEY = 'laphiny.feedbackConfig.v1';
 
 export async function loadConnections(): Promise<HermesConnection[]> {
   return getJson<HermesConnection[]>(CONNECTIONS_KEY, []);
@@ -105,4 +107,29 @@ export async function loadProfileVersions(): Promise<AgentProfileVersion[]> {
 
 export async function saveProfileVersions(versions: AgentProfileVersion[]): Promise<void> {
   await setDurableJson(PROFILE_VERSIONS_KEY, versions);
+}
+
+export async function loadAppPreferences(): Promise<AppPreferences> {
+  return getJson<AppPreferences>(APP_PREFERENCES_KEY, {
+    themeMode: 'light',
+    fontFamily: 'system',
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export async function saveAppPreferences(preferences: AppPreferences): Promise<void> {
+  await setJson(APP_PREFERENCES_KEY, preferences);
+}
+
+export async function loadFeedbackConfig(): Promise<FeedbackConfig> {
+  return getJson<FeedbackConfig>(FEEDBACK_CONFIG_KEY, {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export async function saveFeedbackConfig(config: FeedbackConfig): Promise<void> {
+  await setJson(FEEDBACK_CONFIG_KEY, config);
 }

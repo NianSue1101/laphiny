@@ -35,6 +35,32 @@ export interface HermesConnection {
   updatedAt: string;
 }
 
+export type AppThemeMode = 'light' | 'dark';
+export type AppFontFamily = 'system' | 'lxgw-wenkai';
+
+export interface AppPreferences {
+  themeMode: AppThemeMode;
+  fontFamily: AppFontFamily;
+  updatedAt: string;
+}
+
+export interface FeedbackConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  updatedAt: string;
+}
+
+export interface FeedbackLogEntry {
+  id: string;
+  source: string;
+  appVersion?: string;
+  platform?: string;
+  summary?: string;
+  diagnostics: unknown;
+  createdAt: string;
+}
+
 export interface RoomMember {
   connectionId: string;
   alias: string;
