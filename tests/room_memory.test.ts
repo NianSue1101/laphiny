@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { applyMemoryCapsuleToRoomGrowth, formatRoomGrowthForPrompt, summarizeRoomGrowth } from '../src/lib/room_growth';
+import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText, formatRoomGrowthForPrompt, stripRoomStatePatchBlocks, summarizeRoomGrowth } from '../src/lib/room_growth';
 import { formatRoomMemoryForPrompt, parseRoomMemoryResponse, summarizeRoomMemory } from '../src/lib/room_memory';
 import type { Room, RoomMemoryCapsule } from '../src/types';
 
@@ -58,5 +58,40 @@ describe('room growth layer', () => {
     assert.equal(growth.blackboardItems?.length, 2);
     assert.match(formatRoomGrowthForPrompt(nextRoom), /Soul-native/);
     assert.equal(summarizeRoomGrowth(nextRoom).level, 'settled');
+  });
+
+  it('applies agent room-state patches into knowledge, blackboard, and decisions', () => {
+    const now = '2026-06-29T00:00:00.000Z';
+    const room: Room = {
+      id: 'room_1',
+      name: '小说创作',
+      kind: 'group',
+      members: [],
+      sessionIds: {},
+      sessionKey: 'session',
+      blackboardItems: [{ id: 'bb_1', text: '补充第七卷框架', authorName: 'Flor', status: 'open', createdAt: now, updatedAt: now }],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const reply = [
+      '这一轮我已经定下第七卷框架。',
+      '```laphiny-room-state',
+      JSON.stringify({
+        knowledge: [{ title: '第七卷目标', body: '确定第七卷大纲并进入第一章写作', tags: ['novel', 'goal'] }],
+        blackboard: [{ text: '等待用户确认后开始第一章', status: 'pinned' }],
+        decisions: [{ title: '第七卷框架定稿', rationale: 'Flor 与 Purmihya 已完成互审' }],
+        resolveBlackboard: ['补充第七卷框架'],
+      }),
+      '```',
+    ].join('\n');
+
+    const applied = applyRoomStatePatchFromText(room, reply, 'Purmihya', now, (prefix) => `${prefix}_new`);
+    assert.ok(applied);
+    assert.equal(applied.counts.knowledge, 1);
+    assert.equal(applied.counts.blackboard, 1);
+    assert.equal(applied.counts.decisions, 1);
+    assert.equal(applied.counts.resolvedBlackboard, 1);
+    assert.equal(applied.patch.blackboardItems?.find((item) => item.id === 'bb_1')?.status, 'resolved');
+    assert.doesNotMatch(stripRoomStatePatchBlocks(reply), /laphiny-room-state/);
   });
 });

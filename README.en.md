@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.22.0](#what-is-new-in-v0220)
 - [What Is New In v0.20.0](#what-is-new-in-v0200)
 - [What Is New In v0.14.1](#what-is-new-in-v0141)
 - [What Is New In v0.14.0](#what-is-new-in-v0140)
@@ -83,12 +84,14 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Delegation quality gates and maximum depth limits
 - Collaboration rituals: `/council`, `/redteam`, `/review`, `/retro`
 - Goal mode with review rounds and notifications only after automatic completion or stop
+- Agent room-state interface: agents can emit `laphiny-room-state` blocks that Laphiny writes into the knowledge base, blackboard, and decision records
 
 ### Room Growth Layer
 
 - Room knowledge base for stable facts, user preferences, project constraints, and handoff notes
 - Collaboration blackboard for open questions, next actions, and pinned temporary focus
 - Decision records for confirmed tradeoffs and boundaries, with superseded decisions kept separate
+- Agents can submit structured state patches, so they can move room goals forward instead of leaving every update as plain chat text
 - Memory sediment confirmation: agents produce drafts first, and the user confirms them before they enter long-term room context
 - Soul relation graph based on delegation, completion, and mutual references
 - The growth layer is injected into later prompts, so a room can move from "newly convened" to "stable collaboration" over time
@@ -132,6 +135,16 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.22.0
+
+- Added the `laphiny-room-state` Agent-to-room interface for writing stable knowledge, blackboard items, decisions, and resolved items back into the room growth layer
+- Goal mode prompts now explicitly read the room growth layer and require the lead agent to emit state patches when the goal advances
+- Shared group history prompts now show how many visible history items are injected and direct agents to older room memory/growth context when history is clipped
+- Fixed 120-second request timeouts being mislabeled as manual stops; goal requests now allow up to 240 seconds, regular chat up to 180 seconds
+- Diagnostic finding: the novel-writing room had 52 messages while chat requests showed only 2/3 prompt messages because shared history is packed into one prompt message; the new prompt text makes this explicit and improves continuity
 
 ---
 

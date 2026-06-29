@@ -1,7 +1,7 @@
 import { formatAgentProfileForPrompt } from '../lib/agent_profile';
 import { buildAgentFilePromptAppendix } from '../lib/agent_files';
 import { buildHermesUserContent } from '../lib/payload';
-import { formatRoomGrowthForPrompt } from '../lib/room_growth';
+import { formatRoomGrowthForPrompt, formatRoomStatePatchProtocolPrompt } from '../lib/room_growth';
 import { formatRoomMemoryForPrompt } from '../lib/room_memory';
 import { buildRoleplaySystemAppendix } from '../lib/roleplay';
 import { formatRoleplayArchiveForPrompt, getRoomModePrompt } from '../lib/stage4_plus';
@@ -35,6 +35,8 @@ export function buildSummaryMessages(
         '',
         '当前房间成长层：',
         formatRoomGrowthForPrompt(room),
+        '',
+        formatRoomStatePatchProtocolPrompt(),
         '',
         '当前可协作成员公开卡片：',
         buildMemberCapabilityGuide(room, member, connections),
@@ -84,6 +86,8 @@ export function buildChatHistory(
           '',
           '当前房间成长层：',
           formatRoomGrowthForPrompt(room),
+          '',
+          formatRoomStatePatchProtocolPrompt(),
         ].join('\n'),
       },
       ...history,
@@ -175,6 +179,7 @@ export function buildChatHistoryForDelegation(
 }
 
 export function buildGroupSystemPrompt(room: Room, member: RoomMember, connections: HermesConnection[]): string {
+  const growthContext = formatRoomGrowthForPrompt(room);
   return [
     `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。`,
     '',
@@ -191,7 +196,9 @@ export function buildGroupSystemPrompt(room: Room, member: RoomMember, connectio
     formatRoomMemoryForPrompt(room.memoryCapsule),
     '',
     '当前房间成长层：',
-    formatRoomGrowthForPrompt(room),
+    growthContext,
+    '',
+    formatRoomStatePatchProtocolPrompt(),
     '',
     '当前可协作成员公开卡片：',
     buildMemberCapabilityGuide(room, member, connections),
@@ -204,6 +211,7 @@ export function buildGroupSystemPrompt(room: Room, member: RoomMember, connectio
 }
 
 export function buildDelegationSystemPrompt(room: Room, member: RoomMember, delegatedFrom: string, connections: HermesConnection[]): string {
+  const growthContext = formatRoomGrowthForPrompt(room);
   return [
     `你正在 Laphiny 群聊「${room.name}」中，你是「${member.alias}」。`,
     `${delegatedFrom} 在上一条回复中把一个子任务委托给你。`,
@@ -221,7 +229,9 @@ export function buildDelegationSystemPrompt(room: Room, member: RoomMember, dele
     formatRoomMemoryForPrompt(room.memoryCapsule),
     '',
     '当前房间成长层：',
-    formatRoomGrowthForPrompt(room),
+    growthContext,
+    '',
+    formatRoomStatePatchProtocolPrompt(),
     '',
     '当前可协作成员公开卡片：',
     buildMemberCapabilityGuide(room, member, connections),
@@ -274,9 +284,10 @@ export function buildSharedGroupHistoryMessage(
   room: Room,
   contextLimit: number,
 ): HermesChatMessage | null {
-  const transcript = previousMessages
-    .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
-    .slice(-Math.max(1, contextLimit))
+  const visibleMessages = previousMessages
+    .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'));
+  const clippedMessages = visibleMessages.slice(-Math.max(1, contextLimit));
+  const transcript = clippedMessages
     .map((message) => formatGroupHistoryLine(message, room))
     .filter(Boolean)
     .join('\n\n');
@@ -287,6 +298,8 @@ export function buildSharedGroupHistoryMessage(
     role: 'user',
     content: [
       '以下是当前 Laphiny 房间的共享聊天记录，格式为「说话人：内容」。',
+      `本段包含最近 ${clippedMessages.length} 条可见记录；房间共有 ${visibleMessages.length} 条可见记录。`,
+      visibleMessages.length > clippedMessages.length ? '更早的内容应优先参考房间记忆胶囊与房间成长层。' : '这些记录已经覆盖当前房间全部可见历史。',
       '其他 Hermes 成员的发言也在这里，请根据这些记录保持上下文连续。',
       '',
       transcript,

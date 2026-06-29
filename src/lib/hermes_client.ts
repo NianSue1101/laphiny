@@ -155,7 +155,11 @@ export class HermesClient {
     },
   ): Promise<Response> {
     const controller = new AbortController();
-    const timeoutId = options.timeoutMs ? setTimeout(() => controller.abort(), options.timeoutMs) : null;
+    let timeoutFired = false;
+    const timeoutId = options.timeoutMs ? setTimeout(() => {
+      timeoutFired = true;
+      controller.abort();
+    }, options.timeoutMs) : null;
 
     const releaseAbort = options.signal
       ? (() => {
@@ -186,6 +190,11 @@ export class HermesClient {
         body: options.body,
         signal: controller.signal,
       });
+    } catch (error) {
+      if (timeoutFired) {
+        throw new Error(`Hermes request timed out after ${options.timeoutMs}ms`);
+      }
+      throw error;
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       releaseAbort?.();

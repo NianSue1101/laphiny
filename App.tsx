@@ -149,7 +149,7 @@ import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle,
 import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
 import { buildGoalModePrompt, buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
-import { applyMemoryCapsuleToRoomGrowth, summarizeRoomGrowth } from './src/lib/room_growth';
+import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText, stripRoomStatePatchBlocks, summarizeRoomGrowth } from './src/lib/room_growth';
 import { buildRoomMemoryMessages, formatRoomMemoryForPrompt, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
 import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
 import { buildRoomReplyNotification, type RoomReplyNotification } from './src/lib/room_reply_notifications';
@@ -2219,7 +2219,7 @@ export default function App() {
         }, {
           sessionId: room.sessionIds[connection.id],
           sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
-          timeoutMs: 120_000,
+          timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
         })) {
           accumulated += chunk;
@@ -2229,7 +2229,8 @@ export default function App() {
         flushStreamMessage(room.id, placeholder.id);
         const parsedReply = extractAgentReplyArtifacts(accumulated.trim());
         const permissionRequest = applyAlwaysPermissionIfNeeded(parsedReply.permissionRequest);
-        const answer = getAgentReplyFallback({ ...parsedReply, permissionRequest });
+        const rawAnswer = getAgentReplyFallback({ ...parsedReply, permissionRequest });
+        const answer = stripRoomStatePatchBlocks(rawAnswer) || rawAnswer;
         const completedMessage: ChatMessage = {
           ...placeholder,
           content: answer,
@@ -2248,6 +2249,7 @@ export default function App() {
           status: 'sent',
         });
         if (permissionRequest?.status !== 'pending') {
+          applyAgentRoomStatePatch(room.id, reply.member.alias, rawAnswer, completedMessage.id);
           applyGoalAssistantResult(dispatchRoom, reply, completedMessage, answer);
         }
         if (permissionRequest?.status === 'always') {
@@ -2559,6 +2561,36 @@ export default function App() {
     setRooms((current) => current.map((room) => (
       room.id === roomId ? { ...room, ...patch, updatedAt: now } : room
     )));
+  }
+
+  function applyAgentRoomStatePatch(roomId: string, authorName: string, text: string, sourceMessageId?: string) {
+    const now = new Date().toISOString();
+    const room = roomsRef.current.find((item) => item.id === roomId);
+    if (!room) return;
+    const application = applyRoomStatePatchFromText(room, text, authorName, now, makeId);
+    if (!application) return;
+    updateRoomById(roomId, application.patch);
+    const appliedCounts = application.counts;
+    const total = appliedCounts.knowledge + appliedCounts.blackboard + appliedCounts.decisions + appliedCounts.resolvedBlackboard;
+    if (total <= 0) return;
+    appendCollaborationEvent({
+      kind: 'memory_updated',
+      roomId,
+      roomName: room?.name ?? '未知房间',
+      source: authorName,
+      messageId: sourceMessageId,
+      title: `${authorName} 更新房间状态`,
+      body: `知识 ${appliedCounts.knowledge} · 黑板 ${appliedCounts.blackboard} · 决策 ${appliedCounts.decisions} · 已解决 ${appliedCounts.resolvedBlackboard}`,
+    });
+    appendDiagnosticLog({
+      level: 'success',
+      category: 'chat',
+      title: 'Agent 房间状态写入完成',
+      message: `${authorName} 通过 laphiny-room-state 更新了房间状态。`,
+      roomId,
+      roomName: room?.name,
+      meta: appliedCounts,
+    });
   }
 
   function renameSelectedRoom() {
