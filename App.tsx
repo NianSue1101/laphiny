@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   AppState,
   AppStateStatus,
+  BackHandler,
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -15,14 +16,17 @@ import {
   ScrollView,
   StyleSheet,
   StatusBar as NativeStatusBar,
-  Text,
-  TextInput,
+  Text as NativeText,
+  TextInput as NativeTextInput,
   TouchableOpacity,
+  type TextInputProps,
+  type TextProps,
   useWindowDimensions,
   View,
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
+import { useFonts } from 'expo-font';
 
 import {
   APP_VERSION,
@@ -120,6 +124,18 @@ Notifications.setNotificationHandler({
   }),
 });
 
+let appTextFontFamily: string | undefined;
+
+function Text(props: TextProps) {
+  const style = appTextFontFamily ? [props.style, { fontFamily: appTextFontFamily }] : props.style;
+  return <NativeText {...props} style={style} />;
+}
+
+function TextInput(props: TextInputProps) {
+  const style = appTextFontFamily ? [props.style, { fontFamily: appTextFontFamily }] : props.style;
+  return <NativeTextInput {...props} style={style} />;
+}
+
 const NOTIFICATION_CHANNEL_ID = 'laphiny-agent-replies';
 
 import { pickDocuments, pickImages } from './src/lib/attachments';
@@ -139,21 +155,26 @@ import { ROOM_MODES, STARTER_ROOM_TEMPLATES, buildOnboardingSteps, buildRoleplay
 import { getSlashCommandSuggestions, getUxCommandKindLabel, UX_SLASH_COMMANDS, type UXCommandDefinition } from './src/lib/ux';
 import { LaphinySyncClient } from './src/lib/sync_client';
 import { buildSyncConflictReport, type SyncConflictReport } from './src/lib/sync_conflicts';
+import { LaphinyFeedbackClient } from './src/lib/feedback_client';
 import {
+  loadAppPreferences,
   loadConnections,
   loadCollaborationEvents,
   loadDelegationTasks,
   loadDiagnosticLogs,
+  loadFeedbackConfig,
   loadProfileVersions,
   loadMessages,
   loadRooms,
   loadTeamTemplates,
   loadSquareEvents,
   loadSyncConfig,
+  saveAppPreferences,
   saveConnections,
   saveCollaborationEvents,
   saveDelegationTasks,
   saveDiagnosticLogs,
+  saveFeedbackConfig,
   saveProfileVersions,
   saveMessages,
   saveRooms,
@@ -162,7 +183,7 @@ import {
   saveSyncConfig,
 } from './src/storage/repository';
 import { describeStorageBackend } from './src/storage/kv';
-import { AgentPermissionDecision, AgentPermissionRequest, AgentProfile, AgentProfileVersion, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, GoalSession, GoalStatusSignal, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
+import { AgentPermissionDecision, AgentPermissionRequest, AgentProfile, AgentProfileVersion, AppPreferences, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, FeedbackConfig, FeedbackLogEntry, GoalSession, GoalStatusSignal, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
 
 const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
 const MAX_GOAL_REVIEW_ROUNDS = 3;
@@ -185,6 +206,12 @@ export default function App() {
   const [delegationTasks, setDelegationTasks] = useState<DelegationTask[]>([]);
   const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>([]);
   const [profileVersions, setProfileVersions] = useState<AgentProfileVersion[]>([]);
+  const [appPreferences, setAppPreferences] = useState<AppPreferences>({ themeMode: 'light', fontFamily: 'system', updatedAt: new Date().toISOString() });
+  const [feedbackConfig, setFeedbackConfig] = useState<FeedbackConfig>({ enabled: false, baseUrl: '', apiKey: '', updatedAt: new Date().toISOString() });
+  const [feedbackLogs, setFeedbackLogs] = useState<FeedbackLogEntry[]>([]);
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [expandedMobileRoomId, setExpandedMobileRoomId] = useState<string | null>(null);
+  const [, forceFontRender] = useState(0);
   const [storageBackend, setStorageBackend] = useState<StorageBackendInfo | null>(null);
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ enabled: false, baseUrl: '', apiKey: '', updatedAt: new Date().toISOString() });
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -228,6 +255,9 @@ export default function App() {
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [roomReplyNotification, setRoomReplyNotification] = useState<RoomReplyNotification | null>(null);
   const [mobileFocusedRoomId, setMobileFocusedRoomId] = useState<string | null>(null);
+  const [fontsLoaded] = useFonts({
+    LXGWWenKai: require('./assets/fonts/LXGWWenKai-Regular.ttf'),
+  });
   const hydratedRef = useRef(false);
   const messageScrollRef = useRef<FlatList<ChatMessage> | null>(null);
   const messageListAtBottomRef = useRef(true);
@@ -250,6 +280,8 @@ export default function App() {
   const pollingSquareEventsRef = useRef(false);
   const { width, height } = useWindowDimensions();
   const maxWindowHeightRef = useRef(height);
+  const isDarkMode = appPreferences.themeMode === 'dark';
+  const selectedFontFamily = appPreferences.fontFamily === 'lxgw-wenkai' && fontsLoaded ? 'LXGWWenKai' : undefined;
 
   selectedRoomIdRef.current = selectedRoomId;
   tabRef.current = tab;
@@ -287,6 +319,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    appTextFontFamily = selectedFontFamily;
+    forceFontRender((value) => value + 1);
+  }, [selectedFontFamily]);
+
+  useEffect(() => {
     let mounted = true;
 
     Promise.all([
@@ -294,6 +331,8 @@ export default function App() {
       loadRooms(),
       loadMessages(),
       loadSyncConfig(),
+      loadAppPreferences(),
+      loadFeedbackConfig(),
       loadSquareEvents(),
       loadDiagnosticLogs(),
       loadCollaborationEvents(),
@@ -307,6 +346,8 @@ export default function App() {
         loadedRooms,
         loadedMessages,
         loadedSyncConfig,
+        loadedAppPreferences,
+        loadedFeedbackConfig,
         loadedSquareEvents,
         loadedDiagnosticLogs,
         loadedCollaborationEvents,
@@ -320,6 +361,8 @@ export default function App() {
         setRooms(loadedRooms);
         setMessagesByRoom(loadedMessages);
         setSyncConfig(loadedSyncConfig);
+        setAppPreferences(loadedAppPreferences);
+        setFeedbackConfig(loadedFeedbackConfig);
         setSquareEvents(loadedSquareEvents);
         setDiagnosticLogs(sanitizeDiagnosticLogs(loadedDiagnosticLogs));
         setCollaborationEvents(loadedCollaborationEvents.slice(-500));
@@ -364,6 +407,14 @@ export default function App() {
   useEffect(() => {
     if (hydratedRef.current) void saveSyncConfig(syncConfig);
   }, [syncConfig]);
+
+  useEffect(() => {
+    if (hydratedRef.current) void saveAppPreferences(appPreferences);
+  }, [appPreferences]);
+
+  useEffect(() => {
+    if (hydratedRef.current) void saveFeedbackConfig(feedbackConfig);
+  }, [feedbackConfig]);
 
   useEffect(() => {
     if (hydratedRef.current) void saveSquareEvents(squareEvents);
@@ -539,6 +590,27 @@ export default function App() {
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
   const groupMemberDraftSet = useMemo(() => new Set(groupMemberDraftIds), [groupMemberDraftIds]);
   const slashCommandSuggestions = useMemo(() => getSlashCommandSuggestions(draft), [draft]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (mobileFocusedChat) {
+        leaveFocusedChat();
+        return true;
+      }
+      if (expandedMobileRoomId) {
+        setExpandedMobileRoomId(null);
+        return true;
+      }
+      if (tab !== 'chat') {
+        setTab('chat');
+        return true;
+      }
+      return false;
+    });
+    return () => subscription.remove();
+  }, [expandedMobileRoomId, mobileFocusedChat, tab]);
+
   const healthSummary = useMemo(() => {
     let ok = 0;
     let error = 0;
@@ -1347,6 +1419,7 @@ export default function App() {
 
   function openFocusedChatRoom(roomId: string) {
     setSelectedRoomId(roomId);
+    setExpandedMobileRoomId(null);
     setTab('chat');
     if (!isWideLayout) {
       setMobileFocusedRoomId(roomId);
@@ -1368,6 +1441,39 @@ export default function App() {
   function leaveFocusedChat() {
     setMobileFocusedRoomId(null);
     Keyboard.dismiss();
+  }
+
+  function updateRoomInline(roomId: string, patch: Partial<Room>) {
+    updateRoomById(roomId, patch);
+    if (selectedRoomId !== roomId) {
+      setSelectedRoomId(roomId);
+    }
+  }
+
+  function adjustRoomContextLimit(room: Room, delta: number) {
+    const currentLimit = room.contextLimit ?? DEFAULT_CONTEXT_LIMIT;
+    updateRoomInline(room.id, { contextLimit: Math.max(4, Math.min(80, currentLimit + delta)) });
+  }
+
+  function toggleRoomMemberEnabledInline(room: Room, member: RoomMember) {
+    updateRoomInline(room.id, {
+      members: room.members.map((item) => (
+        item.connectionId === member.connectionId ? { ...item, enabled: !item.enabled } : item
+      )),
+    });
+  }
+
+  function applyRoomModeInline(room: Room, mode: RoomModeId) {
+    const definition = getRoomModeDefinition(mode);
+    updateRoomInline(room.id, {
+      mode,
+      defaultCollaborationMode: definition.defaultCollaborationMode,
+      autoDelegationEnabled: definition.autoDelegationEnabled,
+      maxDelegationDepth: room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH,
+      roleplay: definition.roleplayEnabled
+        ? { ...(room.roleplay ?? makeDefaultRoleplayConfig()), enabled: true, updatedAt: new Date().toISOString() }
+        : room.roleplay ? { ...room.roleplay, enabled: false, updatedAt: new Date().toISOString() } : room.roleplay,
+    });
   }
 
   async function prepareAgentNotifications(): Promise<boolean> {
@@ -1460,6 +1566,29 @@ export default function App() {
       attachments: fileReply.attachments,
       permissionRequest: permissionReply.request,
     };
+  }
+
+  function getRenderableMessageArtifacts(message: ChatMessage): { content: string; attachments: Attachment[] } {
+    const currentAttachments = message.attachments ?? [];
+    if (message.authorId === 'user') return { content: message.content, attachments: currentAttachments };
+    const fileReply = extractAgentFileAttachments(message.content);
+    if (!fileReply.attachments.length) return { content: message.content, attachments: currentAttachments };
+    return {
+      content: fileReply.content || (currentAttachments.length || fileReply.attachments.length ? '已生成附件' : message.content),
+      attachments: mergeRenderableAttachments(currentAttachments, fileReply.attachments),
+    };
+  }
+
+  function mergeRenderableAttachments(current: Attachment[], extracted: Attachment[]): Attachment[] {
+    const seen = new Set(current.map((attachment) => `${attachment.name}:${attachment.size}:${attachment.kind}`));
+    const merged = [...current];
+    for (const attachment of extracted) {
+      const key = `${attachment.name}:${attachment.size}:${attachment.kind}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(attachment);
+    }
+    return merged;
   }
 
   function getAgentReplyFallback(parsedReply: { content: string; attachments: Attachment[]; permissionRequest?: AgentPermissionRequest }) {
@@ -3385,6 +3514,88 @@ ${content}`)]);
     }
   }
 
+  function updateAppPreferences(patch: Partial<AppPreferences>) {
+    setAppPreferences((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }));
+  }
+
+  function makeFeedbackClient(): LaphinyFeedbackClient | null {
+    if (!feedbackConfig.enabled || !feedbackConfig.baseUrl.trim()) return null;
+    return new LaphinyFeedbackClient(feedbackConfig);
+  }
+
+  function buildSanitizedDiagnosticObject(): Record<string, unknown> {
+    return JSON.parse(buildDiagnosticBundle({
+      connections,
+      rooms,
+      messagesByRoom,
+      diagnosticLogs,
+      appVersion: APP_VERSION,
+      storage: storageBackend ? { ...storageBackend, messageBytes: storageSummary.messageBytes } : { messageBytes: storageSummary.messageBytes },
+      runtime: {
+        platform: Platform.OS,
+        online: networkOnline,
+        serviceWorkerStatus,
+        pwaInstalled,
+        width,
+        layoutMode,
+      },
+    })) as Record<string, unknown>;
+  }
+
+  async function uploadFeedbackLogs() {
+    const client = makeFeedbackClient();
+    if (!client) {
+      showNotice('反馈后端未启用', '请先填写反馈后端地址并启用。');
+      return;
+    }
+    setFeedbackBusy(true);
+    try {
+      const entry = await client.uploadFeedback({
+        source: 'Laphiny App',
+        appVersion: APP_VERSION,
+        platform: Platform.OS,
+        summary: `logs=${diagnosticLogs.length}, rooms=${rooms.length}, connections=${connections.length}`,
+        diagnostics: buildSanitizedDiagnosticObject(),
+      }, { timeoutMs: 20_000 });
+      setFeedbackLogs((current) => [entry, ...current.filter((item) => item.id !== entry.id)].slice(0, 30));
+      appendDiagnosticLog({
+        level: 'success',
+        category: 'sync',
+        title: '反馈日志已上传',
+        message: entry.id,
+      });
+      showNotice('反馈日志已上传', entry.id);
+    } catch (error) {
+      appendDiagnosticLog({
+        level: 'error',
+        category: 'sync',
+        title: '反馈日志上传失败',
+        message: getErrorMessage(error),
+      });
+      showNotice('反馈上传失败', getErrorMessage(error));
+    } finally {
+      setFeedbackBusy(false);
+    }
+  }
+
+  async function pullFeedbackLogs() {
+    const client = makeFeedbackClient();
+    if (!client) {
+      showNotice('反馈后端未启用', '请先填写反馈后端地址并启用。');
+      return;
+    }
+    setFeedbackBusy(true);
+    try {
+      const entries = await client.listFeedback({ limit: 30, timeoutMs: 20_000 });
+      setFeedbackLogs(entries);
+      showNotice('反馈日志已拉取', `共 ${entries.length} 条。`);
+    } catch (error) {
+      showNotice('反馈拉取失败', getErrorMessage(error));
+    } finally {
+      setFeedbackBusy(false);
+    }
+  }
+
   function createDelegationTask(input: Omit<DelegationTask, 'id' | 'status' | 'createdAt' | 'updatedAt'>): DelegationTask {
     const now = new Date().toISOString();
     const task: DelegationTask = {
@@ -3419,22 +3630,7 @@ ${content}`)]);
   }
 
   async function copyDiagnosticBundle() {
-    const text = buildDiagnosticBundle({
-      connections,
-      rooms,
-      messagesByRoom,
-      diagnosticLogs,
-      appVersion: APP_VERSION,
-      storage: storageBackend ? { ...storageBackend, messageBytes: storageSummary.messageBytes } : { messageBytes: storageSummary.messageBytes },
-      runtime: {
-        platform: Platform.OS,
-        online: networkOnline,
-        serviceWorkerStatus,
-        pwaInstalled,
-        width,
-        layoutMode,
-      },
-    });
+    const text = JSON.stringify(buildSanitizedDiagnosticObject(), null, 2);
     await Clipboard.setStringAsync(text);
     showNotice('诊断信息已复制', '已复制脱敏后的连接、房间、失败消息和最近诊断日志。');
   }
@@ -3840,14 +4036,14 @@ ${content}`)]);
   }
 
   return (
-    <SafeAreaView style={styles.shell}>
-      <ExpoStatusBar style="dark" />
+    <SafeAreaView style={[styles.shell, isDarkMode && styles.shellDark]}>
+      <ExpoStatusBar style={isDarkMode ? 'light' : 'dark'} />
       {renderRoomReplyNotification()}
       {!mobileFocusedChat ? (
-      <View style={styles.header}>
+      <View style={[styles.header, isDarkMode && styles.headerDark]}>
         <View style={styles.brandBlock}>
-          <Text style={styles.title}>Laphiny</Text>
-          <Text style={styles.subtitle}>多 Hermes 协作聊天</Text>
+          <Text style={[styles.title, isDarkMode && styles.titleDark]}>Laphiny</Text>
+          <Text style={[styles.subtitle, isDarkMode && styles.subtitleDark]}>多 Hermes 协作聊天</Text>
         </View>
         <View style={styles.headerStats}>
           <View style={styles.statPill}>
@@ -3937,14 +4133,16 @@ ${content}`)]);
   }
 
   function renderMessageBubble(message: ChatMessage) {
+    const renderable = getRenderableMessageArtifacts(message);
     const displayContent = message.authorId === 'user'
-      ? message.content
-      : normalizeHermesReplyText(message.content);
+      ? renderable.content
+      : normalizeHermesReplyText(renderable.content);
 
     return (
       <View
         style={[
           styles.messageBubble,
+          isDarkMode && styles.messageBubbleDark,
           getMessageBubbleStyle(message),
           isWideLayout && styles.messageBubbleWide,
         ]}
@@ -3967,9 +4165,9 @@ ${content}`)]);
           </Text>
         </View>
         <MarkdownText content={displayContent} />
-        {message.attachments?.length ? (
+        {renderable.attachments.length ? (
           <View style={styles.attachments}>
-            {message.attachments.map((attachment) => (
+            {renderable.attachments.map((attachment) => (
               <AttachmentPreview
                 key={attachment.id}
                 attachment={attachment}
@@ -4050,10 +4248,10 @@ ${content}`)]);
     }
 
     return (
-      <View style={[styles.content, isWideLayout && styles.chatDesktop, focused && styles.focusedChatContent]}>
+        <View style={[styles.content, isDarkMode && styles.contentDark, isWideLayout && styles.chatDesktop, focused && styles.focusedChatContent]}>
         {isWideLayout ? renderChatSidebar() : focused ? null : renderRoomRail()}
         <KeyboardAvoidingView
-          style={[styles.chatMain, focused && styles.focusedChatMain]}
+          style={[styles.chatMain, focused && styles.focusedChatMain, focused && isDarkMode && styles.focusedChatMainDark]}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
           enabled={keyboardAvoidanceEnabled}
@@ -4181,7 +4379,7 @@ ${content}`)]);
           renderItem={({ item }) => renderMessageBubble(item)}
         />
 
-        <View style={[styles.composer, androidKeyboardLift > 0 && { marginBottom: androidKeyboardLift }]}>
+        <View style={[styles.composer, isDarkMode && styles.composerDark, androidKeyboardLift > 0 && { marginBottom: androidKeyboardLift }]}>
           {selectedRoom?.kind === 'group' ? (
             <View style={styles.mentionBar}>
               <Text style={styles.mentionHint}>本次回复</Text>
@@ -4230,7 +4428,7 @@ ${content}`)]);
             <IconButton icon="image-outline" label="添加图片" onPress={attachImages} disabled={!selectedRoom || sending} />
             <IconButton icon="document-attach-outline" label="添加文件" onPress={attachDocuments} disabled={!selectedRoom || sending} />
             <TextInput
-              style={styles.composerInput}
+              style={[styles.composerInput, isDarkMode && styles.inputDark]}
               placeholder={selectedRoom?.kind === 'group' ? (selectedRoom.roleplay?.enabled ? '输入角色行动，或 /rp /scene /ooc' : '@成员名、@all 或 /council 后输入消息') : '输入消息'}
               placeholderTextColor="#9ca3af"
               multiline
@@ -4254,14 +4452,14 @@ ${content}`)]);
   function renderFocusedChatHeader() {
     if (!selectedRoom) return null;
     return (
-      <View style={styles.focusedChatHeader}>
+      <View style={[styles.focusedChatHeader, isDarkMode && styles.focusedChatHeaderDark]}>
         <TouchableOpacity style={styles.focusedBackButton} onPress={leaveFocusedChat} accessibilityRole="button">
-          <Ionicons name="chevron-back" size={22} color="#111827" />
-          <Text style={styles.focusedBackText}>返回</Text>
+          <Ionicons name="chevron-back" size={22} color={isDarkMode ? '#e5e7eb' : '#111827'} />
+          <Text style={[styles.focusedBackText, isDarkMode && styles.titleDark]}>返回</Text>
         </TouchableOpacity>
         <View style={styles.focusedChatTitleBlock}>
-          <Text style={styles.focusedChatTitle} numberOfLines={1}>{selectedRoom.name}</Text>
-          <Text style={styles.focusedChatMeta} numberOfLines={1}>
+          <Text style={[styles.focusedChatTitle, isDarkMode && styles.titleDark]} numberOfLines={1}>{selectedRoom.name}</Text>
+          <Text style={[styles.focusedChatMeta, isDarkMode && styles.subtitleDark]} numberOfLines={1}>
             {selectedRoom.kind === 'group' ? '群聊' : '单聊'} · {selectedRoom.members.filter((member) => member.enabled).length}/{selectedRoom.members.length}
           </Text>
         </View>
@@ -4274,10 +4472,10 @@ ${content}`)]);
       <ScrollView style={styles.mobileRoomPicker} contentContainerStyle={styles.mobileRoomPickerContent}>
         <View style={styles.mobileRoomPickerHeader}>
           <View>
-            <Text style={styles.sectionTitle}>选择房间</Text>
-            <Text style={styles.help}>进入后会切换到专注聊天界面；成员、模式和工具请先在房间页调整。</Text>
+            <Text style={[styles.sectionTitle, isDarkMode && styles.titleDark]}>选择房间</Text>
+            <Text style={[styles.help, isDarkMode && styles.subtitleDark]}>点“调整”可直接展开当前房间，修改名称、模式、成员和头像；点卡片或“进入”开始聊天。</Text>
           </View>
-          <SecondaryButton icon="albums-outline" label="房间设置" onPress={() => setTab('rooms')} />
+          <SecondaryButton icon="add-circle-outline" label="新房间" onPress={() => setTab('rooms')} />
         </View>
         {rooms.length === 0 ? (
           <EmptyState
@@ -4292,31 +4490,96 @@ ${content}`)]);
           const roomMessages = messagesByRoom[room.id] ?? [];
           const lastMessage = roomMessages[roomMessages.length - 1];
           const unread = unreadByRoom[room.id] ?? 0;
+          const expanded = expandedMobileRoomId === room.id;
           return (
-            <TouchableOpacity
+            <View
               key={room.id}
-              style={styles.mobileRoomCard}
-              activeOpacity={0.88}
-              onPress={() => openFocusedChatRoom(room.id)}
+              style={[styles.mobileRoomCard, isDarkMode && styles.mobileRoomCardDark, expanded && styles.mobileRoomCardExpanded]}
             >
-              <View style={styles.mobileRoomCardTop}>
-                <View style={styles.squareEventSource}>
-                  <Ionicons name={room.kind === 'group' ? 'people-outline' : 'person-outline'} size={17} color="#2563eb" />
-                  <Text style={styles.cardTitle} numberOfLines={1}>{room.name}</Text>
+              <TouchableOpacity activeOpacity={0.88} onPress={() => openFocusedChatRoom(room.id)}>
+                <View style={styles.mobileRoomCardTop}>
+                  <View style={styles.squareEventSource}>
+                    <Ionicons name={room.kind === 'group' ? 'people-outline' : 'person-outline'} size={17} color="#2563eb" />
+                    <Text style={styles.cardTitle} numberOfLines={1}>{room.name}</Text>
+                  </View>
+                  {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : null}
                 </View>
-                {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : null}
-              </View>
-              <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
-                {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
-              </Text>
+                <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
+                  {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
+                </Text>
+              </TouchableOpacity>
               <View style={styles.mobileRoomCardFooter}>
-                <Text style={styles.help}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes</Text>
-                <Ionicons name="chevron-forward" size={17} color="#9ca3af" />
+                <Text style={styles.help}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes · 上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
+                <View style={styles.buttonRowCompact}>
+                  <MiniButton
+                    icon={expanded ? 'chevron-up-outline' : 'options-outline'}
+                    label={expanded ? '收起' : '调整'}
+                    onPress={() => setExpandedMobileRoomId((current) => current === room.id ? null : room.id)}
+                  />
+                  <MiniButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => openFocusedChatRoom(room.id)} />
+                </View>
               </View>
-            </TouchableOpacity>
+              {expanded ? renderMobileRoomInlineSettings(room) : null}
+            </View>
           );
         })}
       </ScrollView>
+    );
+  }
+
+  function renderMobileRoomInlineSettings(room: Room) {
+    return (
+      <View style={styles.mobileRoomSettings}>
+        <Text style={styles.panelLabel}>房间调整</Text>
+        <TextInput
+          style={styles.input}
+          value={room.name}
+          onChangeText={(name) => updateRoomInline(room.id, { name })}
+          placeholder="房间名称"
+        />
+        <View style={styles.inlineFormRow}>
+          <Text style={styles.help}>上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT} 条</Text>
+          <View style={styles.stepper}>
+            <MiniButton icon="remove-outline" label="-4" onPress={() => adjustRoomContextLimit(room, -4)} />
+            <MiniButton icon="add-outline" label="+4" onPress={() => adjustRoomContextLimit(room, 4)} />
+          </View>
+        </View>
+        {room.kind === 'group' ? (
+          <>
+            <Text style={styles.panelLabel}>房间模式</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modePillRow}>
+              {ROOM_MODES.map((mode) => (
+                <TouchableOpacity
+                  key={mode.id}
+                  style={[styles.modePill, room.mode === mode.id && styles.modePillActive]}
+                  onPress={() => applyRoomModeInline(room, mode.id)}
+                >
+                  <Text style={[styles.modePillText, room.mode === mode.id && styles.modePillTextActive]}>{mode.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </>
+        ) : null}
+        <Text style={styles.panelLabel}>成员</Text>
+        <View style={styles.memberChips}>
+          {room.members.map((member) => {
+            const connection = connectionById.get(member.connectionId);
+            return (
+              <View key={member.connectionId} style={styles.mobileMemberManageChip}>
+                <TouchableOpacity onPress={() => toggleRoomMemberEnabledInline(room, member)} disabled={room.kind !== 'group'}>
+                  <AgentBadge alias={member.alias} active={member.enabled} imageUri={connection?.avatarUri} />
+                </TouchableOpacity>
+                {connection ? (
+                  <TouchableOpacity style={styles.inlineIconButton} onPress={() => chooseConnectionAvatar(connection)}>
+                    <Ionicons name="image-outline" size={14} color="#2563eb" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            );
+          })}
+        </View>
+        <Text style={styles.help}>点成员可启用/停用；图片按钮可给 Agent 更换头像。更细的成员 alias 和连接信息仍在“连接”页维护。</Text>
+      </View>
     );
   }
 
@@ -5041,6 +5304,43 @@ ${content}`)]);
         <View style={styles.syncPanel}>
           <View style={styles.syncHeader}>
             <View style={styles.syncHeaderText}>
+              <Text style={styles.cardTitle}>个性化</Text>
+              <Text style={styles.help}>夜间模式、字体和 Agent 头像会保存在当前设备；头像也可以在聊天选择页展开房间后快速替换。</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.syncToggle, appPreferences.themeMode === 'dark' && styles.syncToggleOn]}
+              onPress={() => updateAppPreferences({ themeMode: appPreferences.themeMode === 'dark' ? 'light' : 'dark' })}
+            >
+              <Text style={[styles.syncToggleText, appPreferences.themeMode === 'dark' && styles.syncToggleTextOn]}>
+                {appPreferences.themeMode === 'dark' ? '夜间模式' : '日间模式'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.panelLabel}>字体</Text>
+          <View style={styles.segmentedRow}>
+            <TouchableOpacity
+              style={[styles.segmentedOption, appPreferences.fontFamily === 'system' && styles.segmentedOptionActive]}
+              onPress={() => updateAppPreferences({ fontFamily: 'system' })}
+            >
+              <Ionicons name="phone-portrait-outline" size={15} color={appPreferences.fontFamily === 'system' ? '#ffffff' : '#4b5563'} />
+              <Text style={[styles.segmentedOptionText, appPreferences.fontFamily === 'system' && styles.segmentedOptionTextActive]}>系统默认</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.segmentedOption, appPreferences.fontFamily === 'lxgw-wenkai' && styles.segmentedOptionActive]}
+              onPress={() => updateAppPreferences({ fontFamily: 'lxgw-wenkai' })}
+            >
+              <Ionicons name="text-outline" size={15} color={appPreferences.fontFamily === 'lxgw-wenkai' ? '#ffffff' : '#4b5563'} />
+              <Text style={[styles.segmentedOptionText, appPreferences.fontFamily === 'lxgw-wenkai' && styles.segmentedOptionTextActive]}>LXGW WenKai</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.help}>
+            {appPreferences.fontFamily === 'lxgw-wenkai' && !fontsLoaded ? '字体正在加载，加载完成后会自动应用。' : '后续可以继续扩展更多字体。'}
+          </Text>
+        </View>
+
+        <View style={styles.syncPanel}>
+          <View style={styles.syncHeader}>
+            <View style={styles.syncHeaderText}>
               <Text style={styles.cardTitle}>SQLite 同步后端</Text>
               <Text style={styles.help}>连接自己的轻后端后，可在多设备间共享房间、消息和灵庭事件。</Text>
             </View>
@@ -5086,78 +5386,144 @@ ${content}`)]);
         <View style={styles.syncPanel}>
           <View style={styles.syncHeader}>
             <View style={styles.syncHeaderText}>
-              <Text style={styles.cardTitle}>本地备份 / 恢复</Text>
-              <Text style={styles.help}>导出完整 JSON 文件，或在另一台设备上传合并恢复。备份可能包含 API Key，请只保存在可信位置。</Text>
+              <Text style={styles.cardTitle}>数据、备份与日志</Text>
+              <Text style={styles.help}>把本地备份、脱敏反馈、诊断日志和存储状态放在一起，避免在设置页里来回找。</Text>
             </View>
             <Text style={styles.squareCount}>v5</Text>
           </View>
-          <View style={styles.buttonRow}>
-            <SecondaryButton icon="download-outline" label="导出备份文件" onPress={exportAppBackup} />
-            <SecondaryButton icon="cloud-upload-outline" label="上传备份文件" onPress={importBackupFile} />
-            <SecondaryButton icon="clipboard-outline" label="粘贴恢复" onPress={handlePasteBackup} disabled={!backupPaste.trim()} />
-          </View>
-          <TextInput
-            style={[styles.input, styles.jsonPasteInput]}
-            multiline
-            value={backupPaste}
-            onChangeText={setBackupPaste}
-            placeholder="粘贴 Laphiny 完整备份 JSON，恢复时会合并当前数据。"
-            autoCapitalize="none"
-            textAlignVertical="top"
-          />
-        </View>
 
-        <View style={styles.diagnosticPanel}>
-          <View style={styles.syncHeader}>
-            <View style={styles.syncHeaderText}>
-              <Text style={styles.cardTitle}>诊断日志</Text>
-              <Text style={styles.help}>记录最近的 Hermes 请求、Agent 委托、连接测试、同步和备份恢复结果。复制诊断包时会脱敏 API Key。</Text>
+          <View style={styles.settingsSubsection}>
+            <Text style={styles.panelLabel}>本地备份 / 恢复</Text>
+            <Text style={styles.help}>完整备份可能包含 API Key，请只保存在可信位置；恢复时会合并当前数据。</Text>
+            <View style={styles.buttonRow}>
+              <SecondaryButton icon="download-outline" label="导出备份文件" onPress={exportAppBackup} />
+              <SecondaryButton icon="cloud-upload-outline" label="上传备份文件" onPress={importBackupFile} />
+              <SecondaryButton icon="clipboard-outline" label="粘贴恢复" onPress={handlePasteBackup} disabled={!backupPaste.trim()} />
             </View>
-            <TouchableOpacity
-              style={[styles.syncToggle, diagnosticLogsOpen && styles.syncToggleOn]}
-              onPress={() => setDiagnosticLogsOpen((open) => !open)}
-            >
-              <Text style={[styles.syncToggleText, diagnosticLogsOpen && styles.syncToggleTextOn]}>
-                {diagnosticLogsOpen ? '已展开' : '已收起'}
-              </Text>
-            </TouchableOpacity>
+            <TextInput
+              style={[styles.input, styles.jsonPasteInput]}
+              multiline
+              value={backupPaste}
+              onChangeText={setBackupPaste}
+              placeholder="粘贴 Laphiny 完整备份 JSON，恢复时会合并当前数据。"
+              autoCapitalize="none"
+              textAlignVertical="top"
+            />
           </View>
-          <View style={styles.healthMetricRow}>
-            <HealthMetric label="总数" value={diagnosticSummary.total} tone="unknown" />
-            <HealthMetric label="近 50 错误" value={diagnosticSummary.errors} tone={diagnosticSummary.errors > 0 ? 'error' : 'ok'} />
-            <HealthMetric label="近 50 警告" value={diagnosticSummary.warnings} tone={diagnosticSummary.warnings > 0 ? 'checking' : 'ok'} />
+
+          <View style={styles.settingsDivider} />
+
+          <View style={styles.settingsSubsection}>
+            <View style={styles.syncHeader}>
+              <View style={styles.syncHeaderText}>
+                <Text style={styles.panelLabel}>反馈日志</Text>
+                <Text style={styles.help}>上传脱敏诊断包，不包含 Hermes API Key；服务器端默认端口 8788。</Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.syncToggle, feedbackConfig.enabled && styles.syncToggleOn]}
+                onPress={() => setFeedbackConfig((current) => ({ ...current, enabled: !current.enabled, updatedAt: new Date().toISOString() }))}
+              >
+                <Text style={[styles.syncToggleText, feedbackConfig.enabled && styles.syncToggleTextOn]}>
+                  {feedbackConfig.enabled ? '已启用' : '未启用'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.input}
+              value={feedbackConfig.baseUrl}
+              onChangeText={(baseUrl) => setFeedbackConfig((current) => ({ ...current, baseUrl, updatedAt: new Date().toISOString() }))}
+              placeholder="https://your-feedback.example"
+              autoCapitalize="none"
+              keyboardType="url"
+            />
+            <TextInput
+              style={styles.input}
+              value={feedbackConfig.apiKey}
+              onChangeText={(apiKey) => setFeedbackConfig((current) => ({ ...current, apiKey, updatedAt: new Date().toISOString() }))}
+              placeholder="反馈服务 API Key，可留空"
+              autoCapitalize="none"
+              secureTextEntry
+            />
+            <View style={styles.buttonRow}>
+              <SecondaryButton icon="cloud-upload-outline" label={feedbackBusy ? '处理中...' : '上传反馈日志'} onPress={uploadFeedbackLogs} disabled={feedbackBusy} />
+              <SecondaryButton icon="cloud-download-outline" label={feedbackBusy ? '处理中...' : '拉取服务器日志'} onPress={pullFeedbackLogs} disabled={feedbackBusy} />
+            </View>
+            {feedbackLogs.length ? (
+              <View style={styles.diagnosticList}>
+                {feedbackLogs.map((entry) => (
+                  <View key={entry.id} style={styles.diagnosticItem}>
+                    <View style={styles.diagnosticHeader}>
+                      <Text style={styles.squareEventTitle}>{entry.source || 'Laphiny App'}</Text>
+                      <Text style={styles.squareEventMeta}>{formatDateTime(entry.createdAt)}</Text>
+                    </View>
+                    <Text style={styles.squareEventMeta}>
+                      {entry.platform ?? 'unknown'} · v{entry.appVersion ?? 'unknown'} · {entry.id}
+                    </Text>
+                    {entry.summary ? <Text style={styles.diagnosticMessage}>{entry.summary}</Text> : null}
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
+
+          <View style={styles.settingsDivider} />
+
+          <View style={styles.settingsSubsection}>
+            <View style={styles.syncHeader}>
+              <View style={styles.syncHeaderText}>
+                <Text style={styles.panelLabel}>诊断日志</Text>
+                <Text style={styles.help}>记录最近的请求、委托、连接测试、同步和备份恢复结果。复制诊断包会脱敏。</Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.syncToggle, diagnosticLogsOpen && styles.syncToggleOn]}
+                onPress={() => setDiagnosticLogsOpen((open) => !open)}
+              >
+                <Text style={[styles.syncToggleText, diagnosticLogsOpen && styles.syncToggleTextOn]}>
+                  {diagnosticLogsOpen ? '已展开' : '已收起'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.healthMetricRow}>
+              <HealthMetric label="总数" value={diagnosticSummary.total} tone="unknown" />
+              <HealthMetric label="近 50 错误" value={diagnosticSummary.errors} tone={diagnosticSummary.errors > 0 ? 'error' : 'ok'} />
+              <HealthMetric label="近 50 警告" value={diagnosticSummary.warnings} tone={diagnosticSummary.warnings > 0 ? 'checking' : 'ok'} />
+            </View>
+            <View style={styles.buttonRow}>
+              <SecondaryButton icon="copy-outline" label="复制诊断包" onPress={copyDiagnosticBundle} />
+              <SecondaryButton icon="trash-outline" label="清空日志" onPress={clearDiagnosticLogs} disabled={diagnosticLogs.length === 0} />
+            </View>
+            {diagnosticLogsOpen ? (
+              <View style={styles.diagnosticList}>
+                {diagnosticSummary.recent.length === 0 ? (
+                  <Text style={styles.help}>还没有诊断日志。发送消息、测试连接或同步后会自动记录。</Text>
+                ) : null}
+                {[...diagnosticSummary.recent].reverse().map((log) => (
+                  <View key={log.id} style={styles.diagnosticItem}>
+                    <View style={styles.diagnosticHeader}>
+                      <View style={styles.squareEventSource}>
+                        <Ionicons name={getDiagnosticLogIcon(log)} size={16} color="#2563eb" />
+                        <Text style={styles.squareEventTitle}>{log.title}</Text>
+                      </View>
+                      <Text style={[styles.diagnosticLevel, getDiagnosticLevelStyle(log.level)]}>{getDiagnosticLevelLabel(log.level)}</Text>
+                    </View>
+                    <Text style={styles.squareEventMeta}>
+                      {getDiagnosticCategoryLabel(log.category)}{log.connectionName ? ` · ${log.connectionName}` : ''}{log.roomName ? ` · ${log.roomName}` : ''}{log.durationMs != null ? ` · ${log.durationMs}ms` : ''}{log.requestId ? ` · ${log.requestId}` : ''}
+                    </Text>
+                    {log.message ? <Text style={styles.diagnosticMessage}>{log.message}</Text> : null}
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.settingsDivider} />
+
           <View style={styles.storageInfoBox}>
-            <Text style={styles.storageInfoTitle}>存储后端</Text>
+            <Text style={styles.storageInfoTitle}>存储与隐私状态</Text>
             <Text style={styles.storageInfoText}>密钥：{storageBackend?.secretBackend ?? '加载中'} · 长期记录：{storageBackend?.durableBackend ?? '加载中'} · SW {getServiceWorkerStatusLabel(serviceWorkerStatus)}{pwaInstalled ? ' · 已安装 PWA' : ''}</Text>
+            <Text style={styles.storageInfoText}>默认本地保存；同步、反馈和完整备份都需要用户显式操作或启用。</Text>
             {storageBackend?.durableDirectory ? <Text style={styles.storageInfoPath}>{storageBackend.durableDirectory}</Text> : null}
           </View>
-          <View style={styles.buttonRow}>
-            <SecondaryButton icon="copy-outline" label="复制诊断包" onPress={copyDiagnosticBundle} />
-            <SecondaryButton icon="trash-outline" label="清空日志" onPress={clearDiagnosticLogs} disabled={diagnosticLogs.length === 0} />
-          </View>
-          {diagnosticLogsOpen ? (
-            <View style={styles.diagnosticList}>
-              {diagnosticSummary.recent.length === 0 ? (
-                <Text style={styles.help}>还没有诊断日志。发送消息、测试连接或同步后会自动记录。</Text>
-              ) : null}
-              {[...diagnosticSummary.recent].reverse().map((log) => (
-                <View key={log.id} style={styles.diagnosticItem}>
-                  <View style={styles.diagnosticHeader}>
-                    <View style={styles.squareEventSource}>
-                      <Ionicons name={getDiagnosticLogIcon(log)} size={16} color="#2563eb" />
-                      <Text style={styles.squareEventTitle}>{log.title}</Text>
-                    </View>
-                    <Text style={[styles.diagnosticLevel, getDiagnosticLevelStyle(log.level)]}>{getDiagnosticLevelLabel(log.level)}</Text>
-                  </View>
-                  <Text style={styles.squareEventMeta}>
-                    {getDiagnosticCategoryLabel(log.category)}{log.connectionName ? ` · ${log.connectionName}` : ''}{log.roomName ? ` · ${log.roomName}` : ''}{log.durationMs != null ? ` · ${log.durationMs}ms` : ''}{log.requestId ? ` · ${log.requestId}` : ''}
-                  </Text>
-                  {log.message ? <Text style={styles.diagnosticMessage}>{log.message}</Text> : null}
-                </View>
-              ))}
-            </View>
-          ) : null}
         </View>
       </ScrollView>
     );
@@ -6614,6 +6980,13 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
     backgroundColor: '#ffffff',
   },
+  settingsSubsection: {
+    gap: 9,
+  },
+  settingsDivider: {
+    height: 1,
+    backgroundColor: '#e5e7eb',
+  },
   diagnosticPanel: {
     gap: 10,
     padding: 14,
@@ -7885,5 +8258,125 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     marginTop: 4,
+  },
+  shellDark: {
+    backgroundColor: '#0f172a',
+  },
+  headerDark: {
+    backgroundColor: '#0f172a',
+  },
+  titleDark: {
+    color: '#f8fafc',
+  },
+  subtitleDark: {
+    color: '#cbd5e1',
+  },
+  contentDark: {
+    backgroundColor: '#0f172a',
+  },
+  focusedChatHeaderDark: {
+    borderBottomColor: '#1f2937',
+    backgroundColor: '#111827',
+  },
+  focusedChatMainDark: {
+    backgroundColor: '#0f172a',
+  },
+  messageBubbleDark: {
+    borderColor: '#334155',
+    backgroundColor: '#111827',
+  },
+  composerDark: {
+    borderTopColor: '#1f2937',
+    backgroundColor: '#111827',
+  },
+  inputDark: {
+    borderColor: '#334155',
+    backgroundColor: '#0f172a',
+    color: '#f8fafc',
+  },
+  mobileRoomCardDark: {
+    borderColor: '#334155',
+    backgroundColor: '#111827',
+  },
+  mobileRoomCardExpanded: {
+    borderColor: '#93c5fd',
+    backgroundColor: '#f8fbff',
+  },
+  mobileRoomSettings: {
+    gap: 9,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  modePillRow: {
+    gap: 8,
+    paddingRight: 4,
+  },
+  modePill: {
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  modePillActive: {
+    borderColor: '#2563eb',
+    backgroundColor: '#eff6ff',
+  },
+  modePillText: {
+    color: '#4b5563',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  modePillTextActive: {
+    color: '#1d4ed8',
+  },
+  mobileMemberManageChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    padding: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  inlineIconButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+  },
+  segmentedRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  segmentedOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  segmentedOptionActive: {
+    borderColor: '#111827',
+    backgroundColor: '#111827',
+  },
+  segmentedOptionText: {
+    color: '#4b5563',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  segmentedOptionTextActive: {
+    color: '#ffffff',
   },
 });

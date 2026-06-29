@@ -6,6 +6,7 @@ export interface AgentFileExtraction {
 }
 
 const FILE_BLOCK_PATTERN = /```laphiny-file\s*([^\n]*)\n([\s\S]*?)```/gi;
+const FILENAME_CODE_BLOCK_PATTERN = /(?:^|\n)(?:\u6587\u4ef6\u540d|\u6a94\u540d|filename|file)\s*[:\uff1a]\s*([^\n]+\.(?:txt|md))\s*\n```(?:txt|text|md|markdown)?\s*\n([\s\S]*?)```/gi;
 const SUPPORTED_TEXT_EXTENSIONS = new Set(['txt', 'md']);
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
 const TEXT_MIME_BY_EXTENSION: Record<string, string> = {
@@ -20,11 +21,18 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
 
 export function extractAgentFileAttachments(rawContent: string): AgentFileExtraction {
   const attachments: Attachment[] = [];
-  const content = rawContent.replace(FILE_BLOCK_PATTERN, (full, rawAttrs: string, rawBody: string) => {
+  let content = rawContent.replace(FILE_BLOCK_PATTERN, (full, rawAttrs: string, rawBody: string) => {
     const attachment = buildAttachmentFromBlock(rawAttrs, rawBody);
     if (!attachment) return full;
     attachments.push(attachment);
     return '';
+  });
+
+  content = content.replace(FILENAME_CODE_BLOCK_PATTERN, (full, rawName: string, rawBody: string) => {
+    const attachment = buildAttachmentFromBlock(`name="${rawName.trim()}"`, rawBody);
+    if (!attachment) return full;
+    attachments.push(attachment);
+    return '\n';
   }).replace(/\n{3,}/g, '\n\n').trim();
 
   return { content, attachments };
@@ -104,8 +112,7 @@ function normalizeMimeType(rawMime: string | undefined, extension: string): stri
   if (!expected) return null;
   const mime = rawMime?.trim().toLowerCase();
   if (!mime) return expected;
-  if (extension === 'md' && (mime === 'text/markdown' || mime === 'text/plain')) return mime;
-  if (extension === 'txt' && mime === 'text/plain') return mime;
+  if (SUPPORTED_TEXT_EXTENSIONS.has(extension) && (mime === 'text/markdown' || mime === 'text/plain' || mime === 'text/x-markdown')) return expected;
   if ((extension === 'jpg' || extension === 'jpeg') && mime === 'image/jpeg') return mime;
   if (extension === 'png' && mime === 'image/png') return mime;
   return null;

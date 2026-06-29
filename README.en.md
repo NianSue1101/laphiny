@@ -12,11 +12,12 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
-- [What Is New In v0.13.0](#what-is-new-in-v0130)
+- [What Is New In v0.14.0](#what-is-new-in-v0140)
 - [Project Layout](#project-layout)
 - [Quick Start](#quick-start)
 - [Build And Release](#build-and-release)
 - [Sync Server](#sync-server)
+- [Feedback Server](#feedback-server)
 - [Hermes Gateway](#hermes-gateway)
 - [Privacy](#privacy)
 - [Credits](#credits)
@@ -76,8 +77,15 @@ Laphiny is useful for:
 - On small phones, choosing a room enters a focused chat view
 - The bottom navigation remains available
 - The top bar only shows the current chat name and a back button
-- Room settings, members, and tools are configured before entering focused chat
+- The chat picker can expand the selected room for inline room name, member, mode, context, and avatar edits
 - The composer is lifted above the keyboard on Android/iOS where possible
+
+### Personalization And Feedback
+
+- Light and dark mode
+- System font and LXGW WenKai font selection, with room for more fonts later
+- Agent avatars can be changed from the connections page or the mobile room picker
+- Optional feedback server for uploading redacted diagnostics and pulling server logs back into the app
 
 ### Notifications And Permission Requests
 
@@ -97,15 +105,14 @@ Laphiny is useful for:
 
 ---
 
-## What Is New In v0.13.0
+## What Is New In v0.14.0
 
-- Focused mobile chat flow for small screens
-- More reliable Android attachment downloads
-- Agent-generated file blocks become downloadable message attachment cards
-- Local notifications for completed replies, goal completion/stop, and permission requests
-- Foreground notification suppression
-- Permission request recognition with Allow, Deny, and Always Allow actions
-- English README
+- Mobile chat picker cards can expand inline to edit room name, mode, context limit, member enabled state, and Agent avatars
+- Agent replies that use `filename: note.txt` plus a text code block now become downloadable attachment cards
+- Added dark mode, system / LXGW WenKai font selection, and personalization entry points
+- Added redacted feedback log upload and server log pull, backed by `scripts/feedback-server.mjs`
+- Tuned the PR review workflow with a smaller diff payload, longer Hermes request timeout, and retries
+- Added `docs/PRODUCT_STRATEGY.md` and `docs/PRODUCT_STRATEGY.zh-CN.md` for product cleanup, missing capabilities, and differentiation
 
 ---
 
@@ -165,7 +172,7 @@ npm test
 npm run web:build
 ```
 
-The current test suite has 54 tests, mostly covering pure logic under `src/lib/*`.
+The current test suite has 57 tests, mostly covering pure logic under `src/lib/*`.
 
 ---
 
@@ -224,6 +231,24 @@ For production, run it under systemd and expose it through HTTPS reverse proxy.
 
 ---
 
+## Feedback Server
+
+The feedback server is an optional lightweight Node.js service. It receives redacted diagnostic bundles from the app and lets the app pull recent feedback logs back from the server.
+
+```bash
+LAPHINY_FEEDBACK_API_KEY='your-secret' LAPHINY_FEEDBACK_PORT=8788 npm run feedback:server
+```
+
+Endpoints:
+
+- `GET /v1/health`
+- `POST /v1/feedback`
+- `GET /v1/feedback?limit=30`
+
+For production, run it under systemd and expose it through HTTPS reverse proxy. The repository does not ship with any private feedback server URL or API key.
+
+---
+
 ## Hermes Gateway
 
 Example setup:
@@ -264,6 +289,7 @@ Technology:
 - [Expo](https://expo.dev/)
 - [React Native](https://reactnative.dev/)
 - [Hermes Agent](https://github.com/NianSue1101/hermes-agent)
+- [LXGW WenKai](https://github.com/lxgw/LxgwWenKai)
 - [Ionicons](https://ionic.io/ionicons)
 
 Contributions are welcome. Before opening a PR:

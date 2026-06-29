@@ -14,11 +14,12 @@ English documentation: [README.en.md](./README.en.md)
 
 - [项目定位](#项目定位)
 - [主要功能](#主要功能)
-- [v0.13.0 更新](#v0130-更新)
+- [v0.14.0 更新](#v0140-更新)
 - [文件结构](#文件结构)
 - [快速开始](#快速开始)
 - [构建与发布](#构建与发布)
 - [同步服务](#同步服务)
+- [反馈服务](#反馈服务)
 - [Hermes Gateway](#hermes-gateway)
 - [隐私说明](#隐私说明)
 - [贡献鸣谢](#贡献鸣谢)
@@ -77,8 +78,15 @@ Laphiny 的核心设计理念是 **Soul-native，而不是 Prompt-native**：
 
 - 小屏手机选择房间后进入专注聊天界面
 - 底部主导航保留，顶部只保留当前聊天名和返回
-- 房间设置、成员、工具在进入聊天前处理
+- 聊天选择页可展开当前房间，直接调整名称、成员、模式、上下文和 Agent 头像
 - 输入框随键盘抬升，减少被输入法遮挡的情况
+
+### 个性化与反馈
+
+- 支持日间 / 夜间模式
+- 支持系统字体与 LXGW WenKai 字体切换，后续可继续扩展字体
+- Agent 头像可在连接页或手机房间选择页中替换
+- 可选反馈服务：上传脱敏诊断包，并从服务器拉取反馈日志到本机查看
 
 ### 通知与权限确认
 
@@ -97,14 +105,14 @@ Laphiny 的核心设计理念是 **Soul-native，而不是 Prompt-native**：
 
 ---
 
-## v0.13.0 更新
+## v0.14.0 更新
 
-- 移动端房间入口改为专注聊天模式，小屏聊天区域更大
-- 修复 Android 附件下载路径，Agent 返回的 txt/md/image 文件可通过附件卡片保存
-- 新增本地通知：完整 Agent 回复、Goal 结束/停止、权限请求待确认
-- 前台使用 App 时禁用系统通知，避免重复打扰
-- 新增 Agent 权限请求识别与操作卡片：同意、拒绝、总是同意
-- 新增英文 README
+- 手机端聊天选择页支持直接展开房间卡片，内联调整房间名、模式、上下文、成员启用状态和 Agent 头像
+- Agent 返回 `文件名：xxx.txt` 加代码块时，也会生成可下载附件卡片
+- 新增夜间模式、系统字体 / LXGW WenKai 字体切换和头像个性化入口
+- 新增脱敏反馈日志上传与服务器日志拉取能力，配套 `scripts/feedback-server.mjs`
+- 优化 PR 自动审查 Action：缩短 diff、延长 Hermes 请求超时并增加重试
+- 新增产品策略文档：见 `docs/PRODUCT_STRATEGY.zh-CN.md`
 
 ---
 
@@ -164,7 +172,7 @@ npm test
 npm run web:build
 ```
 
-当前测试覆盖 54 个用例，主要覆盖 `src/lib/*` 的纯逻辑模块。
+当前测试覆盖 57 个用例，主要覆盖 `src/lib/*` 的纯逻辑模块。
 
 ---
 
@@ -223,6 +231,24 @@ LAPHINY_SYNC_API_KEY='your-secret' LAPHINY_SYNC_PORT=8787 node scripts/sync-serv
 
 ---
 
+## 反馈服务
+
+反馈服务是可选的轻量 Node.js 服务，用于接收 App 上传的脱敏诊断包，并允许 App 从服务器拉取最近日志。
+
+```bash
+LAPHINY_FEEDBACK_API_KEY='your-secret' LAPHINY_FEEDBACK_PORT=8788 npm run feedback:server
+```
+
+接口：
+
+- `GET /v1/health`
+- `POST /v1/feedback`
+- `GET /v1/feedback?limit=30`
+
+生产环境建议使用 systemd 保活，并通过 HTTPS 反代。仓库默认不内置任何私人反馈服务器地址或 API Key。
+
+---
+
 ## Hermes Gateway
 
 示例配置：
@@ -265,6 +291,7 @@ hermes gateway restart
 - [Expo](https://expo.dev/)
 - [React Native](https://reactnative.dev/)
 - [Hermes Agent](https://github.com/NianSue1101/hermes-agent)
+- [LXGW WenKai](https://github.com/lxgw/LxgwWenKai)
 - [Ionicons](https://ionic.io/ionicons)
 
 ### 参与贡献

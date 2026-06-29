@@ -1,6 +1,6 @@
 {
   "name": "laphiny",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -13,6 +13,7 @@
     "web": "expo start --web",
     "web:build": "expo export --platform web && node scripts/fix-web-paths.mjs",
     "sync:server": "node scripts/sync-server.mjs",
+    "feedback:server": "node scripts/feedback-server.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx tests/*.test.ts"
   },
