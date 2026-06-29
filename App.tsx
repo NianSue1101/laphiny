@@ -7,6 +7,8 @@ import {
   AppStateStatus,
   BackHandler,
   FlatList,
+  Image,
+  Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
@@ -188,6 +190,8 @@ import { AgentPermissionDecision, AgentPermissionRequest, AgentProfile, AgentPro
 const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
 const MAX_GOAL_REVIEW_ROUNDS = 3;
 const MAX_GOAL_DELEGATIONS_PER_ROUND = 3;
+const DEFAULT_FEEDBACK_BASE_URL = '/laphiny-feedback';
+const DEFAULT_FEEDBACK_API_KEY = '';
 
 type MessageListSignature = {
   roomId: string | null;
@@ -207,9 +211,10 @@ export default function App() {
   const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>([]);
   const [profileVersions, setProfileVersions] = useState<AgentProfileVersion[]>([]);
   const [appPreferences, setAppPreferences] = useState<AppPreferences>({ themeMode: 'light', fontFamily: 'system', updatedAt: new Date().toISOString() });
-  const [feedbackConfig, setFeedbackConfig] = useState<FeedbackConfig>({ enabled: false, baseUrl: '', apiKey: '', updatedAt: new Date().toISOString() });
+  const [feedbackConfig, setFeedbackConfig] = useState<FeedbackConfig>({ enabled: true, baseUrl: DEFAULT_FEEDBACK_BASE_URL, apiKey: DEFAULT_FEEDBACK_API_KEY, updatedAt: new Date().toISOString() });
   const [feedbackLogs, setFeedbackLogs] = useState<FeedbackLogEntry[]>([]);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const [expandedMobileRoomId, setExpandedMobileRoomId] = useState<string | null>(null);
   const [, forceFontRender] = useState(0);
   const [storageBackend, setStorageBackend] = useState<StorageBackendInfo | null>(null);
@@ -3197,7 +3202,7 @@ ${content}`)]);
       showNotice(
         saved.userVisible ? '附件已保存' : '附件已保存到应用目录',
         saved.userVisible
-          ? `已保存到 ${saved.locationLabel}。`
+          ? `${attachment.name} 已保存到 ${saved.locationLabel}。`
           : `系统未授予下载目录权限，已保存到应用私有目录：${saved.uri}`,
       );
     } catch (error) {
@@ -3257,21 +3262,36 @@ ${content}`)]);
       if (encoding !== FileSystem.EncodingType.Base64) {
         setTimeout(() => URL.revokeObjectURL(href), 1000);
       }
-      return { uri: filename, userVisible: true, locationLabel: '浏览器下载目录' };
+      return { uri: filename, userVisible: true, locationLabel: '浏览器默认下载目录' };
     }
 
     if (Platform.OS === 'android') {
       const storage = FileSystem.StorageAccessFramework;
+      const mime = normalizeDownloadMimeType(filename, mimeType);
+      const writeToDirectory = async (directoryUri: string, locationLabel: string) => {
+        const fileUri = await storage.createFileAsync(directoryUri, filename, mime);
+        await storage.writeAsStringAsync(fileUri, data, { encoding });
+        return { uri: fileUri, userVisible: true, locationLabel };
+      };
+
+      if (appPreferences.downloadDirectoryUri) {
+        try {
+          return await writeToDirectory(appPreferences.downloadDirectoryUri, appPreferences.downloadDirectoryLabel ?? '已选择下载目录');
+        } catch (error) {
+          console.warn('Saved Android download directory is no longer writable; requesting a fresh directory.', error);
+          updateAppPreferences({ downloadDirectoryUri: undefined, downloadDirectoryLabel: undefined });
+        }
+      }
+
       try {
         const initialUri = storage.getUriForDirectoryInRoot('Download');
         const permission = await storage.requestDirectoryPermissionsAsync(initialUri);
         if (permission.granted) {
-          const fileUri = await storage.createFileAsync(permission.directoryUri, filename, normalizeDownloadMimeType(filename, mimeType));
-          await storage.writeAsStringAsync(fileUri, data, { encoding });
-          return { uri: fileUri, userVisible: true, locationLabel: 'Download' };
+          updateAppPreferences({ downloadDirectoryUri: permission.directoryUri, downloadDirectoryLabel: '已选择下载目录' });
+          return await writeToDirectory(permission.directoryUri, '已选择下载目录');
         }
       } catch (error) {
-        console.warn('Android attachment download via Storage Access Framework failed; falling back to app-private storage.', error);
+        console.warn('Android download via Storage Access Framework failed; falling back to app-private storage.', error);
       }
     }
 
@@ -3578,24 +3598,6 @@ ${content}`)]);
     }
   }
 
-  async function pullFeedbackLogs() {
-    const client = makeFeedbackClient();
-    if (!client) {
-      showNotice('反馈后端未启用', '请先填写反馈后端地址并启用。');
-      return;
-    }
-    setFeedbackBusy(true);
-    try {
-      const entries = await client.listFeedback({ limit: 30, timeoutMs: 20_000 });
-      setFeedbackLogs(entries);
-      showNotice('反馈日志已拉取', `共 ${entries.length} 条。`);
-    } catch (error) {
-      showNotice('反馈拉取失败', getErrorMessage(error));
-    } finally {
-      setFeedbackBusy(false);
-    }
-  }
-
   function createDelegationTask(input: Omit<DelegationTask, 'id' | 'status' | 'createdAt' | 'updatedAt'>): DelegationTask {
     const now = new Date().toISOString();
     const task: DelegationTask = {
@@ -3629,10 +3631,20 @@ ${content}`)]);
     )));
   }
 
-  async function copyDiagnosticBundle() {
+  async function exportDiagnosticBundle() {
+    const filename = `laphiny-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     const text = JSON.stringify(buildSanitizedDiagnosticObject(), null, 2);
-    await Clipboard.setStringAsync(text);
-    showNotice('诊断信息已复制', '已复制脱敏后的连接、房间、失败消息和最近诊断日志。');
+    const savedTo = await saveTextFile(filename, text, 'application/json');
+    if (savedTo) {
+      showNotice(
+        savedTo.userVisible ? '诊断 JSON 已保存' : '诊断 JSON 已保存到应用目录',
+        savedTo.userVisible
+          ? `已保存到 ${savedTo.locationLabel}：${filename}`
+          : `系统目录选择不可用，已保存到应用私有目录：${savedTo.uri}`,
+      );
+      return;
+    }
+    showNotice('诊断导出失败', '当前环境无法写入 JSON 文件，请稍后重试。');
   }
 
   function clearDiagnosticLogs() {
@@ -3809,43 +3821,18 @@ ${content}`)]);
     importBackupFromText(text);
   }
 
-  async function saveTextFile(filename: string, text: string, mimeType: string): Promise<{ uri: string; userVisible: boolean } | null> {
-    if (Platform.OS === 'web') {
-      try {
-        const blob = new Blob([text], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = filename;
-        anchor.click();
-        URL.revokeObjectURL(url);
-        return { uri: filename, userVisible: true };
-      } catch {
-        return null;
-      }
+  async function saveTextFile(filename: string, text: string, mimeType: string): Promise<{ uri: string; userVisible: boolean; locationLabel: string } | null> {
+    try {
+      return await saveDownloadFile({
+        filename,
+        mimeType,
+        data: text,
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+    } catch (error) {
+      console.warn('Text file export failed.', error);
+      return null;
     }
-
-    if (Platform.OS === 'android') {
-      const storage = FileSystem.StorageAccessFramework;
-      try {
-        const initialUri = storage.getUriForDirectoryInRoot('Download');
-        const permission = await storage.requestDirectoryPermissionsAsync(initialUri);
-        if (permission.granted) {
-          const baseName = filename.replace(/\.json$/i, '');
-          const fileUri = await storage.createFileAsync(permission.directoryUri, baseName, mimeType);
-          await storage.writeAsStringAsync(fileUri, text, { encoding: FileSystem.EncodingType.UTF8 });
-          return { uri: fileUri, userVisible: true };
-        }
-      } catch (error) {
-        console.warn('Android backup export via Storage Access Framework failed; falling back to app-private storage.', error);
-      }
-    }
-
-    const directory = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
-    if (!directory) return null;
-    const fileUri = `${directory}${filename}`;
-    await FileSystem.writeAsStringAsync(fileUri, text, { encoding: FileSystem.EncodingType.UTF8 });
-    return { uri: fileUri, userVisible: false };
   }
 
   async function testSyncBackend() {
@@ -4075,6 +4062,7 @@ ${content}`)]);
       ) : null}
 
       {!mobileFocusedChat ? renderRuntimeBanner() : null}
+      {renderAttachmentPreviewModal()}
 
       {tab === 'chat' ? renderChat() : null}
       {tab === 'square' ? renderSquare() : null}
@@ -4132,6 +4120,51 @@ ${content}`)]);
     );
   }
 
+  function renderAttachmentPreviewModal() {
+    const attachment = previewAttachment;
+    if (!attachment) return null;
+    const isImage = attachment.kind === 'image' && Boolean(attachment.dataUrl || attachment.uri);
+    const textPreview = attachment.kind === 'text' && attachment.text
+      ? attachment.text
+      : attachment.kind === 'file'
+        ? '这个附件类型暂不支持内联预览，但可以查看文件信息并下载保存。'
+        : '';
+
+    return (
+      <Modal visible transparent animationType="fade" onRequestClose={() => setPreviewAttachment(null)}>
+        <View style={styles.attachmentModalOverlay}>
+          <View style={[styles.attachmentModalCard, width < 720 && styles.attachmentModalCardCompact]}>
+            <View style={styles.attachmentModalHeader}>
+              <View style={styles.attachmentModalTitleBlock}>
+                <Text style={styles.attachmentModalTitle} numberOfLines={1}>{attachment.name}</Text>
+                <Text style={styles.attachmentModalMeta} numberOfLines={1}>
+                  {attachment.mimeType || 'unknown'}{attachment.size != null ? ` · ${formatBytes(attachment.size)}` : ''}
+                </Text>
+              </View>
+              <View style={styles.attachmentModalActions}>
+                <IconButton icon="download-outline" label="下载附件" onPress={() => downloadAttachment(attachment)} variant="primary" />
+                <IconButton icon="close-outline" label="关闭预览" onPress={() => setPreviewAttachment(null)} />
+              </View>
+            </View>
+            <ScrollView style={styles.attachmentModalBody} contentContainerStyle={styles.attachmentModalBodyContent}>
+              {isImage ? (
+                <Image source={{ uri: attachment.dataUrl ?? attachment.uri ?? '' }} style={styles.attachmentPreviewImage} resizeMode="contain" />
+              ) : textPreview ? (
+                <Text style={styles.attachmentPreviewText}>{textPreview}</Text>
+              ) : (
+                <View style={styles.attachmentUnsupportedPreview}>
+                  <Ionicons name="document-outline" size={34} color="#2563eb" />
+                  <Text style={styles.attachmentUnsupportedTitle}>暂不支持预览此附件</Text>
+                  <Text style={styles.help}>可以使用右上角下载按钮保存文件。</Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
   function renderMessageBubble(message: ChatMessage) {
     const renderable = getRenderableMessageArtifacts(message);
     const displayContent = message.authorId === 'user'
@@ -4171,8 +4204,8 @@ ${content}`)]);
               <AttachmentPreview
                 key={attachment.id}
                 attachment={attachment}
-                actionIcon="download-outline"
-                onPress={() => downloadAttachment(attachment)}
+                actionIcon="eye-outline"
+                onPress={() => setPreviewAttachment(attachment)}
               />
             ))}
           </View>
@@ -4415,11 +4448,20 @@ ${content}`)]);
           {pendingAttachments.length ? (
             <View style={styles.pendingAttachments}>
               {pendingAttachments.map((attachment) => (
-                <AttachmentPreview
-                  key={attachment.id}
-                  attachment={attachment}
-                  onPress={() => setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id))}
-                />
+                <View key={attachment.id} style={styles.pendingAttachmentRow}>
+                  <View style={styles.pendingAttachmentPreviewCell}>
+                    <AttachmentPreview
+                      attachment={attachment}
+                      actionIcon="eye-outline"
+                      onPress={() => setPreviewAttachment(attachment)}
+                    />
+                  </View>
+                  <IconButton
+                    icon="close-outline"
+                    label={`移除 ${attachment.name}`}
+                    onPress={() => setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id))}
+                  />
+                </View>
               ))}
             </View>
           ) : null}
@@ -5297,6 +5339,7 @@ ${content}`)]);
             <Text style={styles.storageInfoText}>应用版本：{APP_VERSION} · Expo SDK 54 · React Native 0.81</Text>
             <Text style={styles.storageInfoText}>平台：{Platform.OS} · 布局 {getLayoutModeLabel(layoutMode)} / {Math.round(width)}px · {networkOnline ? '在线' : '离线'}</Text>
             <Text style={styles.storageInfoText}>Android 包名：site.nianxxz.laphiny · EAS 项目：2970a5e0-248d-49eb-a8b5-90c8c19ed6ee</Text>
+            <Text style={styles.storageInfoText}>关于我：NianSue1101 / PigeonSkeleton，GitHub 公开资料创建于 2019-05-01，当前公开仓库 6 个。Laphiny 也延续了这种“自然语言编程 + 私人 AI 小队”的创作方向。</Text>
             <Text style={styles.storageInfoText}>连接 {connections.length} 个 · 房间 {rooms.length} 个 · 消息 {storageSummary.messageCount} 条 / {storageSummary.messageSizeLabel}</Text>
           </View>
         </View>
@@ -5336,6 +5379,21 @@ ${content}`)]);
           <Text style={styles.help}>
             {appPreferences.fontFamily === 'lxgw-wenkai' && !fontsLoaded ? '字体正在加载，加载完成后会自动应用。' : '后续可以继续扩展更多字体。'}
           </Text>
+          <View style={styles.storageInfoBox}>
+            <Text style={styles.storageInfoTitle}>下载目录</Text>
+            <Text style={styles.storageInfoText}>
+              {Platform.OS === 'android'
+                ? (appPreferences.downloadDirectoryUri ? `当前使用：${appPreferences.downloadDirectoryLabel ?? '已选择下载目录'}` : '首次下载附件/备份/诊断 JSON 时会选择目录，之后自动复用。')
+                : Platform.OS === 'web'
+                  ? 'Web 端遵循浏览器默认下载目录；原生端会复用首次选择的目录。'
+                  : '当前平台会优先保存到应用目录。'}
+            </Text>
+            {appPreferences.downloadDirectoryUri ? (
+              <View style={styles.toolActions}>
+                <MiniButton icon="refresh-outline" label="下次重新选择" onPress={() => updateAppPreferences({ downloadDirectoryUri: undefined, downloadDirectoryLabel: undefined })} />
+              </View>
+            ) : null}
+          </View>
         </View>
 
         <View style={styles.syncPanel}>
@@ -5417,7 +5475,7 @@ ${content}`)]);
             <View style={styles.syncHeader}>
               <View style={styles.syncHeaderText}>
                 <Text style={styles.panelLabel}>反馈日志</Text>
-                <Text style={styles.help}>上传脱敏诊断包，不包含 Hermes API Key；服务器端默认端口 8788。</Text>
+                <Text style={styles.help}>默认使用服务器反馈后端，只允许从本机上传脱敏日志；不会从服务器拉取历史日志。</Text>
               </View>
               <TouchableOpacity
                 style={[styles.syncToggle, feedbackConfig.enabled && styles.syncToggleOn]}
@@ -5432,7 +5490,7 @@ ${content}`)]);
               style={styles.input}
               value={feedbackConfig.baseUrl}
               onChangeText={(baseUrl) => setFeedbackConfig((current) => ({ ...current, baseUrl, updatedAt: new Date().toISOString() }))}
-              placeholder="https://your-feedback.example"
+              placeholder={DEFAULT_FEEDBACK_BASE_URL}
               autoCapitalize="none"
               keyboardType="url"
             />
@@ -5445,8 +5503,7 @@ ${content}`)]);
               secureTextEntry
             />
             <View style={styles.buttonRow}>
-              <SecondaryButton icon="cloud-upload-outline" label={feedbackBusy ? '处理中...' : '上传反馈日志'} onPress={uploadFeedbackLogs} disabled={feedbackBusy} />
-              <SecondaryButton icon="cloud-download-outline" label={feedbackBusy ? '处理中...' : '拉取服务器日志'} onPress={pullFeedbackLogs} disabled={feedbackBusy} />
+              <PrimaryButton icon="cloud-upload-outline" label={feedbackBusy ? '上传中...' : '上传反馈日志'} onPress={uploadFeedbackLogs} disabled={feedbackBusy} />
             </View>
             {feedbackLogs.length ? (
               <View style={styles.diagnosticList}>
@@ -5472,7 +5529,7 @@ ${content}`)]);
             <View style={styles.syncHeader}>
               <View style={styles.syncHeaderText}>
                 <Text style={styles.panelLabel}>诊断日志</Text>
-                <Text style={styles.help}>记录最近的请求、委托、连接测试、同步和备份恢复结果。复制诊断包会脱敏。</Text>
+                <Text style={styles.help}>记录最近的请求、委托、连接测试、同步和备份恢复结果。导出诊断包会脱敏，并保存为 JSON 文件。</Text>
               </View>
               <TouchableOpacity
                 style={[styles.syncToggle, diagnosticLogsOpen && styles.syncToggleOn]}
@@ -5489,7 +5546,7 @@ ${content}`)]);
               <HealthMetric label="近 50 警告" value={diagnosticSummary.warnings} tone={diagnosticSummary.warnings > 0 ? 'checking' : 'ok'} />
             </View>
             <View style={styles.buttonRow}>
-              <SecondaryButton icon="copy-outline" label="复制诊断包" onPress={copyDiagnosticBundle} />
+              <SecondaryButton icon="download-outline" label="导出诊断 JSON" onPress={exportDiagnosticBundle} />
               <SecondaryButton icon="trash-outline" label="清空日志" onPress={clearDiagnosticLogs} disabled={diagnosticLogs.length === 0} />
             </View>
             {diagnosticLogsOpen ? (
@@ -7466,6 +7523,95 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
   },
+  attachmentModalOverlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+  },
+  attachmentModalCard: {
+    width: 760,
+    maxWidth: '96%',
+    maxHeight: '88%',
+    borderRadius: 22,
+    backgroundColor: '#ffffff',
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.22,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 10,
+  },
+  attachmentModalCardCompact: {
+    width: '100%',
+    maxHeight: '92%',
+    borderRadius: 18,
+  },
+  attachmentModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#f8fafc',
+  },
+  attachmentModalTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  attachmentModalTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  attachmentModalMeta: {
+    marginTop: 3,
+    color: '#6b7280',
+    fontSize: 12,
+  },
+  attachmentModalActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  attachmentModalBody: {
+    maxHeight: 560,
+  },
+  attachmentModalBodyContent: {
+    padding: 16,
+  },
+  attachmentPreviewImage: {
+    width: '100%',
+    minHeight: 300,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+  },
+  attachmentPreviewText: {
+    minHeight: 260,
+    padding: 14,
+    borderRadius: 14,
+    color: '#111827',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 13,
+    lineHeight: 20,
+    backgroundColor: '#f8fafc',
+  },
+  attachmentUnsupportedPreview: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 260,
+    padding: 20,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
+  },
+  attachmentUnsupportedTitle: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '900',
+  },
   attachment: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -7665,6 +7811,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  pendingAttachmentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: '100%',
+  },
+  pendingAttachmentPreviewCell: {
+    flexShrink: 1,
   },
   pendingAttachment: {
     flexDirection: 'row',
