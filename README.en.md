@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.22.1](#what-is-new-in-v0221)
 - [What Is New In v0.22.0](#what-is-new-in-v0220)
 - [What Is New In v0.20.0](#what-is-new-in-v0200)
 - [What Is New In v0.14.1](#what-is-new-in-v0141)
@@ -135,6 +136,15 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.22.1
+
+- Room-list management now expands in place on the Rooms page instead of jumping back into the old chat details/tools surface
+- The mobile chat picker no longer has a duplicate inline Adjust flow; it routes to the single Rooms-page management center
+- The room management center now keeps room name, context budget, room mode, default collaboration mode, delegation depth, member enablement, aliases, avatars, add, and remove controls together
+- The chat tools surface is now framed as collaboration tools and links to room management for foundational room settings
 
 ---
 

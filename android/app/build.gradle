@@ -92,8 +92,8 @@ android {
         applicationId "site.nianxxz.laphiny"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 220
-        versionName "0.22.0"
+        versionCode 221
+        versionName "0.22.1"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }

@@ -3,7 +3,7 @@
     "name": "Laphiny",
     "owner": "nianxxz",
     "slug": "laphiny",
-    "version": "0.22.0",
+    "version": "0.22.1",
     "description": "Laphiny is a multi-room, multi-Hermes chat client for Android APK and Web/PWA.",
     "orientation": "default",
     "userInterfaceStyle": "light",
