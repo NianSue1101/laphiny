@@ -7,8 +7,6 @@ import {
   AppStateStatus,
   BackHandler,
   FlatList,
-  Image,
-  Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
@@ -34,6 +32,8 @@ import {
   QUICK_COMMANDS,
 } from './src/config/app_config';
 import { AppText as Text, AppTextInput as TextInput, setAppTextFontFamily } from './src/components/AppText';
+import { AttachmentPreviewModal } from './src/components/AttachmentPreviewModal';
+import { ChatSidebar } from './src/components/ChatSidebar';
 import {
   AttachmentPreview,
   AgentAvatar,
@@ -52,7 +52,10 @@ import {
   TabButton,
 } from './src/components/Primitives';
 import { MarkdownText } from './src/components/MarkdownText';
+import { MobileRoomPicker } from './src/components/MobileRoomPicker';
 import { RoomManagementPanel } from './src/components/RoomManagementPanel';
+import { RoomRail } from './src/components/RoomRail';
+import { RuntimeBanner } from './src/components/RuntimeBanner';
 import { Ionicons } from './src/components/SafeIcon';
 import {
   buildChatHistory,
@@ -4353,73 +4356,28 @@ ${content}`)]);
   }
 
   function renderRuntimeBanner() {
-    if (Platform.OS !== 'web') return null;
-    const shouldShow = !networkOnline || pwaInstallPrompt || serviceWorkerStatus === 'failed' || serviceWorkerStatus === 'registering';
-    if (!shouldShow) return null;
-
     return (
-      <View style={[styles.runtimeBanner, !networkOnline && styles.runtimeBannerOffline]}>
-        <View style={styles.runtimeBannerTextBlock}>
-          <Text style={styles.runtimeBannerTitle}>
-            {!networkOnline ? '当前离线' : serviceWorkerStatus === 'registering' ? '正在准备离线缓存' : serviceWorkerStatus === 'failed' ? '离线缓存不可用' : '可以安装为应用'}
-          </Text>
-          <Text style={styles.runtimeBannerBody}>
-            {!networkOnline
-              ? '你仍可查看本地记录；Hermes 请求和同步会在网络恢复后再使用。'
-              : serviceWorkerStatus === 'registering'
-                ? '首次打开会注册 Service Worker，之后已访问资源可在弱网或离线时继续打开。'
-                : serviceWorkerStatus === 'failed'
-                  ? '浏览器没有成功注册 Service Worker；Web 仍可使用，但离线能力会受限。'
-                  : '浏览器已提供安装入口，安装后可像独立应用一样打开 Laphiny。'}
-          </Text>
-        </View>
-        {pwaInstallPrompt ? <SecondaryButton icon="download-outline" label="安装" onPress={installPwa} /> : null}
-      </View>
+      <RuntimeBanner
+        networkOnline={networkOnline}
+        serviceWorkerStatus={serviceWorkerStatus}
+        canInstallPwa={Boolean(pwaInstallPrompt)}
+        styles={styles}
+        TextComponent={Text}
+        onInstallPwa={installPwa}
+      />
     );
   }
 
   function renderAttachmentPreviewModal() {
-    const attachment = previewAttachment;
-    if (!attachment) return null;
-    const isImage = attachment.kind === 'image' && Boolean(attachment.dataUrl || attachment.uri);
-    const textPreview = attachment.kind === 'text' && attachment.text
-      ? attachment.text
-      : attachment.kind === 'file'
-        ? '这个附件类型暂不支持内联预览，但可以查看文件信息并下载保存。'
-        : '';
-
     return (
-      <Modal visible transparent animationType="fade" onRequestClose={() => setPreviewAttachment(null)}>
-        <View style={styles.attachmentModalOverlay}>
-          <View style={[styles.attachmentModalCard, width < 720 && styles.attachmentModalCardCompact]}>
-            <View style={styles.attachmentModalHeader}>
-              <View style={styles.attachmentModalTitleBlock}>
-                <Text style={styles.attachmentModalTitle} numberOfLines={1}>{attachment.name}</Text>
-                <Text style={styles.attachmentModalMeta} numberOfLines={1}>
-                  {attachment.mimeType || 'unknown'}{attachment.size != null ? ` · ${formatBytes(attachment.size)}` : ''}
-                </Text>
-              </View>
-              <View style={styles.attachmentModalActions}>
-                <IconButton icon="download-outline" label="下载附件" onPress={() => downloadAttachment(attachment)} variant="primary" />
-                <IconButton icon="close-outline" label="关闭预览" onPress={() => setPreviewAttachment(null)} />
-              </View>
-            </View>
-            <ScrollView style={styles.attachmentModalBody} contentContainerStyle={styles.attachmentModalBodyContent}>
-              {isImage ? (
-                <Image source={{ uri: attachment.dataUrl ?? attachment.uri ?? '' }} style={styles.attachmentPreviewImage} resizeMode="contain" />
-              ) : textPreview ? (
-                <Text style={styles.attachmentPreviewText}>{textPreview}</Text>
-              ) : (
-                <View style={styles.attachmentUnsupportedPreview}>
-                  <Ionicons name="document-outline" size={34} color="#2563eb" />
-                  <Text style={styles.attachmentUnsupportedTitle}>暂不支持预览此附件</Text>
-                  <Text style={styles.help}>可以使用右上角下载按钮保存文件。</Text>
-                </View>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+      <AttachmentPreviewModal
+        attachment={previewAttachment}
+        compact={width < 720}
+        styles={styles}
+        TextComponent={Text}
+        onDownload={downloadAttachment}
+        onClose={() => setPreviewAttachment(null)}
+      />
     );
   }
 
@@ -4854,56 +4812,17 @@ ${content}`)]);
 
   function renderMobileRoomPicker() {
     return (
-      <ScrollView style={styles.mobileRoomPicker} contentContainerStyle={styles.mobileRoomPickerContent}>
-        <View style={styles.mobileRoomPickerHeader}>
-          <View>
-            <Text style={[styles.sectionTitle, isDarkMode && styles.titleDark]}>选择房间</Text>
-            <Text style={[styles.help, isDarkMode && styles.subtitleDark]}>点卡片或“进入”开始聊天；点“管理”会回到房间页原地管理，不再跳进聊天旧详情。</Text>
-          </View>
-          <SecondaryButton icon="add-circle-outline" label="新房间" onPress={() => setTab('rooms')} />
-        </View>
-        {rooms.length === 0 ? (
-          <EmptyState
-            icon="albums-outline"
-            title="还没有房间"
-            body="先创建单聊或群聊，再回到这里进入专注聊天。"
-            actionLabel="去创建"
-            onAction={() => setTab('rooms')}
-          />
-        ) : null}
-        {rooms.map((room) => {
-          const roomMessages = messagesByRoom[room.id] ?? [];
-          const lastMessage = roomMessages[roomMessages.length - 1];
-          const unread = unreadByRoom[room.id] ?? 0;
-          const expanded = expandedMobileRoomId === room.id;
-          return (
-            <View
-              key={room.id}
-              style={[styles.mobileRoomCard, isDarkMode && styles.mobileRoomCardDark, expanded && styles.mobileRoomCardExpanded]}
-            >
-              <TouchableOpacity activeOpacity={0.88} onPress={() => openFocusedChatRoom(room.id)}>
-                <View style={styles.mobileRoomCardTop}>
-                  <View style={styles.squareEventSource}>
-                    <Ionicons name={room.kind === 'group' ? 'people-outline' : 'person-outline'} size={17} color="#2563eb" />
-                    <Text style={styles.cardTitle} numberOfLines={1}>{room.name}</Text>
-                  </View>
-                  {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : null}
-                </View>
-                <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
-                  {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
-                </Text>
-              </TouchableOpacity>
-              <View style={styles.mobileRoomCardFooter}>
-                <Text style={styles.help}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes · 上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
-                <View style={styles.buttonRowCompact}>
-                  <MiniButton icon="options-outline" label="管理" onPress={() => openRoomManagement(room.id)} />
-                  <MiniButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => openFocusedChatRoom(room.id)} />
-                </View>
-              </View>
-            </View>
-          );
-        })}
-      </ScrollView>
+      <MobileRoomPicker
+        rooms={rooms}
+        messagesByRoom={messagesByRoom}
+        unreadByRoom={unreadByRoom}
+        isDarkMode={isDarkMode}
+        styles={styles}
+        TextComponent={Text}
+        onCreateRoom={() => setTab('rooms')}
+        onOpenRoom={openFocusedChatRoom}
+        onManageRoom={openRoomManagement}
+      />
     );
   }
 
@@ -4930,66 +4849,30 @@ ${content}`)]);
 
   function renderRoomRail() {
     return (
-      <View style={styles.roomRail}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.roomRailContent}>
-          {rooms.map((room) => (
-            <TouchableOpacity
-              key={room.id}
-              style={[styles.roomPill, room.id === selectedRoomId && styles.roomPillActive]}
-              onPress={() => openFocusedChatRoom(room.id)}
-            >
-              <Ionicons
-                name={room.kind === 'group' ? 'people-outline' : 'person-outline'}
-                size={14}
-                color={room.id === selectedRoomId ? '#ffffff' : '#4b5563'}
-              />
-              <Text style={[styles.roomPillText, room.id === selectedRoomId && styles.roomPillTextActive]}>{room.name}</Text>
-              {unreadByRoom[room.id] ? <Text style={styles.roomUnreadBadge}>{unreadByRoom[room.id]}</Text> : null}
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity style={styles.roomCreatePill} onPress={() => setTab('rooms')}>
-            <Ionicons name="add" size={16} color="#2563eb" />
-            <Text style={styles.roomCreateText}>新房间</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </View>
+      <RoomRail
+        rooms={rooms}
+        selectedRoomId={selectedRoomId}
+        unreadByRoom={unreadByRoom}
+        styles={styles}
+        TextComponent={Text}
+        onOpenRoom={openFocusedChatRoom}
+        onCreateRoom={() => setTab('rooms')}
+      />
     );
   }
 
   function renderChatSidebar() {
     return (
-      <View style={styles.chatSidebar}>
-        <View style={styles.sidebarHeader}>
-          <Text style={styles.sidebarTitle}>房间</Text>
-          <TouchableOpacity style={styles.sidebarIconButton} onPress={() => setTab('rooms')}>
-            <Ionicons name="add" size={18} color="#2563eb" />
-          </TouchableOpacity>
-        </View>
-        <ScrollView style={styles.sidebarRooms} contentContainerStyle={styles.sidebarRoomsContent}>
-          {rooms.length === 0 ? <Text style={styles.help}>还没有房间。</Text> : null}
-          {rooms.map((room) => {
-            const roomMessages = messagesByRoom[room.id] ?? [];
-            const lastMessage = roomMessages[roomMessages.length - 1];
-            const active = room.id === selectedRoomId;
-            const unread = unreadByRoom[room.id] ?? 0;
-            return (
-              <TouchableOpacity
-                key={room.id}
-                style={[styles.sidebarRoom, active && styles.sidebarRoomActive]}
-                onPress={() => openFocusedChatRoom(room.id)}
-              >
-                <View style={styles.sidebarRoomTop}>
-                  <Text style={[styles.sidebarRoomTitle, active && styles.sidebarRoomTitleActive]}>{room.name}</Text>
-                  {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : <Text style={styles.sidebarRoomMeta}>{room.members.length}</Text>}
-                </View>
-                <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
-                  {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
+      <ChatSidebar
+        rooms={rooms}
+        selectedRoomId={selectedRoomId}
+        messagesByRoom={messagesByRoom}
+        unreadByRoom={unreadByRoom}
+        styles={styles}
+        TextComponent={Text}
+        onOpenRoom={openFocusedChatRoom}
+        onCreateRoom={() => setTab('rooms')}
+      />
     );
   }
 
