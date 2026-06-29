@@ -31,9 +31,11 @@ import {
   MAX_DELEGATION_DEPTH,
   QUICK_COMMANDS,
 } from './src/config/app_config';
+import { ActiveGoalPanel } from './src/components/ActiveGoalPanel';
 import { AppText as Text, AppTextInput as TextInput, setAppTextFontFamily } from './src/components/AppText';
 import { AttachmentPreviewModal } from './src/components/AttachmentPreviewModal';
 import { ChatSidebar } from './src/components/ChatSidebar';
+import { ComposerModeBar, SlashCommandPanel } from './src/components/ChatCommandPanels';
 import {
   AttachmentPreview,
   AgentAvatar,
@@ -55,6 +57,8 @@ import { MarkdownText } from './src/components/MarkdownText';
 import { MobileRoomPicker } from './src/components/MobileRoomPicker';
 import { RoomManagementPanel } from './src/components/RoomManagementPanel';
 import { RoomRail } from './src/components/RoomRail';
+import { RoomStatusBar } from './src/components/RoomStatusBar';
+import { RoleplaySceneCard } from './src/components/RoleplaySceneCard';
 import { RuntimeBanner } from './src/components/RuntimeBanner';
 import { Ionicons } from './src/components/SafeIcon';
 import {
@@ -4925,79 +4929,20 @@ ${content}`)]);
   }
 
   function renderRoomStatusBar() {
-    if (!selectedRoom) return null;
-    const enabledCount = selectedRoom.members.filter((member) => member.enabled).length;
-    const openTaskCount = selectedRoomDelegationTasks.filter((task) => task.status === 'pending' || task.status === 'running').length;
-    const modeLabel = selectedRoom.roleplay?.enabled
-      ? '桌游 RP'
-      : selectedRoom.kind === 'direct'
-        ? '单聊'
-        : getRoomModeLabel(selectedRoom.mode);
-    const summaryAlias = selectedRoom.members.find((member) => member.connectionId === selectedRoom.summaryConnectionId)?.alias;
-    const gmAlias = selectedRoom.members.find((member) => member.connectionId === selectedRoom.roleplay?.gmConnectionId)?.alias;
-
-    return (
-      <View style={styles.roomStatusBar}>
-        <StatusToken icon={selectedRoom.roleplay?.enabled ? 'game-controller-outline' : selectedRoom.kind === 'group' ? 'git-network-outline' : 'person-outline'} label={`模式 ${modeLabel}`} tone={selectedRoom.roleplay?.enabled ? 'rp' : 'default'} />
-        {selectedRoom.kind === 'group' ? <StatusToken icon="people-outline" label={`${enabledCount}/${selectedRoom.members.length} 可用`} tone="default" /> : null}
-        {selectedRoom.roleplay?.enabled ? <StatusToken icon="sparkles-outline" label={`GM ${gmAlias ?? '未选'}`} tone="rp" /> : null}
-        {selectedRoom.kind === 'group' && !selectedRoom.roleplay?.enabled ? <StatusToken icon="reader-outline" label={`总结 ${summaryAlias ?? '自动'}`} tone="default" /> : null}
-        {selectedRoom.memoryCapsule ? <StatusToken icon="file-tray-full-outline" label={`记忆 v${selectedRoom.memoryCapsule.version}`} tone="memory" /> : null}
-        {selectedRoom.roleplay?.archive ? <StatusToken icon="map-outline" label={`档案 v${selectedRoom.roleplay.archive.version}`} tone="rp" /> : null}
-        {openTaskCount > 0 ? <StatusToken icon="git-branch-outline" label={`${openTaskCount} 个委托`} tone="warning" /> : null}
-      </View>
-    );
+    return <RoomStatusBar room={selectedRoom} delegationTasks={selectedRoomDelegationTasks} styles={styles} />;
   }
 
   function renderActiveGoalPanel() {
-    const activeGoal = selectedRoom?.activeGoal;
-    if (!selectedRoom || !activeGoal || activeGoal.status === 'cancelled') return null;
-    const waiting = activeGoal.status === 'awaiting_user';
-    const statusLabel = getGoalStatusLabel(activeGoal.status, activeGoal.statusSignal);
-    const planItems = activeGoal.planItems.slice(0, 8);
-
     return (
-      <View style={styles.goalPanel}>
-        <View style={styles.goalPanelHeader}>
-          <View style={styles.rowMain}>
-            <View style={styles.squareEventSource}>
-              <Ionicons name="flag-outline" size={16} color="#2563eb" />
-              <Text style={styles.goalTitle} numberOfLines={1}>目标模式 · {statusLabel}</Text>
-            </View>
-            <Text style={styles.help} numberOfLines={2}>{activeGoal.goal}</Text>
-            <Text style={styles.goalMeta}>主 AI：{activeGoal.leadAlias} · 第 {activeGoal.round} 轮 · {formatDateTime(activeGoal.updatedAt)}</Text>
-          </View>
-          {waiting ? (
-            <View style={styles.goalActionRow}>
-              <MiniButton icon="play-circle-outline" label="继续" onPress={() => continueActiveGoalFromPanel(activeGoal)} />
-              <MiniButton icon="checkmark-circle-outline" label="结束" onPress={() => finishActiveGoalFromPanel(activeGoal)} />
-              <MiniButton icon="create-outline" label="调整" onPress={() => setDraft(`/goal @${activeGoal.leadAlias} ${activeGoal.goal} `)} />
-            </View>
-          ) : null}
-        </View>
-
-        {planItems.length ? (
-          <View style={styles.goalPlanList}>
-            {planItems.map((item) => (
-              <View key={item.id} style={styles.goalPlanItem}>
-                <View style={styles.conflictHeader}>
-                  <Text style={styles.taskTitle} numberOfLines={1}>{item.title}</Text>
-                  <Text style={[styles.badge, getGoalPlanItemStatusStyle(item.status)]}>{getGoalPlanItemStatusLabel(item.status)}</Text>
-                </View>
-                <Text style={styles.help} numberOfLines={2}>
-                  {item.ownerAlias ? `负责人：${item.ownerAlias}` : '负责人：未指定'}
-                  {item.deliverable ? ` · 产物：${item.deliverable}` : ''}
-                </Text>
-                {item.acceptance ? <Text style={styles.goalAcceptance} numberOfLines={2}>验收：{item.acceptance}</Text> : null}
-              </View>
-            ))}
-          </View>
-        ) : <Text style={styles.help}>等待主 AI 输出结构化计划卡。</Text>}
-
-        {activeGoal.lastReview ? (
-          <Text style={styles.goalReview} numberOfLines={4}>{activeGoal.lastReview}</Text>
-        ) : null}
-      </View>
+      <ActiveGoalPanel
+        activeGoal={selectedRoom?.activeGoal}
+        styles={styles}
+        TextComponent={Text}
+        getPlanItemStatusStyle={getGoalPlanItemStatusStyle}
+        onContinue={continueActiveGoalFromPanel}
+        onFinish={finishActiveGoalFromPanel}
+        onAdjust={(activeGoal) => setDraft(`/goal @${activeGoal.leadAlias} ${activeGoal.goal} `)}
+      />
     );
   }
 
@@ -5012,63 +4957,32 @@ ${content}`)]);
   }
 
   function renderRoleplaySceneCard() {
-    if (!selectedRoom?.roleplay?.enabled) return null;
-    const roleplay = selectedRoom.roleplay;
-    const gmAlias = selectedRoom.members.find((member) => member.connectionId === roleplay.gmConnectionId)?.alias ?? 'GM';
-    return (
-      <View style={styles.rpSceneCard}>
-        <View style={styles.rpSceneHeader}>
-          <View style={styles.squareEventSource}>
-            <Ionicons name="game-controller-outline" size={16} color="#7c3aed" />
-            <Text style={styles.rpSceneTitle}>{roleplay.genre || '自由冒险'} · {gmAlias} 主持</Text>
-          </View>
-          <Text style={styles.rpSceneBadge}>{roleplay.includeAllAgents === false ? '仅 GM' : '全员入戏'}</Text>
-        </View>
-        <Text style={styles.rpSceneTone}>{roleplay.tone || '沉浸、轻桌游、重角色互动'}</Text>
-        {roleplay.currentScene ? <Text style={styles.rpSceneBody} numberOfLines={3}>{roleplay.currentScene}</Text> : <Text style={styles.rpSceneBody}>还没有当前场景。用 /scene 写下开场，或直接用 /rp 开始行动。</Text>}
-        {roleplay.archive ? <Text style={styles.rpSceneArchive}>档案：{summarizeRoleplayArchive(roleplay.archive)}</Text> : null}
-      </View>
-    );
+    return <RoleplaySceneCard room={selectedRoom} styles={styles} TextComponent={Text} />;
   }
 
   function renderComposerModeBar() {
-    if (!selectedRoom) return null;
-    const items = selectedRoom.kind === 'group'
-      ? UX_SLASH_COMMANDS.filter((item) => ['council', 'redteam', 'review', 'retro', 'rp', 'scene', 'ooc'].includes(item.id))
-      : UX_SLASH_COMMANDS.filter((item) => item.id === 'rp' || item.id === 'ooc');
     return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modeShortcutList}>
-        <TouchableOpacity style={[styles.modeShortcut, quickCommandsOpen && styles.modeShortcutActive]} onPress={() => setQuickCommandsOpen((open) => !open)}>
-          <Ionicons name="apps-outline" size={14} color={quickCommandsOpen ? '#ffffff' : '#4b5563'} />
-          <Text style={[styles.modeShortcutText, quickCommandsOpen && styles.modeShortcutTextActive]}>模式</Text>
-        </TouchableOpacity>
-        {items.slice(0, isWideLayout ? 7 : 5).map((command) => (
-          <TouchableOpacity key={command.id} style={styles.modeShortcut} onPress={() => insertUxCommand(command)}>
-            <Ionicons name={command.kind === 'roleplay' ? 'game-controller-outline' : 'sparkles-outline'} size={14} color="#4b5563" />
-            <Text style={styles.modeShortcutText}>{command.command}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <ComposerModeBar
+        room={selectedRoom}
+        quickCommandsOpen={quickCommandsOpen}
+        isWideLayout={isWideLayout}
+        styles={styles}
+        TextComponent={Text}
+        onToggleQuickCommands={() => setQuickCommandsOpen((open) => !open)}
+        onInsertCommand={insertUxCommand}
+      />
     );
   }
 
   function renderSlashCommandPanel() {
-    if (!selectedRoom || slashCommandSuggestions.length === 0) return null;
     return (
-      <View style={styles.slashPanel}>
-        <Text style={styles.panelLabel}>指令补全</Text>
-        {slashCommandSuggestions.map((command) => (
-          <TouchableOpacity key={command.id} style={styles.slashCommandRow} onPress={() => insertUxCommand(command)}>
-            <View style={styles.slashCommandIcon}>
-              <Ionicons name={command.kind === 'roleplay' ? 'game-controller-outline' : command.kind === 'memory' ? 'file-tray-full-outline' : 'people-circle-outline'} size={16} color="#2563eb" />
-            </View>
-            <View style={styles.rowMain}>
-              <Text style={styles.slashCommandTitle}>{command.command} · {command.label}</Text>
-              <Text style={styles.help}>{getUxCommandKindLabel(command.kind)} · {command.description}</Text>
-            </View>
-          </TouchableOpacity>
-        ))}
-      </View>
+      <SlashCommandPanel
+        room={selectedRoom}
+        suggestions={slashCommandSuggestions}
+        styles={styles}
+        TextComponent={Text}
+        onInsertCommand={insertUxCommand}
+      />
     );
   }
 
