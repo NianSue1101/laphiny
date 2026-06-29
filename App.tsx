@@ -54,12 +54,15 @@ import {
   TabButton,
 } from './src/components/Primitives';
 import { MarkdownText } from './src/components/MarkdownText';
+import { MessageSearchPanel } from './src/components/MessageSearchPanel';
 import { MobileRoomPicker } from './src/components/MobileRoomPicker';
+import { RoleplayArchivePanel } from './src/components/RoleplayArchivePanel';
 import { RoomManagementPanel } from './src/components/RoomManagementPanel';
 import { RoomRail } from './src/components/RoomRail';
 import { RoomStatusBar } from './src/components/RoomStatusBar';
 import { RoleplaySceneCard } from './src/components/RoleplaySceneCard';
 import { RuntimeBanner } from './src/components/RuntimeBanner';
+import { TaskBoardPanel } from './src/components/TaskBoardPanel';
 import { Ionicons } from './src/components/SafeIcon';
 import {
   buildChatHistory,
@@ -5062,45 +5065,17 @@ ${content}`)]);
   }
 
   function renderMessageSearchPanel() {
-    const query = messageSearchQuery.trim();
     return (
-      <View style={styles.searchPanel}>
-        <View style={styles.searchInputRow}>
-          <Ionicons name="search-outline" size={16} color="#6b7280" />
-          <TextInput
-            style={styles.searchInput}
-            value={messageSearchQuery}
-            onChangeText={setMessageSearchQuery}
-            placeholder="搜索全部房间消息、作者或附件名"
-            placeholderTextColor="#9ca3af"
-          />
-          {query ? (
-            <TouchableOpacity onPress={() => setMessageSearchQuery('')}>
-              <Ionicons name="close-circle" size={16} color="#9ca3af" />
-            </TouchableOpacity>
-          ) : null}
-        </View>
-        {query ? (
-          <View style={styles.searchResults}>
-            <Text style={styles.help}>找到 {messageSearchResults.length} 条匹配，最多显示前 8 条。</Text>
-            {messageSearchResults.slice(0, 8).map((result) => (
-              <TouchableOpacity
-                key={`${result.room.id}-${result.message.id}`}
-                style={[styles.searchResult, result.room.id === selectedRoomId && styles.searchResultActive]}
-                onPress={() => {
-                  openFocusedChatRoom(result.room.id);
-                }}
-              >
-                <View style={styles.searchResultHeader}>
-                  <Text style={styles.searchResultTitle}>{result.room.name}</Text>
-                  <Text style={styles.searchResultMeta}>{result.message.authorName} · {formatDateTime(result.message.createdAt)}</Text>
-                </View>
-                <Text style={styles.searchResultSnippet} numberOfLines={2}>{result.snippet}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        ) : null}
-      </View>
+      <MessageSearchPanel
+        query={messageSearchQuery}
+        results={messageSearchResults}
+        selectedRoomId={selectedRoomId}
+        styles={styles}
+        TextComponent={Text}
+        TextInputComponent={TextInput}
+        onChangeQuery={setMessageSearchQuery}
+        onOpenRoom={openFocusedChatRoom}
+      />
     );
   }
 
@@ -6002,56 +5977,20 @@ ${content}`)]);
   }
 
   function renderRoleplayArchivePanel() {
-    if (!selectedRoom?.roleplay?.enabled) return null;
-    const archive = selectedRoom.roleplay.archive;
     return (
-      <View style={styles.roomEditPanel}>
-        <View style={styles.syncHeader}>
-          <View>
-            <Text style={styles.panelLabel}>RP 剧本档案</Text>
-            <Text style={styles.help}>长期记录世界观、章节、NPC、地点、道具、线索、谜团、玩家选择和 GM 幕后笔记。</Text>
-          </View>
-          <View style={styles.buttonRowCompact}>
-            <MiniButton icon="file-tray-full-outline" label={rpArchiveGenerating ? '整理中...' : '整理档案'} onPress={generateRoleplayArchive} />
-            {archive ? <MiniButton icon="trash-outline" label="清空" onPress={clearRoleplayArchive} /> : null}
-          </View>
-        </View>
-        {archive ? (
-          <View style={styles.archiveCard}>
-            <Text style={styles.summaryTitle}>{archive.title} · 第 {archive.chapter} 章</Text>
-            <Text style={styles.help}>{summarizeRoleplayArchive(archive)} · 更新于 {formatDateTime(archive.updatedAt)}</Text>
-            <Text style={styles.diagnosticMessage}>主线：{archive.currentQuest}</Text>
-            <Text style={styles.help}>NPC：{archive.npcs.slice(0, 4).join('、') || '暂无'} </Text>
-            <Text style={styles.help}>线索：{archive.clues.slice(0, 4).join('、') || '暂无'} </Text>
-            {archive.gmNotes ? <Text style={styles.conflictWarning}>GM 幕后笔记：{archive.gmNotes}</Text> : null}
-          </View>
-        ) : <Text style={styles.help}>还没有 RP 剧本档案。开始几轮剧情后，点击“整理档案”。</Text>}
-      </View>
+      <RoleplayArchivePanel
+        room={selectedRoom}
+        generating={rpArchiveGenerating}
+        styles={styles}
+        TextComponent={Text}
+        onGenerate={generateRoleplayArchive}
+        onClear={clearRoleplayArchive}
+      />
     );
   }
 
   function renderTaskBoardPanel() {
-    if (!selectedRoom || selectedRoom.kind !== 'group') return null;
-    return (
-      <View style={styles.roomEditPanel}>
-        <Text style={styles.panelLabel}>任务看板</Text>
-        <Text style={styles.help}>委托任务会按状态进入看板。专业协作里是项目任务；RP 房间里也可作为主线/支线任务。</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.taskBoardRow}>
-          {selectedTaskBoard.map((column) => (
-            <View key={column.id} style={styles.taskBoardColumn}>
-              <Text style={styles.taskBoardTitle}>{column.label} · {column.tasks.length}</Text>
-              {column.tasks.slice(0, 5).map((task) => (
-                <View key={task.id} style={styles.taskBoardItem}>
-                  <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias}</Text>
-                  <Text style={styles.help} numberOfLines={3}>{task.taskText}</Text>
-                </View>
-              ))}
-              {column.tasks.length === 0 ? <Text style={styles.help}>暂无</Text> : null}
-            </View>
-          ))}
-        </ScrollView>
-      </View>
-    );
+    return <TaskBoardPanel room={selectedRoom} columns={selectedTaskBoard} styles={styles} TextComponent={Text} />;
   }
 
   function renderRoomGrowthPanel() {
