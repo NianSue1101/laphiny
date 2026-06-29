@@ -149,7 +149,7 @@ import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle,
 import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
 import { buildGoalModePrompt, buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
-import { applyMemoryCapsuleToRoomGrowth, summarizeRoomGrowth } from './src/lib/room_growth';
+import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText, stripRoomStatePatchBlocks, summarizeRoomGrowth } from './src/lib/room_growth';
 import { buildRoomMemoryMessages, formatRoomMemoryForPrompt, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
 import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
 import { buildRoomReplyNotification, type RoomReplyNotification } from './src/lib/room_reply_notifications';
@@ -217,6 +217,7 @@ export default function App() {
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const [expandedMobileRoomId, setExpandedMobileRoomId] = useState<string | null>(null);
+  const [managedRoomId, setManagedRoomId] = useState<string | null>(null);
   const [, forceFontRender] = useState(0);
   const [storageBackend, setStorageBackend] = useState<StorageBackendInfo | null>(null);
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ enabled: false, baseUrl: '', apiKey: '', updatedAt: new Date().toISOString() });
@@ -687,7 +688,10 @@ export default function App() {
       setMobileFocusedRoomId(null);
       setMobileRoomDetailsOpen(false);
     }
-  }, [mobileFocusedRoomId, rooms]);
+    if (managedRoomId && !rooms.some((room) => room.id === managedRoomId)) {
+      setManagedRoomId(null);
+    }
+  }, [managedRoomId, mobileFocusedRoomId, rooms]);
 
   useEffect(() => {
     setRoomNameDraft(selectedRoom?.name ?? '');
@@ -1464,11 +1468,15 @@ export default function App() {
 
   function openRoomManagement(roomId: string) {
     setSelectedRoomId(roomId);
-    setTab('chat');
+    setManagedRoomId(roomId);
+    setTab('rooms');
+    setExpandedMobileRoomId(null);
     setMobileFocusedRoomId(null);
     setMobileRoomDetailsOpen(false);
-    setRoomDetailsCollapsed(false);
-    setRoomToolsOpen(true);
+    setRoomDetailsCollapsed(true);
+    setQuickCommandsOpen(false);
+    setRoomToolsOpen(false);
+    setMessageSearchQuery('');
   }
 
   function leaveFocusedChat() {
@@ -2219,7 +2227,7 @@ export default function App() {
         }, {
           sessionId: room.sessionIds[connection.id],
           sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
-          timeoutMs: 120_000,
+          timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
         })) {
           accumulated += chunk;
@@ -2229,7 +2237,8 @@ export default function App() {
         flushStreamMessage(room.id, placeholder.id);
         const parsedReply = extractAgentReplyArtifacts(accumulated.trim());
         const permissionRequest = applyAlwaysPermissionIfNeeded(parsedReply.permissionRequest);
-        const answer = getAgentReplyFallback({ ...parsedReply, permissionRequest });
+        const rawAnswer = getAgentReplyFallback({ ...parsedReply, permissionRequest });
+        const answer = stripRoomStatePatchBlocks(rawAnswer) || rawAnswer;
         const completedMessage: ChatMessage = {
           ...placeholder,
           content: answer,
@@ -2248,6 +2257,7 @@ export default function App() {
           status: 'sent',
         });
         if (permissionRequest?.status !== 'pending') {
+          applyAgentRoomStatePatch(room.id, reply.member.alias, rawAnswer, completedMessage.id);
           applyGoalAssistantResult(dispatchRoom, reply, completedMessage, answer);
         }
         if (permissionRequest?.status === 'always') {
@@ -2559,6 +2569,36 @@ export default function App() {
     setRooms((current) => current.map((room) => (
       room.id === roomId ? { ...room, ...patch, updatedAt: now } : room
     )));
+  }
+
+  function applyAgentRoomStatePatch(roomId: string, authorName: string, text: string, sourceMessageId?: string) {
+    const now = new Date().toISOString();
+    const room = roomsRef.current.find((item) => item.id === roomId);
+    if (!room) return;
+    const application = applyRoomStatePatchFromText(room, text, authorName, now, makeId);
+    if (!application) return;
+    updateRoomById(roomId, application.patch);
+    const appliedCounts = application.counts;
+    const total = appliedCounts.knowledge + appliedCounts.blackboard + appliedCounts.decisions + appliedCounts.resolvedBlackboard;
+    if (total <= 0) return;
+    appendCollaborationEvent({
+      kind: 'memory_updated',
+      roomId,
+      roomName: room?.name ?? '未知房间',
+      source: authorName,
+      messageId: sourceMessageId,
+      title: `${authorName} 更新房间状态`,
+      body: `知识 ${appliedCounts.knowledge} · 黑板 ${appliedCounts.blackboard} · 决策 ${appliedCounts.decisions} · 已解决 ${appliedCounts.resolvedBlackboard}`,
+    });
+    appendDiagnosticLog({
+      level: 'success',
+      category: 'chat',
+      title: 'Agent 房间状态写入完成',
+      message: `${authorName} 通过 laphiny-room-state 更新了房间状态。`,
+      roomId,
+      roomName: room?.name,
+      meta: appliedCounts,
+    });
   }
 
   function renameSelectedRoom() {
@@ -4826,7 +4866,7 @@ ${content}`)]);
         <View style={styles.mobileRoomPickerHeader}>
           <View>
             <Text style={[styles.sectionTitle, isDarkMode && styles.titleDark]}>选择房间</Text>
-            <Text style={[styles.help, isDarkMode && styles.subtitleDark]}>点“调整”可直接展开当前房间，修改名称、模式、成员和头像；点卡片或“进入”开始聊天。</Text>
+            <Text style={[styles.help, isDarkMode && styles.subtitleDark]}>点卡片或“进入”开始聊天；点“管理”会回到房间页原地管理，不再跳进聊天旧详情。</Text>
           </View>
           <SecondaryButton icon="add-circle-outline" label="新房间" onPress={() => setTab('rooms')} />
         </View>
@@ -4864,15 +4904,10 @@ ${content}`)]);
               <View style={styles.mobileRoomCardFooter}>
                 <Text style={styles.help}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes · 上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
                 <View style={styles.buttonRowCompact}>
-                  <MiniButton
-                    icon={expanded ? 'chevron-up-outline' : 'options-outline'}
-                    label={expanded ? '收起' : '调整'}
-                    onPress={() => setExpandedMobileRoomId((current) => current === room.id ? null : room.id)}
-                  />
+                  <MiniButton icon="options-outline" label="管理" onPress={() => openRoomManagement(room.id)} />
                   <MiniButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => openFocusedChatRoom(room.id)} />
                 </View>
               </View>
-              {expanded ? renderMobileRoomInlineSettings(room) : null}
             </View>
           );
         })}
@@ -4880,10 +4915,34 @@ ${content}`)]);
     );
   }
 
-  function renderMobileRoomInlineSettings(room: Room) {
+  function renderRoomManagementPanel(room: Room) {
+    const roomMessages = messagesByRoom[room.id] ?? [];
+    const enabledCount = room.members.filter((member) => member.enabled).length;
+    const roomGrowth = summarizeRoomGrowth(room);
     return (
-      <View style={styles.mobileRoomSettings}>
-        <Text style={styles.panelLabel}>房间调整</Text>
+      <View style={styles.roomManagementPanel}>
+        <View style={styles.syncHeader}>
+          <View style={styles.syncHeaderText}>
+            <Text style={styles.panelLabel}>房间管理中心</Text>
+            <Text style={styles.help}>当前正在管理「{room.name}」，所有修改直接写入这个房间，不会跳转到聊天旧面板。</Text>
+          </View>
+          <StatusToken icon="settings-outline" label={roomGrowth.label} tone="memory" />
+        </View>
+        <View style={styles.toolMetricRow}>
+          <View style={styles.toolMetric}>
+            <Text style={styles.toolMetricValue}>{roomMessages.length}</Text>
+            <Text style={styles.toolMetricLabel}>消息</Text>
+          </View>
+          <View style={styles.toolMetric}>
+            <Text style={styles.toolMetricValue}>{enabledCount}/{room.members.length}</Text>
+            <Text style={styles.toolMetricLabel}>成员</Text>
+          </View>
+          <View style={styles.toolMetric}>
+            <Text style={styles.toolMetricValue}>{room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
+            <Text style={styles.toolMetricLabel}>上下文</Text>
+          </View>
+        </View>
+        <Text style={styles.panelLabel}>基础信息</Text>
         <TextInput
           style={styles.input}
           value={room.name}
@@ -4911,27 +4970,71 @@ ${content}`)]);
                 </TouchableOpacity>
               ))}
             </ScrollView>
+
+            <Text style={styles.panelLabel}>默认协作策略</Text>
+            <View style={styles.toolActions}>
+              <MiniButton icon="hand-left-outline" label={room.defaultCollaborationMode === 'manual' || !room.defaultCollaborationMode ? '默认：手动' : '切手动'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'manual' })} />
+              <MiniButton icon="git-network-outline" label={room.defaultCollaborationMode === 'parallel' ? '默认：并行' : '切并行'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'parallel' })} />
+              <MiniButton icon="git-branch-outline" label={room.defaultCollaborationMode === 'sequential' ? '默认：接力' : '切接力'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'sequential' })} />
+              <MiniButton icon={room.autoDelegationEnabled === false ? 'flash-off-outline' : 'flash-outline'} label={room.autoDelegationEnabled === false ? '自动委托关' : '自动委托开'} onPress={() => updateRoomInline(room.id, { autoDelegationEnabled: room.autoDelegationEnabled === false })} />
+            </View>
+            <View style={styles.stepper}>
+              <MiniButton icon="remove-outline" label="深度 -1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) - 1)) })} />
+              <Text style={styles.help}>最大委托深度：{room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH}</Text>
+              <MiniButton icon="add-outline" label="深度 +1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) + 1)) })} />
+            </View>
           </>
         ) : null}
         <Text style={styles.panelLabel}>成员</Text>
-        <View style={styles.memberChips}>
+        <View style={styles.roomMemberManageList}>
           {room.members.map((member) => {
             const connection = connectionById.get(member.connectionId);
             return (
-              <View key={member.connectionId} style={styles.mobileMemberManageChip}>
+              <View key={member.connectionId} style={styles.roomMemberManageRow}>
                 <TouchableOpacity onPress={() => toggleRoomMemberEnabledInline(room, member)} disabled={room.kind !== 'group'}>
                   <AgentBadge alias={member.alias} active={member.enabled} imageUri={connection?.avatarUri} />
                 </TouchableOpacity>
+                <TextInput
+                  style={[styles.input, styles.memberAliasInput]}
+                  value={member.alias}
+                  onChangeText={(alias) => updateRoomInline(room.id, { members: room.members.map((item) => item.connectionId === member.connectionId ? { ...item, alias } : item) })}
+                  placeholder="成员别名"
+                />
                 {connection ? (
-                  <TouchableOpacity style={styles.inlineIconButton} onPress={() => chooseConnectionAvatar(connection)}>
-                    <Ionicons name="image-outline" size={14} color="#2563eb" />
-                  </TouchableOpacity>
+                  <MiniButton icon="image-outline" label="头像" onPress={() => chooseConnectionAvatar(connection)} />
+                ) : null}
+                {room.kind === 'group' && room.members.length > 1 ? (
+                  <MiniButton
+                    icon="remove-circle-outline"
+                    label="移除"
+                    onPress={() => updateRoomInline(room.id, { members: room.members.filter((item) => item.connectionId !== member.connectionId) })}
+                  />
                 ) : null}
               </View>
             );
           })}
         </View>
-        <Text style={styles.help}>点成员可启用/停用；图片按钮可给 Agent 更换头像。更细的成员 alias 和连接信息仍在“连接”页维护。</Text>
+        {room.kind === 'group' ? (
+          <View style={styles.toolActions}>
+            {enabledConnections.filter((connection) => !room.members.some((member) => member.connectionId === connection.id)).map((connection) => (
+              <MiniButton
+                key={connection.id}
+                icon="add-circle-outline"
+                label={`加入 ${connection.name}`}
+                onPress={() => updateRoomInline(room.id, {
+                  members: [...room.members, { connectionId: connection.id, alias: connection.name, enabled: connection.enabled }],
+                  sessionIds: { ...room.sessionIds, [connection.id]: `laphiny-${room.id}-${connection.id}` },
+                  memberSessionKeys: { ...(room.memberSessionKeys ?? {}), [connection.id]: `laphiny-${room.id}-key` },
+                })}
+              />
+            ))}
+          </View>
+        ) : null}
+        <Text style={styles.help}>成员启用、别名、头像、加入和移除都在这里完成；聊天页不再维护另一套重复入口。</Text>
+        <View style={styles.toolActions}>
+          <MiniButton icon="chatbubble-ellipses-outline" label="进入聊天" onPress={() => openFocusedChatRoom(room.id)} />
+          <MiniButton icon="close-outline" label="关闭管理" onPress={() => setManagedRoomId(null)} />
+        </View>
       </View>
     );
   }
@@ -5473,25 +5576,10 @@ ${content}`)]);
         </View>
 
         <View style={styles.roomEditPanel}>
-          <Text style={styles.panelLabel}>房间管理</Text>
-          <View style={styles.inlineFormRow}>
-            <TextInput
-              style={[styles.input, styles.inlineInput]}
-              value={roomNameDraft}
-              onChangeText={setRoomNameDraft}
-              placeholder="房间名称"
-            />
-            <MiniButton icon="save-outline" label="保存" onPress={renameSelectedRoom} />
-          </View>
-        </View>
-
-        {renderRoomModePanel()}
-
-        <View style={styles.contextControl}>
-          <Text style={styles.panelLabel}>上下文预算</Text>
-          <View style={styles.stepper}>
-            <MiniButton icon="remove-outline" label="-4" onPress={() => updateContextLimit(-4)} />
-            <MiniButton icon="add-outline" label="+4" onPress={() => updateContextLimit(4)} />
+          <Text style={styles.panelLabel}>聊天内工具</Text>
+          <Text style={styles.help}>聊天页只保留协作、记忆和导出等工具；房间名称、成员、模式、上下文等基础设置请在房间页统一管理，避免两套入口状态错乱。</Text>
+          <View style={styles.toolActions}>
+            <MiniButton icon="options-outline" label="打开房间管理" onPress={() => openRoomManagement(selectedRoom.id)} />
           </View>
         </View>
 
@@ -6484,19 +6572,28 @@ ${content}`)]);
         <PrimaryButton icon="people-outline" label="创建群聊" onPress={createGroupRoom} disabled={groupMemberDraftIds.length < 2} />
 
         <Text style={styles.sectionTitle}>已有房间</Text>
-        {rooms.map((room) => (
-          <View key={room.id} style={styles.card}>
-            <TouchableOpacity onPress={() => openFocusedChatRoom(room.id)}>
-              <Text style={styles.cardTitle}>{room.name}</Text>
-              <Text style={styles.muted}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.map((member) => `${member.enabled ? '' : '停用:'}${member.alias}`).join('、')}</Text>
-              <Text style={styles.help}>{(messagesByRoom[room.id] ?? []).length} 条消息 · 更新于 {formatDateTime(room.updatedAt)}</Text>
-            </TouchableOpacity>
-            <View style={styles.buttonRow}>
-              <SecondaryButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => openFocusedChatRoom(room.id)} />
-              <SecondaryButton icon="options-outline" label="管理" onPress={() => openRoomManagement(room.id)} />
+        <Text style={styles.help}>这里是唯一的房间管理入口：管理会在当前列表原地展开，不会再跳到聊天页旧详情。</Text>
+        {rooms.map((room) => {
+          const managing = managedRoomId === room.id;
+          return (
+            <View key={room.id} style={[styles.card, managing && styles.managedRoomCard]}>
+              <TouchableOpacity onPress={() => openFocusedChatRoom(room.id)}>
+                <Text style={styles.cardTitle}>{room.name}</Text>
+                <Text style={styles.muted}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.map((member) => `${member.enabled ? '' : '停用:'}${member.alias}`).join('、')}</Text>
+                <Text style={styles.help}>{(messagesByRoom[room.id] ?? []).length} 条消息 · 更新于 {formatDateTime(room.updatedAt)}</Text>
+              </TouchableOpacity>
+              <View style={styles.buttonRow}>
+                <SecondaryButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => openFocusedChatRoom(room.id)} />
+                <SecondaryButton
+                  icon={managing ? 'chevron-up-outline' : 'options-outline'}
+                  label={managing ? '收起管理' : '管理'}
+                  onPress={() => setManagedRoomId((current) => current === room.id ? null : room.id)}
+                />
+              </View>
+              {managing ? renderRoomManagementPanel(room) : null}
             </View>
-          </View>
-        ))}
+          );
+        })}
       </ScrollView>
     );
   }
@@ -8484,6 +8581,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e5e7eb',
     gap: 10,
+  },
+  managedRoomCard: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#f8fbff',
+  },
+  roomManagementPanel: {
+    gap: 12,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#ffffff',
+  },
+  roomMemberManageList: {
+    gap: 8,
+  },
+  roomMemberManageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   rowCard: {
     flexDirection: 'row',

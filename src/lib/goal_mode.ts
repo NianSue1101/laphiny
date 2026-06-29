@@ -1,5 +1,6 @@
 import { formatAgentProfileForPrompt } from './agent_profile';
 import { buildAgentFilePromptAppendix } from './agent_files';
+import { formatRoomGrowthForPrompt, formatRoomStatePatchProtocolPrompt } from './room_growth';
 import type { GoalPlanItem, GoalPlanItemStatus, GoalStatusSignal, HermesConnection, Room, RoomMember } from '../types';
 
 export interface GoalModeCommand {
@@ -89,6 +90,9 @@ export function buildGoalModePrompt({ goal, room, leadMember, connections }: Goa
     '用户目标：',
     normalizedGoal,
     '',
+    '当前房间成长层：',
+    formatRoomGrowthForPrompt(room),
+    '',
     '目标模式协议：',
     '1. 你是本次目标的唯一主 AI。先分析用户真正想达成的交付物、约束、成功标准和风险。',
     '2. 先给出简短可执行 plan。每个 plan 项都要明确产物、完成标准、依赖和最合适的负责人。',
@@ -105,7 +109,10 @@ export function buildGoalModePrompt({ goal, room, leadMember, connections }: Goa
     'B. 制定或更新计划时，必须附带 JSON 文件块：```laphiny-goal-plan ... ```。',
     'C. laphiny-goal-plan 必须是数组；每项包含 title、owner、reason、input、deliverable、acceptance、status(todo/running/done/blocked)。',
     'D. 如果这是项目文件优化任务，Agent 只能返回建议、unified diff/patch、laphiny-file 文件块或检查结果；不要声称已直接修改真实项目文件。Laphiny/用户是最终写入真实文件的一方。',
+    'E. 如果本轮产生了新的事实、待办、决策或已解决事项，必须附带 laphiny-room-state JSON 块，让 Laphiny 写入房间状态。',
     buildAgentFilePromptAppendix(),
+    '',
+    formatRoomStatePatchProtocolPrompt(),
     '',
     '当前可协作成员公开卡片：',
     formatGoalMemberGuide(room, leadMember, connections),
@@ -122,6 +129,9 @@ export function buildGoalReviewPrompt({ goal, room, leadMember, connections }: G
     '原始目标：',
     normalizedGoal,
     '',
+    '当前房间成长层：',
+    formatRoomGrowthForPrompt(room),
+    '',
     '复盘要求：',
     '1. 对照原始目标和你上一轮制定的成功标准，判断当前结果是否已经达成。',
     '2. 如果已达成，请输出最终整合结果，并列出关键结论、已完成事项、仍需用户确认的内容。',
@@ -133,7 +143,10 @@ export function buildGoalReviewPrompt({ goal, room, leadMember, connections }: G
     'A. 每次复盘末尾必须单独一行写：GOAL_STATUS: continue、GOAL_STATUS: done 或 GOAL_STATUS: blocked。',
     'B. 如计划发生变化，附带 ```laphiny-goal-plan ... ``` JSON 数组，字段为 title、owner、reason、input、deliverable、acceptance、status。',
     'C. 如果 GOAL_STATUS 是 done 或 blocked，请同时给出等待用户确认的最终摘要、已完成事项、剩余风险和建议下一步。',
+    'D. 如果本轮产生了新的事实、待办、决策或已解决事项，必须附带 laphiny-room-state JSON 块，让 Laphiny 写入房间状态。',
     buildAgentFilePromptAppendix(),
+    '',
+    formatRoomStatePatchProtocolPrompt(),
     '',
     '当前可协作成员公开卡片：',
     formatGoalMemberGuide(room, leadMember, connections),

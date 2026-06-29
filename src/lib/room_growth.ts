@@ -1,4 +1,4 @@
-import type { Room, RoomBlackboardItem, RoomDecisionRecord, RoomKnowledgeItem, RoomMemoryCapsule } from '../types';
+import type { Room, RoomBlackboardItem, RoomBlackboardItemStatus, RoomDecisionRecord, RoomKnowledgeItem, RoomMemoryCapsule } from '../types';
 
 type IdFactory = (prefix: string) => string;
 
@@ -143,11 +143,176 @@ export function applyMemoryCapsuleToRoomGrowth(
   };
 }
 
+export interface RoomStatePatchApplication {
+  patch: Pick<Room, 'knowledgeBase' | 'blackboardItems' | 'decisionRecords'>;
+  counts: {
+    knowledge: number;
+    blackboard: number;
+    decisions: number;
+    resolvedBlackboard: number;
+  };
+}
+
+export function formatRoomStatePatchProtocolPrompt(): string {
+  return [
+    '房间状态写入接口：',
+    '当你在协作中形成了可沉淀的结论、待办或决策时，可以在回复末尾附带一个 JSON 代码块：```laphiny-room-state ... ```。',
+    'Laphiny 会解析该代码块并写入当前房间的知识库、协作黑板和决策记录，帮助房间真正向目标前进。',
+    '格式示例：',
+    '```laphiny-room-state',
+    '{',
+    '  "knowledge": [{ "title": "稳定事实", "body": "已确认的信息", "tags": ["fact"] }],',
+    '  "blackboard": [{ "text": "下一步要做的事项", "status": "open" }],',
+    '  "decisions": [{ "title": "已达成的决策", "rationale": "为什么这样定", "ownerName": "负责人" }],',
+    '  "resolveBlackboard": ["已经解决的旧事项关键词"]',
+    '}',
+    '```',
+    '只写你有把握、可追溯、能帮助房间推进的内容；不要把闲聊、猜测或重复内容写入长期状态。',
+  ].join('\n');
+}
+
+export function applyRoomStatePatchFromText(
+  room: Room,
+  text: string,
+  authorName: string,
+  now: string,
+  makeId: IdFactory,
+): RoomStatePatchApplication | null {
+  const blocks = extractRoomStatePatchBlocks(text);
+  if (blocks.length === 0) return null;
+
+  const knowledgeBase = [...(room.knowledgeBase ?? [])];
+  const blackboardItems = [...(room.blackboardItems ?? [])];
+  const decisionRecords = [...(room.decisionRecords ?? [])];
+  const counts = { knowledge: 0, blackboard: 0, decisions: 0, resolvedBlackboard: 0 };
+
+  for (const block of blocks) {
+    const parsed = safeParsePatch(block);
+    if (!parsed) continue;
+
+    for (const item of normalizeArray(parsed.knowledge)) {
+      const title = normalizePatchText(item.title).slice(0, 80);
+      const body = normalizePatchText(item.body || item.content).slice(0, 2000);
+      if (!title || !body) continue;
+      const before = knowledgeBase.length;
+      addKnowledge(knowledgeBase, {
+        id: makeId('knowledge'),
+        title,
+        body,
+        tags: normalizeStringArray(item.tags).slice(0, 8),
+        source: 'summary',
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (knowledgeBase.length > before) counts.knowledge += 1;
+    }
+
+    for (const item of normalizeArray(parsed.blackboard)) {
+      const text = normalizePatchText(item.text || item.body || item.title).slice(0, 1000);
+      if (!text) continue;
+      const before = blackboardItems.length;
+      addBlackboardItem(blackboardItems, {
+        id: makeId('blackboard'),
+        text,
+        authorName: normalizePatchText(item.authorName) || authorName,
+        status: normalizeBlackboardStatus(item.status),
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (blackboardItems.length > before) counts.blackboard += 1;
+    }
+
+    for (const item of normalizeArray(parsed.decisions)) {
+      const title = normalizePatchText(item.title || item.decision).slice(0, 120);
+      if (!title) continue;
+      const before = decisionRecords.length;
+      addDecision(decisionRecords, {
+        id: makeId('decision'),
+        title,
+        rationale: normalizePatchText(item.rationale || item.reason || item.context).slice(0, 1200) || undefined,
+        ownerName: normalizePatchText(item.ownerName || item.owner).slice(0, 80) || authorName,
+        source: 'goal',
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (decisionRecords.length > before) counts.decisions += 1;
+    }
+
+    for (const keyword of normalizeStringArray(parsed.resolveBlackboard)) {
+      const normalizedKeyword = normalizeKey(keyword);
+      if (!normalizedKeyword) continue;
+      for (let index = 0; index < blackboardItems.length; index += 1) {
+        const item = blackboardItems[index];
+        if (!item || item.status === 'resolved') continue;
+        if (normalizeKey(item.text).includes(normalizedKeyword)) {
+          blackboardItems[index] = { ...item, status: 'resolved', updatedAt: now };
+          counts.resolvedBlackboard += 1;
+        }
+      }
+    }
+  }
+
+  if (counts.knowledge + counts.blackboard + counts.decisions + counts.resolvedBlackboard === 0) return null;
+
+  return {
+    patch: {
+      knowledgeBase: knowledgeBase.slice(-100),
+      blackboardItems: blackboardItems.slice(-140),
+      decisionRecords: decisionRecords.slice(-100),
+    },
+    counts,
+  };
+}
+
+export function stripRoomStatePatchBlocks(text: string): string {
+  return text.replace(/```laphiny-room-state\s*\n[\s\S]*?```/gi, '').trim();
+}
+
 export function getRoomGrowthLevelLabel(level: RoomGrowthSummary['level']): string {
   if (level === 'evolving') return '持续成长';
   if (level === 'settled') return '形成稳定协作';
   if (level === 'forming') return '正在成形';
   return '刚被召集';
+}
+
+function extractRoomStatePatchBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  const pattern = /```laphiny-room-state\s*\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match[1]?.trim()) blocks.push(match[1].trim());
+  }
+  return blocks;
+}
+
+function safeParsePatch(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(normalizePatchText).filter(Boolean);
+}
+
+function normalizePatchText(value: unknown): string {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+}
+
+function normalizeBlackboardStatus(value: unknown): RoomBlackboardItemStatus {
+  const status = normalizePatchText(value).toLowerCase();
+  if (status === 'pinned' || status === 'resolved') return status;
+  return 'open';
 }
 
 function addKnowledge(items: RoomKnowledgeItem[], item: RoomKnowledgeItem): void {
