@@ -121,6 +121,42 @@ export interface RoomSummary {
   createdAt: string;
 }
 
+export type GoalSessionStatus = 'planning' | 'running' | 'reviewing' | 'awaiting_user' | 'done' | 'blocked' | 'cancelled';
+export type GoalPlanItemStatus = 'todo' | 'running' | 'done' | 'blocked';
+export type GoalStatusSignal = 'done' | 'continue' | 'blocked';
+
+export interface GoalPlanItem {
+  id: string;
+  title: string;
+  ownerAlias?: string;
+  ownerConnectionId?: string;
+  reason?: string;
+  input?: string;
+  deliverable?: string;
+  acceptance?: string;
+  status: GoalPlanItemStatus;
+  taskId?: string;
+  updatedAt: string;
+}
+
+export interface GoalSession {
+  id: string;
+  roomId: string;
+  goal: string;
+  leadConnectionId: string;
+  leadAlias: string;
+  round: number;
+  status: GoalSessionStatus;
+  statusSignal?: GoalStatusSignal;
+  planItems: GoalPlanItem[];
+  lastReview?: string;
+  lastMessageId?: string;
+  userDecision?: 'continue' | 'finish' | 'adjust';
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 export interface Room {
   id: string;
   name: string;
@@ -137,6 +173,7 @@ export interface Room {
   maxDelegationDepth?: number;
   lastSummary?: RoomSummary;
   memoryCapsule?: RoomMemoryCapsule;
+  activeGoal?: GoalSession;
   roleplay?: RoleplayConfig;
   roleplaySession?: RoleplaySession;
   createdAt: string;

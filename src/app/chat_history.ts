@@ -1,4 +1,5 @@
 import { formatAgentProfileForPrompt } from '../lib/agent_profile';
+import { buildAgentFilePromptAppendix } from '../lib/agent_files';
 import { buildHermesUserContent } from '../lib/payload';
 import { formatRoomMemoryForPrompt } from '../lib/room_memory';
 import { buildRoleplaySystemAppendix } from '../lib/roleplay';
@@ -69,6 +70,10 @@ export function buildChatHistory(
       }));
 
     return [
+      {
+        role: 'system',
+        content: buildAgentFilePromptAppendix(),
+      },
       ...history,
       {
         role: 'user',
@@ -226,6 +231,8 @@ export function buildCollaborationProtocol({
       : '4. 当前不应继续发起委托；请尽量直接完成任务或说明缺少什么输入。',
     '5. 委托必须写清楚：目标、输入材料、期望产物和边界；不要只写成员名或泛泛地说“帮忙看看”。',
     '6. 一次最多委托 1 个最关键的子任务；不要 @自己，不要使用 @all，不要为了寒暄、赞同、总结或甩锅而委托。',
+    '6a. 例外：当当前用户消息明确进入 /goal 目标模式时，主 AI 可以一次发起多条必要且独立的行首 @委托；每条委托仍必须具体、可验收，并服务于同一个目标计划。',
+    buildAgentFilePromptAppendix(),
     delegatedFrom
       ? `7. 避免把任务再委托回 ${delegatedFrom}；只有出现全新的、可独立处理的缺口时才继续委托。`
       : '7. 如果不需要委托，请不要带 @ 提到成员；普通提名请去掉 @，避免误触发自动转发。',

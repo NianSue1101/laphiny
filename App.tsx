@@ -9,6 +9,8 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
+  Keyboard,
+  KeyboardAvoidingView,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -110,9 +112,11 @@ import * as Clipboard from 'expo-clipboard';
 
 import { pickDocuments, pickImages } from './src/lib/attachments';
 import { buildAgentProfileInquiryMessages, normalizeImportedAgentProfile, parseAgentProfileResponse, summarizeAgentProfile } from './src/lib/agent_profile';
+import { extractAgentFileAttachments } from './src/lib/agent_files';
 import { COLLABORATION_RITUALS, buildRitualConsensusMessages, buildRitualPrompt, getRitualHelpText, getRitualTargets, parseCollaborationRitualCommand, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
 import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle, makeDiagnosticLog, sanitizeDiagnosticLogs } from './src/lib/diagnostics';
 import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
+import { buildGoalModePrompt, buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
 import { buildRoomMemoryMessages, formatRoomMemoryForPrompt, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
 import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
@@ -145,9 +149,11 @@ import {
   saveSyncConfig,
 } from './src/storage/repository';
 import { describeStorageBackend } from './src/storage/kv';
-import { AgentProfile, AgentProfileVersion, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
+import { AgentProfile, AgentProfileVersion, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, GoalSession, GoalStatusSignal, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
 
 const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
+const MAX_GOAL_REVIEW_ROUNDS = 3;
+const MAX_GOAL_DELEGATIONS_PER_ROUND = 3;
 
 type MessageListSignature = {
   roomId: string | null;
@@ -204,6 +210,7 @@ export default function App() {
   const [teamTemplateName, setTeamTemplateName] = useState('默认 Soul 小队');
   const [summaryGenerating, setSummaryGenerating] = useState(false);
   const [memoryGenerating, setMemoryGenerating] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [rpArchiveGenerating, setRpArchiveGenerating] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [roomReplyNotification, setRoomReplyNotification] = useState<RoomReplyNotification | null>(null);
@@ -223,11 +230,31 @@ export default function App() {
   const tabRef = useRef<Tab>(tab);
   const roomsRef = useRef<Room[]>(rooms);
   const pollingSquareEventsRef = useRef(false);
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const maxWindowHeightRef = useRef(height);
 
   selectedRoomIdRef.current = selectedRoomId;
   tabRef.current = tab;
   roomsRef.current = rooms;
+  if (height > maxWindowHeightRef.current) {
+    maxWindowHeightRef.current = height;
+  }
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    const showSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -465,6 +492,17 @@ export default function App() {
   const onboardingComplete = onboardingSteps.every((step) => step.done);
   const layoutMode = width >= 1200 ? 'desktop' : width >= 900 ? 'wide' : width >= 700 ? 'tablet' : 'compact';
   const isWideLayout = width >= 900;
+  const keyboardAvoidanceEnabled = Platform.OS !== 'web' && !isWideLayout;
+  const androidWindowAlreadyResized = Platform.OS === 'android'
+    && keyboardHeight > 0
+    && height < maxWindowHeightRef.current - 80;
+  const androidKeyboardLift = Platform.OS === 'android' && keyboardAvoidanceEnabled && !androidWindowAlreadyResized
+    ? Math.min(keyboardHeight, Math.floor(height * 0.45))
+    : 0;
+  const roomDetailsMaxHeight = Math.max(
+    180,
+    Math.floor(height * (keyboardAvoidanceEnabled && keyboardHeight > 0 ? 0.28 : 0.42)),
+  );
   const sending = Object.keys(activeStreamIds).length > 0;
   const totalUnread = Object.values(unreadByRoom).reduce<number>((total, count) => total + Number(count ?? 0), 0);
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
@@ -1312,6 +1350,39 @@ export default function App() {
   }
 
   function getSendTargets(room: Room, rawText: string, explicitTargetIds = selectedTargetIds): SendTargetSelection {
+    const goalMode = parseGoalCommand(rawText);
+    if (goalMode) {
+      const resolution = resolveMentionTargets(room, rawText);
+      const explicitTargetSet = new Set(explicitTargetIds);
+      const manuallySelectedTargets = room.members.filter((member) => (
+        member.enabled && explicitTargetSet.has(member.connectionId)
+      ));
+      const summaryTarget = room.members.find((member) => member.enabled && member.connectionId === room.summaryConnectionId);
+      const strippedGoal = parseGoalCommand(resolution.strippedText)?.goal.trim();
+      const promptGoal = strippedGoal || goalMode.goal;
+      const commandLead = goalMode.leadMention
+        ? room.members.find((member) => member.enabled && (
+          member.alias.toLowerCase() === goalMode.leadMention?.toLowerCase()
+          || member.connectionId.toLowerCase() === goalMode.leadMention?.toLowerCase()
+        ))
+        : undefined;
+      const leadMember = commandLead
+        ?? manuallySelectedTargets[0]
+        ?? resolution.targets[0]
+        ?? summaryTarget
+        ?? room.members.find((member) => member.enabled);
+      const normalizedGoalMode = { ...goalMode, goal: promptGoal };
+
+      return {
+        targets: leadMember ? [leadMember] : [],
+        textForHermes: leadMember
+          ? buildGoalModePrompt({ goal: promptGoal, room, leadMember, connections })
+          : promptGoal,
+        mode: 'sequential',
+        goalMode: normalizedGoalMode,
+      };
+    }
+
     const ritual = room.kind === 'group' ? parseCollaborationRitualCommand(rawText) : null;
     if (ritual) {
       return {
@@ -1410,8 +1481,10 @@ export default function App() {
       }
 
       flushStreamMessage(room.id, placeholderId);
+      const parsedReply = extractAgentFileAttachments(streamedText.trim());
       updateMessageInRoom(room.id, placeholderId, {
-        content: streamedText.trim() || '[Hermes 没有返回内容]',
+        content: parsedReply.content || (parsedReply.attachments.length ? '已生成附件' : '[Hermes 没有返回内容]'),
+        attachments: parsedReply.attachments.length ? parsedReply.attachments : undefined,
         status: 'sent',
       });
     } catch (error) {
@@ -1500,7 +1573,59 @@ export default function App() {
       updateRoomById(room.id, { roleplay: nextRoleplay, mode: 'tabletop', defaultCollaborationMode: 'manual' });
     }
 
-    const { targets, textForHermes, mode, ritual } = getSendTargets(effectiveRoom, rawText, explicitTargetIds);
+    const startsNewGoal = Boolean(parseGoalCommand(rawText));
+    const goalControl = getGoalControlCommand(effectiveRoom, rawText);
+    if (goalControl?.type === 'finish') {
+      const userMessage: ChatMessage = {
+        id: makeId('msg'),
+        roomId: room.id,
+        role: 'user',
+        authorId: 'user',
+        authorName: '你',
+        content: rawText,
+        attachments,
+        status: 'sent',
+        createdAt: now,
+      };
+      setDraft('');
+      setPendingAttachments([]);
+      setSelectedTargetIds([]);
+      appendMessagesToRoom(room.id, [userMessage, makeLocalNotice(room.id, '目标已结束，并已沉淀到房间记忆。')]);
+      finishActiveGoal(effectiveRoom, 'finish');
+      return;
+    }
+
+    let sendSelection = getSendTargets(effectiveRoom, rawText, explicitTargetIds);
+    if (goalControl?.type === 'continue' && effectiveRoom.activeGoal) {
+      const leadMember = getActiveGoalLeadMember(effectiveRoom);
+      if (leadMember) {
+        sendSelection = {
+          targets: [leadMember],
+          textForHermes: buildGoalReviewPrompt({
+            goal: effectiveRoom.activeGoal.goal,
+            room: effectiveRoom,
+            leadMember,
+            connections,
+            round: effectiveRoom.activeGoal.round + 1,
+          }),
+          mode: 'sequential',
+          goalMode: { id: 'goal', goal: effectiveRoom.activeGoal.goal },
+        };
+        updateRoomById(room.id, {
+          activeGoal: {
+            ...effectiveRoom.activeGoal,
+            status: 'reviewing',
+            statusSignal: undefined,
+            round: effectiveRoom.activeGoal.round + 1,
+            userDecision: 'continue',
+            updatedAt: now,
+          },
+        });
+      }
+    }
+
+    const { targets, textForHermes, mode, ritual, goalMode } = sendSelection;
+    const goalLeadMember = goalMode ? targets[0] : undefined;
     const userMessage: ChatMessage = {
       id: makeId('msg'),
       roomId: room.id,
@@ -1517,6 +1642,12 @@ export default function App() {
     setPendingAttachments([]);
     setSelectedTargetIds([]);
     appendMessagesToRoom(room.id, [userMessage]);
+    let activeGoalForTurn = effectiveRoom.activeGoal;
+    if (startsNewGoal && goalMode && goalLeadMember) {
+      const activeGoal = makeGoalSession(room.id, goalMode.goal, goalLeadMember, now, userMessage.id);
+      activeGoalForTurn = activeGoal;
+      updateRoomById(room.id, { activeGoal });
+    }
     const roleplayTurn = effectiveRoom.kind === 'group' && effectiveRoom.roleplay?.enabled && targets.length > 0 && mode === 'sequential' && isRoleplayUserTurn(effectiveRoom, rawText);
     appendCollaborationEvent({
       kind: ritual ? 'ritual_started' : roleplayTurn ? 'roleplay_updated' : 'user_message',
@@ -1546,10 +1677,13 @@ export default function App() {
     }
 
     const turnMessages: ChatMessage[] = [...previousMessages, userMessage];
-    const dispatchRoom = effectiveRoom;
+    const dispatchRoom = activeGoalForTurn ? { ...effectiveRoom, activeGoal: activeGoalForTurn } : effectiveRoom;
     const scheduledKeys = new Set<string>();
     const memberQueues = new Map<string, Promise<void>>();
     const scheduledPromises: Promise<void>[] = [];
+    let goalDelegationCount = 0;
+    let reviewedGoalDelegationCount = 0;
+    let goalReviewRound = 0;
 
     const scheduleReply = (reply: ScheduledReply): Promise<void> | null => {
       const normalizedTask = reply.text.trim().replace(/\s+/g, ' ').slice(0, 160);
@@ -1691,10 +1825,21 @@ export default function App() {
         }
 
         flushStreamMessage(room.id, placeholder.id);
-        const answer = accumulated.trim() || '[Hermes 没有返回内容]';
-        const completedMessage: ChatMessage = { ...placeholder, content: answer, status: 'sent' };
+        const parsedReply = extractAgentFileAttachments(accumulated.trim());
+        const answer = parsedReply.content || (parsedReply.attachments.length ? '已生成附件' : '[Hermes 没有返回内容]');
+        const completedMessage: ChatMessage = {
+          ...placeholder,
+          content: answer,
+          attachments: parsedReply.attachments.length ? parsedReply.attachments : undefined,
+          status: 'sent',
+        };
         turnMessages.push(completedMessage);
-        updateMessageInRoom(room.id, placeholder.id, { content: answer, status: 'sent' });
+        updateMessageInRoom(room.id, placeholder.id, {
+          content: answer,
+          attachments: completedMessage.attachments,
+          status: 'sent',
+        });
+        applyGoalAssistantResult(dispatchRoom, reply, completedMessage, answer);
         appendDiagnosticLog({
           level: 'success',
           category: 'chat',
@@ -1735,7 +1880,13 @@ export default function App() {
 
         if (room.kind === 'group' && room.autoDelegationEnabled !== false && reply.depth < (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH)) {
           const delegations = resolveAssistantDelegations(room, answer, reply.member.connectionId);
-          for (const delegation of delegations) {
+          const acceptedDelegations = reply.goalMode ? delegations.slice(0, MAX_GOAL_DELEGATIONS_PER_ROUND) : delegations;
+          if (reply.goalMode && delegations.length > acceptedDelegations.length) {
+            appendMessagesToRoom(room.id, [
+              makeLocalNotice(room.id, `目标模式本轮最多接收 ${MAX_GOAL_DELEGATIONS_PER_ROUND} 个委托，已忽略 ${delegations.length - acceptedDelegations.length} 个额外委托。`),
+            ]);
+          }
+          for (const delegation of acceptedDelegations) {
             const taskText = delegation.taskText || '请根据上一条回复和群聊上下文继续处理这个委托任务。';
             appendDiagnosticLog({
               level: 'info',
@@ -1760,6 +1911,9 @@ export default function App() {
               depth: reply.depth + 1,
               sourceMessageId: completedMessage.id,
             });
+            if (goalMode) {
+              goalDelegationCount += 1;
+            }
             scheduleReply({
               member: delegation.target,
               text: taskText,
@@ -1769,6 +1923,7 @@ export default function App() {
               delegatedFromConnectionId: reply.member.connectionId,
               delegatorMessage: answer,
               taskId: task.id,
+              goalMode: reply.goalMode,
             });
           }
         }
@@ -1840,12 +1995,12 @@ export default function App() {
 
     if (mode === 'sequential') {
       for (const member of targets) {
-        const task = scheduleReply({ member, text: textForHermes, attachments, depth: 0 });
+        const task = scheduleReply({ member, text: textForHermes, attachments, depth: 0, goalMode });
         if (task) await task;
       }
     } else {
       for (const member of targets) {
-        scheduleReply({ member, text: textForHermes, attachments, depth: 0 });
+        scheduleReply({ member, text: textForHermes, attachments, depth: 0, goalMode });
       }
     }
 
@@ -1854,6 +2009,24 @@ export default function App() {
       const batch = scheduledPromises.slice(cursor);
       cursor = scheduledPromises.length;
       await Promise.allSettled(batch);
+      if (
+        goalMode
+        && goalLeadMember
+        && cursor >= scheduledPromises.length
+        && goalDelegationCount > reviewedGoalDelegationCount
+        && goalReviewRound < MAX_GOAL_REVIEW_ROUNDS
+      ) {
+        reviewedGoalDelegationCount = goalDelegationCount;
+        goalReviewRound += 1;
+        scheduleReply({
+          member: goalLeadMember,
+          text: buildGoalReviewPrompt({ goal: goalMode.goal, room: dispatchRoom, leadMember: goalLeadMember, connections, round: goalReviewRound }),
+          attachments: [],
+          depth: goalReviewRound,
+          goalMode,
+          goalReviewRound,
+        });
+      }
     }
 
     if (ritual?.definition.autoConsensus) {
@@ -2621,8 +2794,289 @@ ${content}`)]);
     showNotice('回复已复制', `${message.authorName} 的回复已复制到剪贴板。`);
   }
 
+  async function downloadAttachment(attachment: Attachment) {
+    try {
+      const saved = await saveAttachmentToDownloads(attachment);
+      if (!saved) {
+        showNotice('附件暂不可下载', '目前支持下载 AI 回发的 txt、md、png、jpg 文件。');
+        return;
+      }
+      showNotice(
+        saved.userVisible ? '附件已保存' : '附件已保存到应用目录',
+        saved.userVisible
+          ? `已保存到 ${saved.locationLabel}。`
+          : `系统未授予下载目录权限，已保存到应用私有目录：${saved.uri}`,
+      );
+    } catch (error) {
+      showNotice('附件保存失败', getErrorMessage(error));
+    }
+  }
+
+  async function saveAttachmentToDownloads(attachment: Attachment): Promise<{ uri: string; userVisible: boolean; locationLabel: string } | null> {
+    const filename = sanitizeDownloadFilename(attachment.name);
+    if (!filename) return null;
+
+    if (attachment.kind === 'text' && typeof attachment.text === 'string') {
+      return saveDownloadFile({
+        filename,
+        mimeType: attachment.mimeType || 'text/plain',
+        data: attachment.text,
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+    }
+
+    if (attachment.kind === 'image' && attachment.dataUrl) {
+      const base64 = getBase64FromDataUrl(attachment.dataUrl);
+      if (!base64) return null;
+      return saveDownloadFile({
+        filename,
+        mimeType: attachment.mimeType || 'image/png',
+        data: base64,
+        encoding: FileSystem.EncodingType.Base64,
+      });
+    }
+
+    return null;
+  }
+
+  async function saveDownloadFile({
+    filename,
+    mimeType,
+    data,
+    encoding,
+  }: {
+    filename: string;
+    mimeType: string;
+    data: string;
+    encoding: FileSystem.EncodingType;
+  }): Promise<{ uri: string; userVisible: boolean; locationLabel: string }> {
+    if (Platform.OS === 'web') {
+      const href = encoding === FileSystem.EncodingType.Base64
+        ? `data:${mimeType};base64,${data}`
+        : URL.createObjectURL(new Blob([data], { type: mimeType }));
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.download = filename;
+      anchor.click();
+      if (encoding !== FileSystem.EncodingType.Base64) URL.revokeObjectURL(href);
+      return { uri: filename, userVisible: true, locationLabel: '浏览器下载目录' };
+    }
+
+    if (Platform.OS === 'android') {
+      const storage = FileSystem.StorageAccessFramework;
+      try {
+        const initialUri = storage.getUriForDirectoryInRoot('Download/Laphiny');
+        const permission = await storage.requestDirectoryPermissionsAsync(initialUri);
+        if (permission.granted) {
+          const laphinyDirUri = await ensureAndroidLaphinyDirectory(permission.directoryUri);
+          const fileUri = await storage.createFileAsync(laphinyDirUri, filenameWithoutExtension(filename), mimeType);
+          await storage.writeAsStringAsync(fileUri, data, { encoding });
+          return { uri: fileUri, userVisible: true, locationLabel: 'Download/Laphiny' };
+        }
+      } catch (error) {
+        console.warn('Android attachment download via Storage Access Framework failed; falling back to app-private storage.', error);
+      }
+    }
+
+    const directory = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
+    if (!directory) throw new Error('当前设备没有可写入的文件目录');
+    const laphinyDir = `${directory}Laphiny/`;
+    const info = await FileSystem.getInfoAsync(laphinyDir);
+    if (!info.exists) {
+      await FileSystem.makeDirectoryAsync(laphinyDir, { intermediates: true });
+    }
+    const fileUri = `${laphinyDir}${filename}`;
+    await FileSystem.writeAsStringAsync(fileUri, data, { encoding });
+    return { uri: fileUri, userVisible: false, locationLabel: '应用私有目录/Laphiny' };
+  }
+
+  async function ensureAndroidLaphinyDirectory(directoryUri: string): Promise<string> {
+    const storage = FileSystem.StorageAccessFramework;
+    if (isLaphinyDirectoryUri(directoryUri)) return directoryUri;
+
+    try {
+      return await storage.makeDirectoryAsync(directoryUri, 'Laphiny');
+    } catch {
+      const children = await storage.readDirectoryAsync(directoryUri);
+      const existing = children.find(isLaphinyDirectoryUri);
+      if (existing) return existing;
+      throw new Error('无法在下载目录创建 Laphiny 文件夹，请手动选择或创建 Download/Laphiny 后重试');
+    }
+  }
+
+  function isLaphinyDirectoryUri(uri: string): boolean {
+    try {
+      return decodeURIComponent(uri).replace(/\/+$/, '').endsWith('/Laphiny');
+    } catch {
+      return uri.replace(/\/+$/, '').endsWith('/Laphiny');
+    }
+  }
+
+  function sanitizeDownloadFilename(filename: string): string {
+    return filename
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+  }
+
+  function filenameWithoutExtension(filename: string): string {
+    return filename.replace(/\.[^.]+$/, '') || 'laphiny-file';
+  }
+
+  function getBase64FromDataUrl(dataUrl: string): string | null {
+    const match = dataUrl.match(/^data:image\/(?:png|jpeg);base64,([a-z0-9+/=]+)$/i);
+    return match?.[1] ?? null;
+  }
+
   function getConnectionAvatarUri(connectionId: string): string | undefined {
     return connectionById.get(connectionId)?.avatarUri;
+  }
+
+  function makeGoalSession(roomId: string, goal: string, leadMember: RoomMember, now: string, sourceMessageId?: string): GoalSession {
+    return {
+      id: makeId('goal'),
+      roomId,
+      goal: goal || '未命名目标',
+      leadConnectionId: leadMember.connectionId,
+      leadAlias: leadMember.alias,
+      round: 1,
+      status: 'running',
+      planItems: [],
+      lastMessageId: sourceMessageId,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  function getGoalControlCommand(room: Room, rawText: string): { type: 'continue' | 'finish' } | null {
+    const activeGoal = room.activeGoal;
+    if (!activeGoal || activeGoal.status !== 'awaiting_user') return null;
+    const normalized = rawText.trim().toLowerCase();
+    if (!normalized) return null;
+    if (['继续', '繼續', 'continue', '/goal-continue'].includes(normalized)) return { type: 'continue' };
+    if (['结束', '完成', '結束', 'finish', 'end', '/goal-finish', '/goal-end'].includes(normalized)) return { type: 'finish' };
+    return null;
+  }
+
+  function getActiveGoalLeadMember(room: Room): RoomMember | undefined {
+    const activeGoal = room.activeGoal;
+    if (!activeGoal) return undefined;
+    return room.members.find((member) => member.enabled && member.connectionId === activeGoal.leadConnectionId)
+      ?? room.members.find((member) => member.enabled && member.alias === activeGoal.leadAlias)
+      ?? room.members.find((member) => member.enabled);
+  }
+
+  function updateActiveGoal(roomId: string, updater: (goal: GoalSession) => GoalSession) {
+    setRooms((current) => current.map((room) => {
+      if (room.id !== roomId || !room.activeGoal) return room;
+      return { ...room, activeGoal: updater(room.activeGoal), updatedAt: new Date().toISOString() };
+    }));
+  }
+
+  function applyGoalAssistantResult(room: Room, reply: ScheduledReply, message: ChatMessage, answer: string) {
+    if (!reply.goalMode || !room.activeGoal || reply.member.connectionId !== room.activeGoal.leadConnectionId) return;
+
+    const now = new Date().toISOString();
+    const signal = parseGoalStatusSignal(answer);
+    const parsedItems = parseGoalPlanItems(answer, room, now);
+    updateActiveGoal(room.id, (goal) => {
+      const nextStatus = getGoalStatusFromSignal(signal);
+      return {
+        ...goal,
+        round: Math.max(goal.round, reply.goalReviewRound ?? goal.round),
+        status: nextStatus,
+        statusSignal: signal ?? goal.statusSignal,
+        planItems: parsedItems.length ? mergeGoalPlanItems(goal.planItems, parsedItems) : goal.planItems,
+        lastReview: answer,
+        lastMessageId: message.id,
+        updatedAt: now,
+      };
+    });
+  }
+
+  function getGoalStatusFromSignal(signal: GoalStatusSignal | null): GoalSession['status'] {
+    if (signal === 'done' || signal === 'blocked') return 'awaiting_user';
+    if (signal === 'continue') return 'running';
+    return 'reviewing';
+  }
+
+  function mergeGoalPlanItems(current: GoalSession['planItems'], incoming: GoalSession['planItems']): GoalSession['planItems'] {
+    const byId = new Map(current.map((item) => [item.id, item]));
+    for (const item of incoming) {
+      const existing = byId.get(item.id);
+      byId.set(item.id, existing ? { ...existing, ...item } : item);
+    }
+    return Array.from(byId.values());
+  }
+
+  function finishActiveGoal(room: Room, decision: 'finish') {
+    const activeGoal = room.activeGoal;
+    if (!activeGoal) return;
+    const now = new Date().toISOString();
+    const finalStatus = activeGoal.statusSignal === 'blocked' ? 'blocked' : 'done';
+    const completedGoal: GoalSession = {
+      ...activeGoal,
+      status: finalStatus,
+      userDecision: decision,
+      updatedAt: now,
+      completedAt: now,
+    };
+    updateRoomById(room.id, {
+      activeGoal: completedGoal,
+      memoryCapsule: buildGoalMemoryCapsule(room, completedGoal, now),
+    });
+    appendCollaborationEvent({
+      kind: 'memory_updated',
+      roomId: room.id,
+      roomName: room.name,
+      source: 'Laphiny',
+      title: '目标已沉淀到房间记忆',
+      body: completedGoal.goal,
+    });
+  }
+
+  function buildGoalMemoryCapsule(room: Room, goal: GoalSession, now: string): RoomMemoryCapsule {
+    const previous = room.memoryCapsule;
+    const doneItems = goal.planItems.filter((item) => item.status === 'done').map((item) => item.title);
+    const remainingItems = goal.planItems.filter((item) => item.status !== 'done').map((item) => `${item.title}${item.ownerAlias ? `（${item.ownerAlias}）` : ''}`);
+    return {
+      id: previous?.id ?? makeId('memory'),
+      roomId: room.id,
+      goal: goal.goal,
+      decisions: uniqueStrings([
+        ...(previous?.decisions ?? []),
+        `${goal.status === 'blocked' ? '目标暂停/受阻' : '目标完成'}：${goal.goal}`,
+        ...doneItems.map((item) => `完成：${item}`),
+      ]).slice(-12),
+      todos: uniqueStrings([
+        ...remainingItems,
+        ...(previous?.todos ?? []),
+      ]).slice(0, 12),
+      preferences: previous?.preferences ?? [],
+      openQuestions: uniqueStrings([
+        ...(goal.status === 'blocked' ? ['目标受阻，需要用户确认下一步。'] : []),
+        ...(previous?.openQuestions ?? []),
+      ]).slice(0, 12),
+      handoffNotes: goal.lastReview || previous?.handoffNotes,
+      source: 'agent-generated',
+      authorName: goal.leadAlias,
+      version: (previous?.version ?? 0) + 1,
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now,
+    };
+  }
+
+  function uniqueStrings(values: string[]): string[] {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const value of values) {
+      const normalized = value.trim();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      result.push(normalized);
+    }
+    return result;
   }
 
   function beginEditLastUserMessage() {
@@ -3260,7 +3714,12 @@ ${content}`)]);
         {message.attachments?.length ? (
           <View style={styles.attachments}>
             {message.attachments.map((attachment) => (
-              <AttachmentPreview key={attachment.id} attachment={attachment} />
+              <AttachmentPreview
+                key={attachment.id}
+                attachment={attachment}
+                actionIcon="download-outline"
+                onPress={() => downloadAttachment(attachment)}
+              />
             ))}
           </View>
         ) : null}
@@ -3288,7 +3747,12 @@ ${content}`)]);
     return (
       <View style={[styles.content, isWideLayout && styles.chatDesktop]}>
         {isWideLayout ? renderChatSidebar() : renderRoomRail()}
-        <View style={styles.chatMain}>
+        <KeyboardAvoidingView
+          style={styles.chatMain}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+          enabled={keyboardAvoidanceEnabled}
+        >
 
         {selectedRoom ? (
           <View style={styles.chatHeader}>
@@ -3329,8 +3793,15 @@ ${content}`)]);
               />
             </View>
             {roomDetailsOpen ? (
-              <>
+              <ScrollView
+                style={[styles.roomDetailsScroll, { maxHeight: roomDetailsMaxHeight }]}
+                contentContainerStyle={styles.roomDetailsContent}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator
+              >
                 {renderRoomStatusBar()}
+                {renderActiveGoalPanel()}
                 {renderRoleplaySceneCard()}
                 <View style={styles.memberChips}>
                   {selectedRoom.kind === 'group' ? (
@@ -3359,7 +3830,7 @@ ${content}`)]);
                 {roomToolsOpen ? renderRoomTools() : null}
                 {renderMessageSearchPanel()}
                 {!isWideLayout ? renderRoomCollaborationDashboard() : null}
-              </>
+              </ScrollView>
             ) : null}
           </View>
         ) : null}
@@ -3403,7 +3874,7 @@ ${content}`)]);
           renderItem={({ item }) => renderMessageBubble(item)}
         />
 
-        <View style={styles.composer}>
+        <View style={[styles.composer, androidKeyboardLift > 0 && { marginBottom: androidKeyboardLift }]}>
           {selectedRoom?.kind === 'group' ? (
             <View style={styles.mentionBar}>
               <Text style={styles.mentionHint}>本次回复</Text>
@@ -3458,12 +3929,16 @@ ${content}`)]);
               multiline
               value={draft}
               onChangeText={setDraft}
+              onFocus={() => {
+                pendingMessageScrollToEndRef.current = true;
+                setTimeout(() => messageScrollRef.current?.scrollToEnd({ animated: true }), 180);
+              }}
               textAlignVertical="top"
             />
             <IconButton icon={sending ? 'hourglass-outline' : 'send'} label="发送" onPress={sendMessage} disabled={sending || !selectedRoom} variant="primary" />
           </View>
         </View>
-        </View>
+        </KeyboardAvoidingView>
         {isWideLayout && collaborationDrawerOpen ? renderCollaborationDrawer() : null}
       </View>
     );
@@ -3582,6 +4057,68 @@ ${content}`)]);
         {openTaskCount > 0 ? <StatusToken icon="git-branch-outline" label={`${openTaskCount} 个委托`} tone="warning" /> : null}
       </View>
     );
+  }
+
+  function renderActiveGoalPanel() {
+    const activeGoal = selectedRoom?.activeGoal;
+    if (!selectedRoom || !activeGoal || activeGoal.status === 'cancelled') return null;
+    const waiting = activeGoal.status === 'awaiting_user';
+    const statusLabel = getGoalStatusLabel(activeGoal.status, activeGoal.statusSignal);
+    const planItems = activeGoal.planItems.slice(0, 8);
+
+    return (
+      <View style={styles.goalPanel}>
+        <View style={styles.goalPanelHeader}>
+          <View style={styles.rowMain}>
+            <View style={styles.squareEventSource}>
+              <Ionicons name="flag-outline" size={16} color="#2563eb" />
+              <Text style={styles.goalTitle} numberOfLines={1}>目标模式 · {statusLabel}</Text>
+            </View>
+            <Text style={styles.help} numberOfLines={2}>{activeGoal.goal}</Text>
+            <Text style={styles.goalMeta}>主 AI：{activeGoal.leadAlias} · 第 {activeGoal.round} 轮 · {formatDateTime(activeGoal.updatedAt)}</Text>
+          </View>
+          {waiting ? (
+            <View style={styles.goalActionRow}>
+              <MiniButton icon="play-circle-outline" label="继续" onPress={() => continueActiveGoalFromPanel(activeGoal)} />
+              <MiniButton icon="checkmark-circle-outline" label="结束" onPress={() => finishActiveGoalFromPanel(activeGoal)} />
+              <MiniButton icon="create-outline" label="调整" onPress={() => setDraft(`/goal @${activeGoal.leadAlias} ${activeGoal.goal} `)} />
+            </View>
+          ) : null}
+        </View>
+
+        {planItems.length ? (
+          <View style={styles.goalPlanList}>
+            {planItems.map((item) => (
+              <View key={item.id} style={styles.goalPlanItem}>
+                <View style={styles.conflictHeader}>
+                  <Text style={styles.taskTitle} numberOfLines={1}>{item.title}</Text>
+                  <Text style={[styles.badge, getGoalPlanItemStatusStyle(item.status)]}>{getGoalPlanItemStatusLabel(item.status)}</Text>
+                </View>
+                <Text style={styles.help} numberOfLines={2}>
+                  {item.ownerAlias ? `负责人：${item.ownerAlias}` : '负责人：未指定'}
+                  {item.deliverable ? ` · 产物：${item.deliverable}` : ''}
+                </Text>
+                {item.acceptance ? <Text style={styles.goalAcceptance} numberOfLines={2}>验收：{item.acceptance}</Text> : null}
+              </View>
+            ))}
+          </View>
+        ) : <Text style={styles.help}>等待主 AI 输出结构化计划卡。</Text>}
+
+        {activeGoal.lastReview ? (
+          <Text style={styles.goalReview} numberOfLines={4}>{activeGoal.lastReview}</Text>
+        ) : null}
+      </View>
+    );
+  }
+
+  function continueActiveGoalFromPanel(activeGoal: GoalSession) {
+    if (!selectedRoom || sending) return;
+    void dispatchMessage(selectedRoom, '继续', []);
+  }
+
+  function finishActiveGoalFromPanel(activeGoal: GoalSession) {
+    if (!selectedRoom || sending) return;
+    void dispatchMessage(selectedRoom, '结束', []);
   }
 
   function renderRoleplaySceneCard() {
@@ -4854,6 +5391,30 @@ function getDelegationTaskStatusStyle(status: DelegationTask['status']) {
   return styles.diagnosticLevelInfo;
 }
 
+function getGoalStatusLabel(status: GoalSession['status'], signal?: GoalStatusSignal): string {
+  if (status === 'awaiting_user') return signal === 'blocked' ? '等待确认：受阻' : '等待确认：已完成';
+  if (status === 'done') return '已结束';
+  if (status === 'blocked') return '已受阻';
+  if (status === 'reviewing') return '复盘中';
+  if (status === 'running') return '推进中';
+  if (status === 'planning') return '规划中';
+  return '已取消';
+}
+
+function getGoalPlanItemStatusLabel(status: GoalSession['planItems'][number]['status']): string {
+  if (status === 'done') return '完成';
+  if (status === 'running') return '进行中';
+  if (status === 'blocked') return '受阻';
+  return '待办';
+}
+
+function getGoalPlanItemStatusStyle(status: GoalSession['planItems'][number]['status']) {
+  if (status === 'done') return styles.diagnosticLevelSuccess;
+  if (status === 'running' || status === 'todo') return styles.diagnosticLevelWarning;
+  if (status === 'blocked') return styles.diagnosticLevelError;
+  return styles.diagnosticLevelInfo;
+}
+
 function getDiagnosticLevelStyle(level: DiagnosticLogEntry['level']) {
   if (level === 'success') return styles.diagnosticLevelSuccess;
   if (level === 'warning') return styles.diagnosticLevelWarning;
@@ -5256,6 +5817,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     gap: 10,
   },
+  roomDetailsScroll: {
+    flexGrow: 0,
+  },
+  roomDetailsContent: {
+    gap: 10,
+    paddingBottom: 4,
+  },
   roomHeaderActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -5277,6 +5845,59 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 7,
+  },
+  goalPanel: {
+    gap: 10,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#f8fbff',
+  },
+  goalPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  goalTitle: {
+    color: '#1d4ed8',
+    fontWeight: '900',
+  },
+  goalMeta: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  goalActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  goalPlanList: {
+    gap: 8,
+  },
+  goalPlanItem: {
+    gap: 5,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#ffffff',
+  },
+  goalAcceptance: {
+    color: '#1e40af',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  goalReview: {
+    color: '#374151',
+    fontSize: 12,
+    lineHeight: 18,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#eef2ff',
   },
   statusToken: {
     flexDirection: 'row',
