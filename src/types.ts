@@ -303,6 +303,22 @@ export interface Attachment {
 
 export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopped' | 'error';
 
+export type AgentPermissionDecision = 'allow' | 'deny' | 'always';
+export type AgentPermissionStatus = 'pending' | 'allowed' | 'denied' | 'always';
+
+export interface AgentPermissionRequest {
+  id: string;
+  key: string;
+  title: string;
+  body: string;
+  action?: string;
+  reason?: string;
+  status: AgentPermissionStatus;
+  decision?: AgentPermissionDecision;
+  createdAt: string;
+  decidedAt?: string;
+}
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -311,6 +327,7 @@ export interface ChatMessage {
   authorName: string;
   content: string;
   attachments?: Attachment[];
+  permissionRequest?: AgentPermissionRequest;
   status: ChatMessageStatus;
   error?: string;
   delegatedFrom?: string;

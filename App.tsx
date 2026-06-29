@@ -22,6 +22,7 @@ import {
   View,
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
 
 import {
   APP_VERSION,
@@ -110,9 +111,21 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Clipboard from 'expo-clipboard';
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: false,
+    shouldShowList: false,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
+
+const NOTIFICATION_CHANNEL_ID = 'laphiny-agent-replies';
+
 import { pickDocuments, pickImages } from './src/lib/attachments';
 import { buildAgentProfileInquiryMessages, normalizeImportedAgentProfile, parseAgentProfileResponse, summarizeAgentProfile } from './src/lib/agent_profile';
 import { extractAgentFileAttachments } from './src/lib/agent_files';
+import { buildAgentPermissionDecisionPrompt, extractAgentPermissionRequest, getAgentPermissionKey } from './src/lib/agent_permissions';
 import { COLLABORATION_RITUALS, buildRitualConsensusMessages, buildRitualPrompt, getRitualHelpText, getRitualTargets, parseCollaborationRitualCommand, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
 import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle, makeDiagnosticLog, sanitizeDiagnosticLogs } from './src/lib/diagnostics';
 import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
@@ -149,7 +162,7 @@ import {
   saveSyncConfig,
 } from './src/storage/repository';
 import { describeStorageBackend } from './src/storage/kv';
-import { AgentProfile, AgentProfileVersion, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, GoalSession, GoalStatusSignal, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
+import { AgentPermissionDecision, AgentPermissionRequest, AgentProfile, AgentProfileVersion, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, GoalSession, GoalStatusSignal, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
 
 const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
 const MAX_GOAL_REVIEW_ROUNDS = 3;
@@ -214,6 +227,7 @@ export default function App() {
   const [rpArchiveGenerating, setRpArchiveGenerating] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [roomReplyNotification, setRoomReplyNotification] = useState<RoomReplyNotification | null>(null);
+  const [mobileFocusedRoomId, setMobileFocusedRoomId] = useState<string | null>(null);
   const hydratedRef = useRef(false);
   const messageScrollRef = useRef<FlatList<ChatMessage> | null>(null);
   const messageListAtBottomRef = useRef(true);
@@ -226,6 +240,10 @@ export default function App() {
   const streamBuffersRef = useRef<Record<string, string>>({});
   const saveMessagesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const replyNotificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const delayedGoalMessageIdsRef = useRef<Set<string>>(new Set());
+  const alwaysApprovedPermissionKeysRef = useRef<Set<string>>(new Set());
+  const notificationsPermissionRef = useRef<'unknown' | 'granted' | 'denied'>('unknown');
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const selectedRoomIdRef = useRef<string | null>(selectedRoomId);
   const tabRef = useRef<Tab>(tab);
   const roomsRef = useRef<Room[]>(rooms);
@@ -254,6 +272,18 @@ export default function App() {
       showSubscription.remove();
       hideSubscription.remove();
     };
+  }, []);
+
+  useEffect(() => {
+    appStateRef.current = AppState.currentState;
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState;
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    void prepareAgentNotifications();
   }, []);
 
   useEffect(() => {
@@ -492,6 +522,7 @@ export default function App() {
   const onboardingComplete = onboardingSteps.every((step) => step.done);
   const layoutMode = width >= 1200 ? 'desktop' : width >= 900 ? 'wide' : width >= 700 ? 'tablet' : 'compact';
   const isWideLayout = width >= 900;
+  const mobileFocusedChat = !isWideLayout && tab === 'chat' && Boolean(selectedRoom && mobileFocusedRoomId === selectedRoom.id);
   const keyboardAvoidanceEnabled = Platform.OS !== 'web' && !isWideLayout;
   const androidWindowAlreadyResized = Platform.OS === 'android'
     && keyboardHeight > 0
@@ -542,6 +573,18 @@ export default function App() {
   useEffect(() => {
     setSelectedTargetIds([]);
   }, [selectedRoomId]);
+
+  useEffect(() => {
+    if (isWideLayout || tab !== 'chat') {
+      setMobileFocusedRoomId(null);
+    }
+  }, [isWideLayout, tab]);
+
+  useEffect(() => {
+    if (mobileFocusedRoomId && !rooms.some((room) => room.id === mobileFocusedRoomId)) {
+      setMobileFocusedRoomId(null);
+    }
+  }, [mobileFocusedRoomId, rooms]);
 
   useEffect(() => {
     setRoomNameDraft(selectedRoom?.name ?? '');
@@ -1127,15 +1170,13 @@ export default function App() {
   function createDirectRoom(connection: HermesConnection) {
     const existing = rooms.find((room) => room.kind === 'direct' && room.members[0]?.connectionId === connection.id);
     if (existing) {
-      setSelectedRoomId(existing.id);
-      setTab('chat');
+      openFocusedChatRoom(existing.id);
       return;
     }
 
     const room = makeRoom(connection.name, 'direct', [{ connectionId: connection.id, alias: connection.name, enabled: true }]);
     setRooms((current) => [...current, room]);
-    setSelectedRoomId(room.id);
-    setTab('chat');
+    openFocusedChatRoom(room.id);
   }
 
   function createGroupRoom() {
@@ -1154,9 +1195,8 @@ export default function App() {
     const baseRoom = makeRoom(groupName.trim() || 'Hermes 群聊', 'group', members);
     const room: Room = { ...baseRoom, mode: 'studio' };
     setRooms((current) => [...current, room]);
-    setSelectedRoomId(room.id);
+    openFocusedChatRoom(room.id);
     setGroupMemberDraftIds(enabledConnections.map((connection) => connection.id));
-    setTab('chat');
   }
 
 
@@ -1191,8 +1231,7 @@ export default function App() {
       roleplay,
     };
     setRooms((current) => [...current, nextRoom]);
-    setSelectedRoomId(nextRoom.id);
-    setTab('chat');
+    openFocusedChatRoom(nextRoom.id);
     appendCollaborationEvent({
       kind: definition.roleplayEnabled ? 'roleplay_started' : 'template_applied',
       roomId: nextRoom.id,
@@ -1243,6 +1282,7 @@ export default function App() {
     ));
     if (latestAgentMessage) {
       showRoomReplyNotification(roomId, latestAgentMessage);
+      void notifyAgentReplyFinished(roomId, latestAgentMessage);
     }
   }
 
@@ -1265,8 +1305,14 @@ export default function App() {
     const finishedMessage = completedMessage as ChatMessage | null;
     if (finishedMessage) {
       appendSquareEvent(makeSquareEventFromMessage(roomId, finishedMessage));
-      if (finishedMessage.status === 'sent') {
+      const delayedForGoal = delayedGoalMessageIdsRef.current.has(finishedMessage.id);
+      const pendingPermission = finishedMessage.permissionRequest?.status === 'pending';
+      if (finishedMessage.status === 'sent' && (!delayedForGoal || pendingPermission)) {
+        if (pendingPermission) {
+          delayedGoalMessageIdsRef.current.delete(finishedMessage.id);
+        }
         showRoomReplyNotification(roomId, finishedMessage);
+        void notifyAgentReplyFinished(roomId, finishedMessage);
       }
     }
   }
@@ -1291,13 +1337,187 @@ export default function App() {
   }
 
   function openReplyNotification(notification: RoomReplyNotification) {
-    setSelectedRoomId(notification.roomId);
-    setTab('chat');
+    openFocusedChatRoom(notification.roomId);
     setRoomReplyNotification(null);
     if (replyNotificationTimerRef.current) {
       clearTimeout(replyNotificationTimerRef.current);
       replyNotificationTimerRef.current = null;
     }
+  }
+
+  function openFocusedChatRoom(roomId: string) {
+    setSelectedRoomId(roomId);
+    setTab('chat');
+    if (!isWideLayout) {
+      setMobileFocusedRoomId(roomId);
+      setRoomDetailsCollapsed(true);
+      setQuickCommandsOpen(false);
+      setRoomToolsOpen(false);
+      setMessageSearchQuery('');
+    }
+  }
+
+  function openRoomManagement(roomId: string) {
+    setSelectedRoomId(roomId);
+    setTab('chat');
+    setMobileFocusedRoomId(null);
+    setRoomDetailsCollapsed(false);
+    setRoomToolsOpen(true);
+  }
+
+  function leaveFocusedChat() {
+    setMobileFocusedRoomId(null);
+    Keyboard.dismiss();
+  }
+
+  async function prepareAgentNotifications(): Promise<boolean> {
+    if (Platform.OS === 'web') return false;
+    if (notificationsPermissionRef.current === 'granted') return true;
+    if (notificationsPermissionRef.current === 'denied') return false;
+
+    try {
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync(NOTIFICATION_CHANNEL_ID, {
+          name: 'Agent replies',
+          importance: Notifications.AndroidImportance.DEFAULT,
+          vibrationPattern: [0, 180, 80, 180],
+          lightColor: '#2563eb',
+        });
+      }
+
+      const existing = await Notifications.getPermissionsAsync();
+      const resolved = existing.granted ? existing : await Notifications.requestPermissionsAsync();
+      notificationsPermissionRef.current = resolved.granted ? 'granted' : 'denied';
+      return resolved.granted;
+    } catch (error) {
+      notificationsPermissionRef.current = 'denied';
+      console.warn('Failed to prepare local notifications.', error);
+      return false;
+    }
+  }
+
+  async function notifyAgentReplyFinished(roomId: string, message: ChatMessage, mode: 'reply' | 'goal' | 'permission' = 'reply') {
+    if (Platform.OS === 'web') return;
+    if (message.authorId === 'user' || message.authorId === 'system' || message.status === 'running' || message.status === 'error') return;
+    if (appStateRef.current === 'active') return;
+    const pendingPermission = message.permissionRequest?.status === 'pending';
+    if (message.permissionRequest && !pendingPermission) return;
+    const notificationMode = pendingPermission ? 'permission' : mode;
+
+    const ready = await prepareAgentNotifications();
+    if (!ready) return;
+
+    const room = roomsRef.current.find((item) => item.id === roomId);
+    const roomName = room?.name ?? 'Laphiny';
+    const attachmentHint = message.attachments?.length ? ` · ${message.attachments.length} 个附件` : '';
+    const preview = normalizeHermesReplyText(message.content).trim().replace(/\s+/g, ' ').slice(0, 120);
+    const title = notificationMode === 'permission'
+      ? `${roomName} · ${message.authorName} 需要确认`
+      : notificationMode === 'goal'
+      ? `${roomName} · 目标模式已更新`
+      : `${roomName} · ${message.authorName} 已回复`;
+    const body = notificationMode === 'permission'
+      ? `${message.permissionRequest?.title ?? '权限请求'}：${message.permissionRequest?.body ?? preview}`.slice(0, 180)
+      : `${preview || (notificationMode === 'goal' ? '目标模式本轮处理完成' : '新的回复已完成')}${attachmentHint}`;
+
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+          data: { roomId, messageId: message.id, mode: notificationMode },
+          sound: true,
+        },
+        trigger: Platform.OS === 'android' ? { channelId: NOTIFICATION_CHANNEL_ID } : null,
+      });
+    } catch (error) {
+      console.warn('Failed to schedule local notification.', error);
+    }
+  }
+
+  function notifyGoalSessionFinished(room: Room, goal: GoalSession) {
+    void notifyAgentReplyFinished(room.id, {
+      id: goal.lastMessageId ?? goal.id,
+      roomId: room.id,
+      role: 'assistant',
+      authorId: goal.leadConnectionId,
+      authorName: goal.leadAlias,
+      content: goal.lastReview || goal.goal,
+      status: goal.status === 'blocked' ? 'stopped' : 'sent',
+      createdAt: goal.completedAt ?? goal.updatedAt,
+    }, 'goal');
+  }
+
+  function extractAgentReplyArtifacts(rawContent: string): {
+    content: string;
+    attachments: Attachment[];
+    permissionRequest?: AgentPermissionRequest;
+  } {
+    const fileReply = extractAgentFileAttachments(rawContent);
+    const permissionReply = extractAgentPermissionRequest(fileReply.content);
+    return {
+      content: permissionReply.content,
+      attachments: fileReply.attachments,
+      permissionRequest: permissionReply.request,
+    };
+  }
+
+  function getAgentReplyFallback(parsedReply: { content: string; attachments: Attachment[]; permissionRequest?: AgentPermissionRequest }) {
+    if (parsedReply.content) return parsedReply.content;
+    if (parsedReply.permissionRequest) return parsedReply.permissionRequest.body;
+    if (parsedReply.attachments.length) return '已生成附件';
+    return '[Hermes 没有返回内容]';
+  }
+
+  function applyAlwaysPermissionIfNeeded(permissionRequest: AgentPermissionRequest | undefined): AgentPermissionRequest | undefined {
+    if (!permissionRequest) return undefined;
+    const permissionKey = getAgentPermissionKey(permissionRequest);
+    if (!alwaysApprovedPermissionKeysRef.current.has(permissionKey)) return permissionRequest;
+    return {
+      ...permissionRequest,
+      status: 'always',
+      decision: 'always',
+      decidedAt: new Date().toISOString(),
+    };
+  }
+
+  async function continueAgentAfterPermission(room: Room, member: RoomMember, message: ChatMessage, decision: AgentPermissionDecision) {
+    if (!message.permissionRequest) return;
+    const placeholder = makeAssistantPlaceholder(room.id, member);
+    appendMessagesToRoom(room.id, [placeholder]);
+    await streamHermesReply({
+      room,
+      member,
+      placeholderId: placeholder.id,
+      text: buildAgentPermissionDecisionPrompt(message.permissionRequest, decision),
+      attachments: [],
+      previousMessages: messagesByRoom[room.id] ?? [],
+    });
+  }
+
+  function resolveAgentPermissionRequest(message: ChatMessage, decision: AgentPermissionDecision) {
+    const request = message.permissionRequest;
+    if (!request || request.status !== 'pending') return;
+
+    const nextRequest: AgentPermissionRequest = {
+      ...request,
+      status: decision === 'deny' ? 'denied' : decision === 'always' ? 'always' : 'allowed',
+      decision,
+      decidedAt: new Date().toISOString(),
+    };
+    if (decision === 'always') {
+      alwaysApprovedPermissionKeysRef.current.add(getAgentPermissionKey(request));
+    }
+    updateMessageInRoom(message.roomId, message.id, { permissionRequest: nextRequest });
+
+    const room = roomsRef.current.find((item) => item.id === message.roomId);
+    const member = room?.members.find((item) => item.connectionId === message.authorId && item.enabled);
+    if (!room || !member) {
+      showNotice('无法继续权限请求', '对应的房间或 Agent 已不可用。');
+      return;
+    }
+
+    void continueAgentAfterPermission(room, member, { ...message, permissionRequest: nextRequest }, decision);
   }
 
   function setStreamActive(messageId: string, active: boolean) {
@@ -1481,12 +1701,30 @@ export default function App() {
       }
 
       flushStreamMessage(room.id, placeholderId);
-      const parsedReply = extractAgentFileAttachments(streamedText.trim());
-      updateMessageInRoom(room.id, placeholderId, {
-        content: parsedReply.content || (parsedReply.attachments.length ? '已生成附件' : '[Hermes 没有返回内容]'),
+      const parsedReply = extractAgentReplyArtifacts(streamedText.trim());
+      const permissionRequest = applyAlwaysPermissionIfNeeded(parsedReply.permissionRequest);
+      const answer = getAgentReplyFallback({ ...parsedReply, permissionRequest });
+      const completedMessage: ChatMessage = {
+        id: placeholderId,
+        roomId: room.id,
+        role: 'assistant',
+        authorId: member.connectionId,
+        authorName: member.alias,
+        content: answer,
         attachments: parsedReply.attachments.length ? parsedReply.attachments : undefined,
+        permissionRequest,
+        status: 'sent',
+        createdAt: new Date().toISOString(),
+      };
+      updateMessageInRoom(room.id, placeholderId, {
+        content: answer,
+        attachments: parsedReply.attachments.length ? parsedReply.attachments : undefined,
+        permissionRequest,
         status: 'sent',
       });
+      if (permissionRequest?.status === 'always') {
+        void continueAgentAfterPermission(room, member, completedMessage, 'always');
+      }
     } catch (error) {
       flushStreamMessage(room.id, placeholderId);
       if (isAbortError(error)) {
@@ -1684,6 +1922,7 @@ export default function App() {
     let goalDelegationCount = 0;
     let reviewedGoalDelegationCount = 0;
     let goalReviewRound = 0;
+    let lastGoalTerminalMessage: ChatMessage | null = null;
 
     const scheduleReply = (reply: ScheduledReply): Promise<void> | null => {
       const normalizedTask = reply.text.trim().replace(/\s+/g, ' ').slice(0, 160);
@@ -1707,6 +1946,9 @@ export default function App() {
       const placeholder = makeAssistantPlaceholder(dispatchRoom.id, reply.member);
       if (reply.delegatedFrom) {
         placeholder.delegatedFrom = reply.delegatedFrom;
+      }
+      if (reply.goalMode) {
+        delayedGoalMessageIdsRef.current.add(placeholder.id);
       }
       appendMessagesToRoom(room.id, [placeholder]);
 
@@ -1825,21 +2067,32 @@ export default function App() {
         }
 
         flushStreamMessage(room.id, placeholder.id);
-        const parsedReply = extractAgentFileAttachments(accumulated.trim());
-        const answer = parsedReply.content || (parsedReply.attachments.length ? '已生成附件' : '[Hermes 没有返回内容]');
+        const parsedReply = extractAgentReplyArtifacts(accumulated.trim());
+        const permissionRequest = applyAlwaysPermissionIfNeeded(parsedReply.permissionRequest);
+        const answer = getAgentReplyFallback({ ...parsedReply, permissionRequest });
         const completedMessage: ChatMessage = {
           ...placeholder,
           content: answer,
           attachments: parsedReply.attachments.length ? parsedReply.attachments : undefined,
+          permissionRequest,
           status: 'sent',
         };
+        if (reply.goalMode) {
+          lastGoalTerminalMessage = completedMessage;
+        }
         turnMessages.push(completedMessage);
         updateMessageInRoom(room.id, placeholder.id, {
           content: answer,
           attachments: completedMessage.attachments,
+          permissionRequest,
           status: 'sent',
         });
-        applyGoalAssistantResult(dispatchRoom, reply, completedMessage, answer);
+        if (permissionRequest?.status !== 'pending') {
+          applyGoalAssistantResult(dispatchRoom, reply, completedMessage, answer);
+        }
+        if (permissionRequest?.status === 'always') {
+          void continueAgentAfterPermission(room, reply.member, completedMessage, 'always');
+        }
         appendDiagnosticLog({
           level: 'success',
           category: 'chat',
@@ -1936,6 +2189,9 @@ export default function App() {
             content: stoppedContent,
             status: 'stopped',
           };
+          if (reply.goalMode) {
+            lastGoalTerminalMessage = stoppedMessage;
+          }
           turnMessages.push(stoppedMessage);
           updateMessageInRoom(room.id, placeholder.id, {
             content: stoppedContent,
@@ -2031,6 +2287,14 @@ export default function App() {
 
     if (ritual?.definition.autoConsensus) {
       await generateRitualConsensus(dispatchRoom, ritual, turnMessages);
+    }
+    const terminalGoalMessage = lastGoalTerminalMessage as ChatMessage | null;
+    if (goalMode && terminalGoalMessage && !terminalGoalMessage.permissionRequest) {
+      showRoomReplyNotification(room.id, terminalGoalMessage);
+      void notifyAgentReplyFinished(room.id, terminalGoalMessage, 'goal');
+      for (const message of turnMessages) {
+        delayedGoalMessageIdsRef.current.delete(message.id);
+      }
     }
   }
 
@@ -2857,21 +3121,25 @@ ${content}`)]);
       const anchor = document.createElement('a');
       anchor.href = href;
       anchor.download = filename;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
       anchor.click();
-      if (encoding !== FileSystem.EncodingType.Base64) URL.revokeObjectURL(href);
+      document.body.removeChild(anchor);
+      if (encoding !== FileSystem.EncodingType.Base64) {
+        setTimeout(() => URL.revokeObjectURL(href), 1000);
+      }
       return { uri: filename, userVisible: true, locationLabel: '浏览器下载目录' };
     }
 
     if (Platform.OS === 'android') {
       const storage = FileSystem.StorageAccessFramework;
       try {
-        const initialUri = storage.getUriForDirectoryInRoot('Download/Laphiny');
+        const initialUri = storage.getUriForDirectoryInRoot('Download');
         const permission = await storage.requestDirectoryPermissionsAsync(initialUri);
         if (permission.granted) {
-          const laphinyDirUri = await ensureAndroidLaphinyDirectory(permission.directoryUri);
-          const fileUri = await storage.createFileAsync(laphinyDirUri, filenameWithoutExtension(filename), mimeType);
+          const fileUri = await storage.createFileAsync(permission.directoryUri, filename, normalizeDownloadMimeType(filename, mimeType));
           await storage.writeAsStringAsync(fileUri, data, { encoding });
-          return { uri: fileUri, userVisible: true, locationLabel: 'Download/Laphiny' };
+          return { uri: fileUri, userVisible: true, locationLabel: 'Download' };
         }
       } catch (error) {
         console.warn('Android attachment download via Storage Access Framework failed; falling back to app-private storage.', error);
@@ -2890,28 +3158,6 @@ ${content}`)]);
     return { uri: fileUri, userVisible: false, locationLabel: '应用私有目录/Laphiny' };
   }
 
-  async function ensureAndroidLaphinyDirectory(directoryUri: string): Promise<string> {
-    const storage = FileSystem.StorageAccessFramework;
-    if (isLaphinyDirectoryUri(directoryUri)) return directoryUri;
-
-    try {
-      return await storage.makeDirectoryAsync(directoryUri, 'Laphiny');
-    } catch {
-      const children = await storage.readDirectoryAsync(directoryUri);
-      const existing = children.find(isLaphinyDirectoryUri);
-      if (existing) return existing;
-      throw new Error('无法在下载目录创建 Laphiny 文件夹，请手动选择或创建 Download/Laphiny 后重试');
-    }
-  }
-
-  function isLaphinyDirectoryUri(uri: string): boolean {
-    try {
-      return decodeURIComponent(uri).replace(/\/+$/, '').endsWith('/Laphiny');
-    } catch {
-      return uri.replace(/\/+$/, '').endsWith('/Laphiny');
-    }
-  }
-
   function sanitizeDownloadFilename(filename: string): string {
     return filename
       .replace(/[\\/:*?"<>|]/g, '-')
@@ -2920,8 +3166,13 @@ ${content}`)]);
       .slice(0, 120);
   }
 
-  function filenameWithoutExtension(filename: string): string {
-    return filename.replace(/\.[^.]+$/, '') || 'laphiny-file';
+  function normalizeDownloadMimeType(filename: string, mimeType: string): string {
+    const extension = filename.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+    if (extension === 'txt') return 'text/plain';
+    if (extension === 'md') return 'text/markdown';
+    if (extension === 'png') return 'image/png';
+    if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+    return mimeType || 'application/octet-stream';
   }
 
   function getBase64FromDataUrl(dataUrl: string): string | null {
@@ -3026,6 +3277,7 @@ ${content}`)]);
       activeGoal: completedGoal,
       memoryCapsule: buildGoalMemoryCapsule(room, completedGoal, now),
     });
+    notifyGoalSessionFinished(room, completedGoal);
     appendCollaborationEvent({
       kind: 'memory_updated',
       roomId: room.id,
@@ -3591,6 +3843,7 @@ ${content}`)]);
     <SafeAreaView style={styles.shell}>
       <ExpoStatusBar style="dark" />
       {renderRoomReplyNotification()}
+      {!mobileFocusedChat ? (
       <View style={styles.header}>
         <View style={styles.brandBlock}>
           <Text style={styles.title}>Laphiny</Text>
@@ -3613,7 +3866,9 @@ ${content}`)]);
           ) : null}
         </View>
       </View>
+      ) : null}
 
+      {!mobileFocusedChat ? (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
         <TabButton icon="chatbubble-ellipses-outline" label="聊天" active={tab === 'chat'} onPress={() => setTab('chat')} />
         <TabButton icon="planet-outline" label="灵庭" active={tab === 'square'} onPress={() => setTab('square')} />
@@ -3621,8 +3876,9 @@ ${content}`)]);
         <TabButton icon="git-network-outline" label="连接" active={tab === 'connections'} onPress={() => setTab('connections')} />
         <TabButton icon="settings-outline" label="设置" active={tab === 'settings'} onPress={() => setTab('settings')} />
       </ScrollView>
+      ) : null}
 
-      {renderRuntimeBanner()}
+      {!mobileFocusedChat ? renderRuntimeBanner() : null}
 
       {tab === 'chat' ? renderChat() : null}
       {tab === 'square' ? renderSquare() : null}
@@ -3723,6 +3979,7 @@ ${content}`)]);
             ))}
           </View>
         ) : null}
+        {message.permissionRequest ? renderAgentPermissionPanel(message) : null}
         {message.authorId !== 'user' && message.authorId !== 'system' ? (
           <View style={styles.messageActions}>
             <MiniButton icon="copy-outline" label="复制" onPress={() => copyAgentReply(message)} />
@@ -3742,19 +3999,69 @@ ${content}`)]);
     );
   }
 
+  function renderAgentPermissionPanel(message: ChatMessage) {
+    const request = message.permissionRequest;
+    if (!request) return null;
+    const pending = request.status === 'pending';
+    const statusText = request.status === 'pending'
+      ? '等待选择'
+      : request.status === 'denied'
+        ? '已拒绝'
+        : request.status === 'always'
+          ? '已设为总是同意'
+          : '已同意';
+
+    return (
+      <View style={styles.permissionPanel}>
+        <View style={styles.permissionHeader}>
+          <View style={styles.permissionTitleRow}>
+            <Ionicons name="shield-checkmark-outline" size={16} color="#92400e" />
+            <Text style={styles.permissionTitle}>{request.title}</Text>
+          </View>
+          <Text style={[styles.permissionStatus, !pending && styles.permissionStatusDone]}>{statusText}</Text>
+        </View>
+        <Text style={styles.permissionBody}>{request.body}</Text>
+        {request.reason ? <Text style={styles.permissionReason}>{request.reason}</Text> : null}
+        {pending ? (
+          <View style={styles.permissionActions}>
+            <TouchableOpacity style={[styles.permissionButton, styles.permissionButtonPrimary]} onPress={() => resolveAgentPermissionRequest(message, 'allow')}>
+              <Ionicons name="checkmark-outline" size={15} color="#ffffff" />
+              <Text style={[styles.permissionButtonText, styles.permissionButtonTextPrimary]}>同意</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.permissionButton} onPress={() => resolveAgentPermissionRequest(message, 'deny')}>
+              <Ionicons name="close-outline" size={15} color="#374151" />
+              <Text style={styles.permissionButtonText}>拒绝</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.permissionButton} onPress={() => resolveAgentPermissionRequest(message, 'always')}>
+              <Ionicons name="infinite-outline" size={15} color="#374151" />
+              <Text style={styles.permissionButtonText}>总是同意</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   function renderChat() {
     const roomDetailsOpen = !roomDetailsCollapsed;
+    const focused = !isWideLayout && selectedRoom && mobileFocusedRoomId === selectedRoom.id;
+    if (!isWideLayout && !focused && roomDetailsCollapsed && !roomToolsOpen && !quickCommandsOpen && !normalizedSearchQuery) {
+      return renderMobileRoomPicker();
+    }
+
     return (
-      <View style={[styles.content, isWideLayout && styles.chatDesktop]}>
-        {isWideLayout ? renderChatSidebar() : renderRoomRail()}
+      <View style={[styles.content, isWideLayout && styles.chatDesktop, focused && styles.focusedChatContent]}>
+        {isWideLayout ? renderChatSidebar() : focused ? null : renderRoomRail()}
         <KeyboardAvoidingView
-          style={styles.chatMain}
+          style={[styles.chatMain, focused && styles.focusedChatMain]}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
           enabled={keyboardAvoidanceEnabled}
         >
 
-        {selectedRoom ? (
+        {focused ? renderFocusedChatHeader() : null}
+
+        {selectedRoom && !focused ? (
           <View style={styles.chatHeader}>
             <View style={styles.roomTitleBlock}>
               <Text style={styles.roomTitle}>{selectedRoom.name}</Text>
@@ -3944,6 +4251,75 @@ ${content}`)]);
     );
   }
 
+  function renderFocusedChatHeader() {
+    if (!selectedRoom) return null;
+    return (
+      <View style={styles.focusedChatHeader}>
+        <TouchableOpacity style={styles.focusedBackButton} onPress={leaveFocusedChat} accessibilityRole="button">
+          <Ionicons name="chevron-back" size={22} color="#111827" />
+          <Text style={styles.focusedBackText}>返回</Text>
+        </TouchableOpacity>
+        <View style={styles.focusedChatTitleBlock}>
+          <Text style={styles.focusedChatTitle} numberOfLines={1}>{selectedRoom.name}</Text>
+          <Text style={styles.focusedChatMeta} numberOfLines={1}>
+            {selectedRoom.kind === 'group' ? '群聊' : '单聊'} · {selectedRoom.members.filter((member) => member.enabled).length}/{selectedRoom.members.length}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  function renderMobileRoomPicker() {
+    return (
+      <ScrollView style={styles.mobileRoomPicker} contentContainerStyle={styles.mobileRoomPickerContent}>
+        <View style={styles.mobileRoomPickerHeader}>
+          <View>
+            <Text style={styles.sectionTitle}>选择房间</Text>
+            <Text style={styles.help}>进入后会切换到专注聊天界面；成员、模式和工具请先在房间页调整。</Text>
+          </View>
+          <SecondaryButton icon="albums-outline" label="房间设置" onPress={() => setTab('rooms')} />
+        </View>
+        {rooms.length === 0 ? (
+          <EmptyState
+            icon="albums-outline"
+            title="还没有房间"
+            body="先创建单聊或群聊，再回到这里进入专注聊天。"
+            actionLabel="去创建"
+            onAction={() => setTab('rooms')}
+          />
+        ) : null}
+        {rooms.map((room) => {
+          const roomMessages = messagesByRoom[room.id] ?? [];
+          const lastMessage = roomMessages[roomMessages.length - 1];
+          const unread = unreadByRoom[room.id] ?? 0;
+          return (
+            <TouchableOpacity
+              key={room.id}
+              style={styles.mobileRoomCard}
+              activeOpacity={0.88}
+              onPress={() => openFocusedChatRoom(room.id)}
+            >
+              <View style={styles.mobileRoomCardTop}>
+                <View style={styles.squareEventSource}>
+                  <Ionicons name={room.kind === 'group' ? 'people-outline' : 'person-outline'} size={17} color="#2563eb" />
+                  <Text style={styles.cardTitle} numberOfLines={1}>{room.name}</Text>
+                </View>
+                {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : null}
+              </View>
+              <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
+                {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
+              </Text>
+              <View style={styles.mobileRoomCardFooter}>
+                <Text style={styles.help}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes</Text>
+                <Ionicons name="chevron-forward" size={17} color="#9ca3af" />
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    );
+  }
+
   function renderRoomRail() {
     return (
       <View style={styles.roomRail}>
@@ -3952,7 +4328,7 @@ ${content}`)]);
             <TouchableOpacity
               key={room.id}
               style={[styles.roomPill, room.id === selectedRoomId && styles.roomPillActive]}
-              onPress={() => setSelectedRoomId(room.id)}
+              onPress={() => openFocusedChatRoom(room.id)}
             >
               <Ionicons
                 name={room.kind === 'group' ? 'people-outline' : 'person-outline'}
@@ -3992,7 +4368,7 @@ ${content}`)]);
               <TouchableOpacity
                 key={room.id}
                 style={[styles.sidebarRoom, active && styles.sidebarRoomActive]}
-                onPress={() => setSelectedRoomId(room.id)}
+                onPress={() => openFocusedChatRoom(room.id)}
               >
                 <View style={styles.sidebarRoomTop}>
                   <Text style={[styles.sidebarRoomTitle, active && styles.sidebarRoomTitleActive]}>{room.name}</Text>
@@ -4278,8 +4654,7 @@ ${content}`)]);
                 key={`${result.room.id}-${result.message.id}`}
                 style={[styles.searchResult, result.room.id === selectedRoomId && styles.searchResultActive]}
                 onPress={() => {
-                  setSelectedRoomId(result.room.id);
-                  setTab('chat');
+                  openFocusedChatRoom(result.room.id);
                 }}
               >
                 <View style={styles.searchResultHeader}>
@@ -4868,7 +5243,7 @@ ${content}`)]);
 
         <Text style={styles.panelLabel}>活跃房间</Text>
         {dailyDigest.activeRooms.length ? dailyDigest.activeRooms.map((room) => (
-          <TouchableOpacity key={room.roomId} style={styles.conflictItem} onPress={() => { setSelectedRoomId(room.roomId); setTab('chat'); }}>
+          <TouchableOpacity key={room.roomId} style={styles.conflictItem} onPress={() => openFocusedChatRoom(room.roomId)}>
             <Text style={styles.conflictItemTitle}>{room.roomName}</Text>
             <Text style={styles.help}>{room.messages} 条消息 · {room.collaborations} 个协作事件</Text>
           </TouchableOpacity>
@@ -4888,7 +5263,7 @@ ${content}`)]);
 
         <Text style={styles.panelLabel}>房间记忆胶囊</Text>
         {memoryRooms.length ? memoryRooms.map((room) => (
-          <TouchableOpacity key={room.id} style={styles.conflictItem} onPress={() => { setSelectedRoomId(room.id); setTab('chat'); setRoomToolsOpen(true); }}>
+          <TouchableOpacity key={room.id} style={styles.conflictItem} onPress={() => openRoomManagement(room.id)}>
             <Text style={styles.conflictItemTitle}>{room.name}</Text>
             <Text style={styles.help}>{summarizeRoomMemory(room.memoryCapsule)}</Text>
           </TouchableOpacity>
@@ -5208,14 +5583,14 @@ ${content}`)]);
         <Text style={styles.sectionTitle}>已有房间</Text>
         {rooms.map((room) => (
           <View key={room.id} style={styles.card}>
-            <TouchableOpacity onPress={() => { setSelectedRoomId(room.id); setTab('chat'); }}>
+            <TouchableOpacity onPress={() => openFocusedChatRoom(room.id)}>
               <Text style={styles.cardTitle}>{room.name}</Text>
               <Text style={styles.muted}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.map((member) => `${member.enabled ? '' : '停用:'}${member.alias}`).join('、')}</Text>
               <Text style={styles.help}>{(messagesByRoom[room.id] ?? []).length} 条消息 · 更新于 {formatDateTime(room.updatedAt)}</Text>
             </TouchableOpacity>
             <View style={styles.buttonRow}>
-              <SecondaryButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => { setSelectedRoomId(room.id); setTab('chat'); }} />
-              <SecondaryButton icon="options-outline" label="管理" onPress={() => { setSelectedRoomId(room.id); setTab('chat'); setRoomToolsOpen(true); }} />
+              <SecondaryButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => openFocusedChatRoom(room.id)} />
+              <SecondaryButton icon="options-outline" label="管理" onPress={() => openRoomManagement(room.id)} />
             </View>
           </View>
         ))}
@@ -5619,6 +5994,10 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
+  focusedChatContent: {
+    paddingHorizontal: 0,
+    paddingBottom: 0,
+  },
   chatDesktop: {
     flexDirection: 'row',
     gap: 12,
@@ -5714,6 +6093,46 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  focusedChatMain: {
+    backgroundColor: '#f8fafc',
+  },
+  focusedChatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 50,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  focusedBackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    minHeight: 34,
+    paddingRight: 8,
+  },
+  focusedBackText: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  focusedChatTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  focusedChatTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  focusedChatMeta: {
+    color: '#6b7280',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   collabDrawer: {
     width: 310,
     minWidth: 290,
@@ -5747,6 +6166,41 @@ const styles = StyleSheet.create({
   panel: {
     padding: 20,
     gap: 12,
+  },
+  mobileRoomPicker: {
+    flex: 1,
+  },
+  mobileRoomPickerContent: {
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 20,
+  },
+  mobileRoomPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  mobileRoomCard: {
+    gap: 9,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  mobileRoomCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  mobileRoomCardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
   },
   roomRail: {
     paddingHorizontal: 20,
@@ -6513,6 +6967,85 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     marginTop: 10,
     gap: 8,
+  },
+  permissionPanel: {
+    gap: 8,
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    backgroundColor: '#fffbeb',
+  },
+  permissionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  permissionTitleRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+  },
+  permissionTitle: {
+    flex: 1,
+    color: '#78350f',
+    fontWeight: '900',
+  },
+  permissionStatus: {
+    overflow: 'hidden',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    color: '#92400e',
+    backgroundColor: '#fef3c7',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  permissionStatusDone: {
+    color: '#166534',
+    backgroundColor: '#dcfce7',
+  },
+  permissionBody: {
+    color: '#451a03',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  permissionReason: {
+    color: '#92400e',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  permissionActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  permissionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  permissionButtonPrimary: {
+    borderColor: '#111827',
+    backgroundColor: '#111827',
+  },
+  permissionButtonText: {
+    color: '#374151',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  permissionButtonTextPrimary: {
+    color: '#ffffff',
   },
   attachments: {
     flexDirection: 'row',
