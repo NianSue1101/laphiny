@@ -18,11 +18,7 @@ import {
   ScrollView,
   StyleSheet,
   StatusBar as NativeStatusBar,
-  Text as NativeText,
-  TextInput as NativeTextInput,
   TouchableOpacity,
-  type TextInputProps,
-  type TextProps,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -37,6 +33,7 @@ import {
   MAX_DELEGATION_DEPTH,
   QUICK_COMMANDS,
 } from './src/config/app_config';
+import { AppText as Text, AppTextInput as TextInput, setAppTextFontFamily } from './src/components/AppText';
 import {
   AttachmentPreview,
   AgentAvatar,
@@ -55,6 +52,7 @@ import {
   TabButton,
 } from './src/components/Primitives';
 import { MarkdownText } from './src/components/MarkdownText';
+import { RoomManagementPanel } from './src/components/RoomManagementPanel';
 import { Ionicons } from './src/components/SafeIcon';
 import {
   buildChatHistory,
@@ -100,6 +98,12 @@ import {
   requestConfirm,
   showNotice,
 } from './src/app/app_utils';
+import {
+  getBlackboardStatusLabel,
+  getDecisionStatusLabel,
+  getGoalPlanItemStatusLabel,
+  getGoalStatusLabel,
+} from './src/app/app_status_labels';
 import type {
   ConnectionFormState,
   ConnectionHealth,
@@ -125,18 +129,6 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
-
-let appTextFontFamily: string | undefined;
-
-function Text(props: TextProps) {
-  const style = appTextFontFamily ? [props.style, { fontFamily: appTextFontFamily }] : props.style;
-  return <NativeText {...props} style={style} />;
-}
-
-function TextInput(props: TextInputProps) {
-  const style = appTextFontFamily ? [props.style, { fontFamily: appTextFontFamily }] : props.style;
-  return <NativeTextInput {...props} style={style} />;
-}
 
 const NOTIFICATION_CHANNEL_ID = 'laphiny-agent-replies';
 
@@ -333,7 +325,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    appTextFontFamily = selectedFontFamily;
+    setAppTextFontFamily(selectedFontFamily);
     forceFontRender((value) => value + 1);
   }, [selectedFontFamily]);
 
@@ -4916,126 +4908,23 @@ ${content}`)]);
   }
 
   function renderRoomManagementPanel(room: Room) {
-    const roomMessages = messagesByRoom[room.id] ?? [];
-    const enabledCount = room.members.filter((member) => member.enabled).length;
-    const roomGrowth = summarizeRoomGrowth(room);
     return (
-      <View style={styles.roomManagementPanel}>
-        <View style={styles.syncHeader}>
-          <View style={styles.syncHeaderText}>
-            <Text style={styles.panelLabel}>房间管理中心</Text>
-            <Text style={styles.help}>当前正在管理「{room.name}」，所有修改直接写入这个房间，不会跳转到聊天旧面板。</Text>
-          </View>
-          <StatusToken icon="settings-outline" label={roomGrowth.label} tone="memory" />
-        </View>
-        <View style={styles.toolMetricRow}>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{roomMessages.length}</Text>
-            <Text style={styles.toolMetricLabel}>消息</Text>
-          </View>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{enabledCount}/{room.members.length}</Text>
-            <Text style={styles.toolMetricLabel}>成员</Text>
-          </View>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
-            <Text style={styles.toolMetricLabel}>上下文</Text>
-          </View>
-        </View>
-        <Text style={styles.panelLabel}>基础信息</Text>
-        <TextInput
-          style={styles.input}
-          value={room.name}
-          onChangeText={(name) => updateRoomInline(room.id, { name })}
-          placeholder="房间名称"
-        />
-        <View style={styles.inlineFormRow}>
-          <Text style={styles.help}>上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT} 条</Text>
-          <View style={styles.stepper}>
-            <MiniButton icon="remove-outline" label="-4" onPress={() => adjustRoomContextLimit(room, -4)} />
-            <MiniButton icon="add-outline" label="+4" onPress={() => adjustRoomContextLimit(room, 4)} />
-          </View>
-        </View>
-        {room.kind === 'group' ? (
-          <>
-            <Text style={styles.panelLabel}>房间模式</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modePillRow}>
-              {ROOM_MODES.map((mode) => (
-                <TouchableOpacity
-                  key={mode.id}
-                  style={[styles.modePill, room.mode === mode.id && styles.modePillActive]}
-                  onPress={() => applyRoomModeInline(room, mode.id)}
-                >
-                  <Text style={[styles.modePillText, room.mode === mode.id && styles.modePillTextActive]}>{mode.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <Text style={styles.panelLabel}>默认协作策略</Text>
-            <View style={styles.toolActions}>
-              <MiniButton icon="hand-left-outline" label={room.defaultCollaborationMode === 'manual' || !room.defaultCollaborationMode ? '默认：手动' : '切手动'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'manual' })} />
-              <MiniButton icon="git-network-outline" label={room.defaultCollaborationMode === 'parallel' ? '默认：并行' : '切并行'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'parallel' })} />
-              <MiniButton icon="git-branch-outline" label={room.defaultCollaborationMode === 'sequential' ? '默认：接力' : '切接力'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'sequential' })} />
-              <MiniButton icon={room.autoDelegationEnabled === false ? 'flash-off-outline' : 'flash-outline'} label={room.autoDelegationEnabled === false ? '自动委托关' : '自动委托开'} onPress={() => updateRoomInline(room.id, { autoDelegationEnabled: room.autoDelegationEnabled === false })} />
-            </View>
-            <View style={styles.stepper}>
-              <MiniButton icon="remove-outline" label="深度 -1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) - 1)) })} />
-              <Text style={styles.help}>最大委托深度：{room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH}</Text>
-              <MiniButton icon="add-outline" label="深度 +1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) + 1)) })} />
-            </View>
-          </>
-        ) : null}
-        <Text style={styles.panelLabel}>成员</Text>
-        <View style={styles.roomMemberManageList}>
-          {room.members.map((member) => {
-            const connection = connectionById.get(member.connectionId);
-            return (
-              <View key={member.connectionId} style={styles.roomMemberManageRow}>
-                <TouchableOpacity onPress={() => toggleRoomMemberEnabledInline(room, member)} disabled={room.kind !== 'group'}>
-                  <AgentBadge alias={member.alias} active={member.enabled} imageUri={connection?.avatarUri} />
-                </TouchableOpacity>
-                <TextInput
-                  style={[styles.input, styles.memberAliasInput]}
-                  value={member.alias}
-                  onChangeText={(alias) => updateRoomInline(room.id, { members: room.members.map((item) => item.connectionId === member.connectionId ? { ...item, alias } : item) })}
-                  placeholder="成员别名"
-                />
-                {connection ? (
-                  <MiniButton icon="image-outline" label="头像" onPress={() => chooseConnectionAvatar(connection)} />
-                ) : null}
-                {room.kind === 'group' && room.members.length > 1 ? (
-                  <MiniButton
-                    icon="remove-circle-outline"
-                    label="移除"
-                    onPress={() => updateRoomInline(room.id, { members: room.members.filter((item) => item.connectionId !== member.connectionId) })}
-                  />
-                ) : null}
-              </View>
-            );
-          })}
-        </View>
-        {room.kind === 'group' ? (
-          <View style={styles.toolActions}>
-            {enabledConnections.filter((connection) => !room.members.some((member) => member.connectionId === connection.id)).map((connection) => (
-              <MiniButton
-                key={connection.id}
-                icon="add-circle-outline"
-                label={`加入 ${connection.name}`}
-                onPress={() => updateRoomInline(room.id, {
-                  members: [...room.members, { connectionId: connection.id, alias: connection.name, enabled: connection.enabled }],
-                  sessionIds: { ...room.sessionIds, [connection.id]: `laphiny-${room.id}-${connection.id}` },
-                  memberSessionKeys: { ...(room.memberSessionKeys ?? {}), [connection.id]: `laphiny-${room.id}-key` },
-                })}
-              />
-            ))}
-          </View>
-        ) : null}
-        <Text style={styles.help}>成员启用、别名、头像、加入和移除都在这里完成；聊天页不再维护另一套重复入口。</Text>
-        <View style={styles.toolActions}>
-          <MiniButton icon="chatbubble-ellipses-outline" label="进入聊天" onPress={() => openFocusedChatRoom(room.id)} />
-          <MiniButton icon="close-outline" label="关闭管理" onPress={() => setManagedRoomId(null)} />
-        </View>
-      </View>
+      <RoomManagementPanel
+        room={room}
+        messageCount={(messagesByRoom[room.id] ?? []).length}
+        enabledConnections={enabledConnections}
+        connectionById={connectionById}
+        styles={styles}
+        TextComponent={Text}
+        TextInputComponent={TextInput}
+        updateRoomInline={updateRoomInline}
+        adjustRoomContextLimit={adjustRoomContextLimit}
+        applyRoomModeInline={applyRoomModeInline}
+        toggleRoomMemberEnabledInline={toggleRoomMemberEnabledInline}
+        chooseConnectionAvatar={chooseConnectionAvatar}
+        openFocusedChatRoom={openFocusedChatRoom}
+        closeManagement={() => setManagedRoomId(null)}
+      />
     );
   }
 
@@ -6766,33 +6655,6 @@ function getDelegationTaskStatusStyle(status: DelegationTask['status']) {
   return styles.diagnosticLevelInfo;
 }
 
-function getGoalStatusLabel(status: GoalSession['status'], signal?: GoalStatusSignal): string {
-  if (status === 'awaiting_user') return signal === 'blocked' ? '等待确认：受阻' : '等待确认：已完成';
-  if (status === 'done') return '已结束';
-  if (status === 'blocked') return '已受阻';
-  if (status === 'reviewing') return '复盘中';
-  if (status === 'running') return '推进中';
-  if (status === 'planning') return '规划中';
-  return '已取消';
-}
-
-function getGoalPlanItemStatusLabel(status: GoalSession['planItems'][number]['status']): string {
-  if (status === 'done') return '完成';
-  if (status === 'running') return '进行中';
-  if (status === 'blocked') return '受阻';
-  return '待办';
-}
-
-function getBlackboardStatusLabel(status: RoomBlackboardItemStatus): string {
-  if (status === 'pinned') return '置顶';
-  if (status === 'resolved') return '已完成';
-  return '开放';
-}
-
-function getDecisionStatusLabel(status: RoomDecisionRecordStatus): string {
-  if (status === 'superseded') return '已过期';
-  return '生效中';
-}
 
 function getGoalPlanItemStatusStyle(status: GoalSession['planItems'][number]['status']) {
   if (status === 'done') return styles.diagnosticLevelSuccess;
