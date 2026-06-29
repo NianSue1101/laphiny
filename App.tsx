@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   AppState,
   AppStateStatus,
+  BackHandler,
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -15,9 +16,11 @@ import {
   ScrollView,
   StyleSheet,
   StatusBar as NativeStatusBar,
-  Text,
-  TextInput,
+  Text as NativeText,
+  TextInput as NativeTextInput,
   TouchableOpacity,
+  type TextInputProps,
+  type TextProps,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -121,6 +124,18 @@ Notifications.setNotificationHandler({
   }),
 });
 
+let appTextFontFamily: string | undefined;
+
+function Text(props: TextProps) {
+  const style = appTextFontFamily ? [props.style, { fontFamily: appTextFontFamily }] : props.style;
+  return <NativeText {...props} style={style} />;
+}
+
+function TextInput(props: TextInputProps) {
+  const style = appTextFontFamily ? [props.style, { fontFamily: appTextFontFamily }] : props.style;
+  return <NativeTextInput {...props} style={style} />;
+}
+
 const NOTIFICATION_CHANNEL_ID = 'laphiny-agent-replies';
 
 import { pickDocuments, pickImages } from './src/lib/attachments';
@@ -196,6 +211,7 @@ export default function App() {
   const [feedbackLogs, setFeedbackLogs] = useState<FeedbackLogEntry[]>([]);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [expandedMobileRoomId, setExpandedMobileRoomId] = useState<string | null>(null);
+  const [, forceFontRender] = useState(0);
   const [storageBackend, setStorageBackend] = useState<StorageBackendInfo | null>(null);
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ enabled: false, baseUrl: '', apiKey: '', updatedAt: new Date().toISOString() });
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -303,12 +319,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const textAny = Text as unknown as { defaultProps?: { style?: unknown } };
-    const inputAny = TextInput as unknown as { defaultProps?: { style?: unknown } };
-    textAny.defaultProps = textAny.defaultProps ?? {};
-    inputAny.defaultProps = inputAny.defaultProps ?? {};
-    textAny.defaultProps.style = selectedFontFamily ? [{ fontFamily: selectedFontFamily }] : undefined;
-    inputAny.defaultProps.style = selectedFontFamily ? [{ fontFamily: selectedFontFamily }] : undefined;
+    appTextFontFamily = selectedFontFamily;
+    forceFontRender((value) => value + 1);
   }, [selectedFontFamily]);
 
   useEffect(() => {
@@ -578,6 +590,27 @@ export default function App() {
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
   const groupMemberDraftSet = useMemo(() => new Set(groupMemberDraftIds), [groupMemberDraftIds]);
   const slashCommandSuggestions = useMemo(() => getSlashCommandSuggestions(draft), [draft]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (mobileFocusedChat) {
+        leaveFocusedChat();
+        return true;
+      }
+      if (expandedMobileRoomId) {
+        setExpandedMobileRoomId(null);
+        return true;
+      }
+      if (tab !== 'chat') {
+        setTab('chat');
+        return true;
+      }
+      return false;
+    });
+    return () => subscription.remove();
+  }, [expandedMobileRoomId, mobileFocusedChat, tab]);
+
   const healthSummary = useMemo(() => {
     let ok = 0;
     let error = 0;
@@ -1533,6 +1566,29 @@ export default function App() {
       attachments: fileReply.attachments,
       permissionRequest: permissionReply.request,
     };
+  }
+
+  function getRenderableMessageArtifacts(message: ChatMessage): { content: string; attachments: Attachment[] } {
+    const currentAttachments = message.attachments ?? [];
+    if (message.authorId === 'user') return { content: message.content, attachments: currentAttachments };
+    const fileReply = extractAgentFileAttachments(message.content);
+    if (!fileReply.attachments.length) return { content: message.content, attachments: currentAttachments };
+    return {
+      content: fileReply.content || (currentAttachments.length || fileReply.attachments.length ? '已生成附件' : message.content),
+      attachments: mergeRenderableAttachments(currentAttachments, fileReply.attachments),
+    };
+  }
+
+  function mergeRenderableAttachments(current: Attachment[], extracted: Attachment[]): Attachment[] {
+    const seen = new Set(current.map((attachment) => `${attachment.name}:${attachment.size}:${attachment.kind}`));
+    const merged = [...current];
+    for (const attachment of extracted) {
+      const key = `${attachment.name}:${attachment.size}:${attachment.kind}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(attachment);
+    }
+    return merged;
   }
 
   function getAgentReplyFallback(parsedReply: { content: string; attachments: Attachment[]; permissionRequest?: AgentPermissionRequest }) {
@@ -4077,9 +4133,10 @@ ${content}`)]);
   }
 
   function renderMessageBubble(message: ChatMessage) {
+    const renderable = getRenderableMessageArtifacts(message);
     const displayContent = message.authorId === 'user'
-      ? message.content
-      : normalizeHermesReplyText(message.content);
+      ? renderable.content
+      : normalizeHermesReplyText(renderable.content);
 
     return (
       <View
@@ -4108,9 +4165,9 @@ ${content}`)]);
           </Text>
         </View>
         <MarkdownText content={displayContent} />
-        {message.attachments?.length ? (
+        {renderable.attachments.length ? (
           <View style={styles.attachments}>
-            {message.attachments.map((attachment) => (
+            {renderable.attachments.map((attachment) => (
               <AttachmentPreview
                 key={attachment.id}
                 attachment={attachment}
@@ -5329,131 +5386,144 @@ ${content}`)]);
         <View style={styles.syncPanel}>
           <View style={styles.syncHeader}>
             <View style={styles.syncHeaderText}>
-              <Text style={styles.cardTitle}>本地备份 / 恢复</Text>
-              <Text style={styles.help}>导出完整 JSON 文件，或在另一台设备上传合并恢复。备份可能包含 API Key，请只保存在可信位置。</Text>
+              <Text style={styles.cardTitle}>数据、备份与日志</Text>
+              <Text style={styles.help}>把本地备份、脱敏反馈、诊断日志和存储状态放在一起，避免在设置页里来回找。</Text>
             </View>
             <Text style={styles.squareCount}>v5</Text>
           </View>
-          <View style={styles.buttonRow}>
-            <SecondaryButton icon="download-outline" label="导出备份文件" onPress={exportAppBackup} />
-            <SecondaryButton icon="cloud-upload-outline" label="上传备份文件" onPress={importBackupFile} />
-            <SecondaryButton icon="clipboard-outline" label="粘贴恢复" onPress={handlePasteBackup} disabled={!backupPaste.trim()} />
-          </View>
-          <TextInput
-            style={[styles.input, styles.jsonPasteInput]}
-            multiline
-            value={backupPaste}
-            onChangeText={setBackupPaste}
-            placeholder="粘贴 Laphiny 完整备份 JSON，恢复时会合并当前数据。"
-            autoCapitalize="none"
-            textAlignVertical="top"
-          />
-        </View>
 
-        <View style={styles.syncPanel}>
-          <View style={styles.syncHeader}>
-            <View style={styles.syncHeaderText}>
-              <Text style={styles.cardTitle}>反馈日志</Text>
-              <Text style={styles.help}>上传的是脱敏诊断包，不包含 Hermes API Key；服务器端可用 scripts/feedback-server.mjs 部署，默认端口 8788。</Text>
+          <View style={styles.settingsSubsection}>
+            <Text style={styles.panelLabel}>本地备份 / 恢复</Text>
+            <Text style={styles.help}>完整备份可能包含 API Key，请只保存在可信位置；恢复时会合并当前数据。</Text>
+            <View style={styles.buttonRow}>
+              <SecondaryButton icon="download-outline" label="导出备份文件" onPress={exportAppBackup} />
+              <SecondaryButton icon="cloud-upload-outline" label="上传备份文件" onPress={importBackupFile} />
+              <SecondaryButton icon="clipboard-outline" label="粘贴恢复" onPress={handlePasteBackup} disabled={!backupPaste.trim()} />
             </View>
-            <TouchableOpacity
-              style={[styles.syncToggle, feedbackConfig.enabled && styles.syncToggleOn]}
-              onPress={() => setFeedbackConfig((current) => ({ ...current, enabled: !current.enabled, updatedAt: new Date().toISOString() }))}
-            >
-              <Text style={[styles.syncToggleText, feedbackConfig.enabled && styles.syncToggleTextOn]}>
-                {feedbackConfig.enabled ? '已启用' : '未启用'}
-              </Text>
-            </TouchableOpacity>
+            <TextInput
+              style={[styles.input, styles.jsonPasteInput]}
+              multiline
+              value={backupPaste}
+              onChangeText={setBackupPaste}
+              placeholder="粘贴 Laphiny 完整备份 JSON，恢复时会合并当前数据。"
+              autoCapitalize="none"
+              textAlignVertical="top"
+            />
           </View>
-          <TextInput
-            style={styles.input}
-            value={feedbackConfig.baseUrl}
-            onChangeText={(baseUrl) => setFeedbackConfig((current) => ({ ...current, baseUrl, updatedAt: new Date().toISOString() }))}
-            placeholder="https://your-feedback.example"
-            autoCapitalize="none"
-            keyboardType="url"
-          />
-          <TextInput
-            style={styles.input}
-            value={feedbackConfig.apiKey}
-            onChangeText={(apiKey) => setFeedbackConfig((current) => ({ ...current, apiKey, updatedAt: new Date().toISOString() }))}
-            placeholder="反馈服务 API Key，可留空"
-            autoCapitalize="none"
-            secureTextEntry
-          />
-          <View style={styles.buttonRow}>
-            <SecondaryButton icon="cloud-upload-outline" label={feedbackBusy ? '处理中...' : '上传反馈日志'} onPress={uploadFeedbackLogs} disabled={feedbackBusy} />
-            <SecondaryButton icon="cloud-download-outline" label={feedbackBusy ? '处理中...' : '拉取服务器日志'} onPress={pullFeedbackLogs} disabled={feedbackBusy} />
-          </View>
-          {feedbackLogs.length ? (
-            <View style={styles.diagnosticList}>
-              {feedbackLogs.map((entry) => (
-                <View key={entry.id} style={styles.diagnosticItem}>
-                  <View style={styles.diagnosticHeader}>
-                    <Text style={styles.squareEventTitle}>{entry.source || 'Laphiny App'}</Text>
-                    <Text style={styles.squareEventMeta}>{formatDateTime(entry.createdAt)}</Text>
+
+          <View style={styles.settingsDivider} />
+
+          <View style={styles.settingsSubsection}>
+            <View style={styles.syncHeader}>
+              <View style={styles.syncHeaderText}>
+                <Text style={styles.panelLabel}>反馈日志</Text>
+                <Text style={styles.help}>上传脱敏诊断包，不包含 Hermes API Key；服务器端默认端口 8788。</Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.syncToggle, feedbackConfig.enabled && styles.syncToggleOn]}
+                onPress={() => setFeedbackConfig((current) => ({ ...current, enabled: !current.enabled, updatedAt: new Date().toISOString() }))}
+              >
+                <Text style={[styles.syncToggleText, feedbackConfig.enabled && styles.syncToggleTextOn]}>
+                  {feedbackConfig.enabled ? '已启用' : '未启用'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.input}
+              value={feedbackConfig.baseUrl}
+              onChangeText={(baseUrl) => setFeedbackConfig((current) => ({ ...current, baseUrl, updatedAt: new Date().toISOString() }))}
+              placeholder="https://your-feedback.example"
+              autoCapitalize="none"
+              keyboardType="url"
+            />
+            <TextInput
+              style={styles.input}
+              value={feedbackConfig.apiKey}
+              onChangeText={(apiKey) => setFeedbackConfig((current) => ({ ...current, apiKey, updatedAt: new Date().toISOString() }))}
+              placeholder="反馈服务 API Key，可留空"
+              autoCapitalize="none"
+              secureTextEntry
+            />
+            <View style={styles.buttonRow}>
+              <SecondaryButton icon="cloud-upload-outline" label={feedbackBusy ? '处理中...' : '上传反馈日志'} onPress={uploadFeedbackLogs} disabled={feedbackBusy} />
+              <SecondaryButton icon="cloud-download-outline" label={feedbackBusy ? '处理中...' : '拉取服务器日志'} onPress={pullFeedbackLogs} disabled={feedbackBusy} />
+            </View>
+            {feedbackLogs.length ? (
+              <View style={styles.diagnosticList}>
+                {feedbackLogs.map((entry) => (
+                  <View key={entry.id} style={styles.diagnosticItem}>
+                    <View style={styles.diagnosticHeader}>
+                      <Text style={styles.squareEventTitle}>{entry.source || 'Laphiny App'}</Text>
+                      <Text style={styles.squareEventMeta}>{formatDateTime(entry.createdAt)}</Text>
+                    </View>
+                    <Text style={styles.squareEventMeta}>
+                      {entry.platform ?? 'unknown'} · v{entry.appVersion ?? 'unknown'} · {entry.id}
+                    </Text>
+                    {entry.summary ? <Text style={styles.diagnosticMessage}>{entry.summary}</Text> : null}
                   </View>
-                  <Text style={styles.squareEventMeta}>
-                    {entry.platform ?? 'unknown'} · v{entry.appVersion ?? 'unknown'} · {entry.id}
-                  </Text>
-                  {entry.summary ? <Text style={styles.diagnosticMessage}>{entry.summary}</Text> : null}
-                </View>
-              ))}
-            </View>
-          ) : null}
-        </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
 
-        <View style={styles.diagnosticPanel}>
-          <View style={styles.syncHeader}>
-            <View style={styles.syncHeaderText}>
-              <Text style={styles.cardTitle}>诊断日志</Text>
-              <Text style={styles.help}>记录最近的 Hermes 请求、Agent 委托、连接测试、同步和备份恢复结果。复制诊断包时会脱敏 API Key。</Text>
+          <View style={styles.settingsDivider} />
+
+          <View style={styles.settingsSubsection}>
+            <View style={styles.syncHeader}>
+              <View style={styles.syncHeaderText}>
+                <Text style={styles.panelLabel}>诊断日志</Text>
+                <Text style={styles.help}>记录最近的请求、委托、连接测试、同步和备份恢复结果。复制诊断包会脱敏。</Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.syncToggle, diagnosticLogsOpen && styles.syncToggleOn]}
+                onPress={() => setDiagnosticLogsOpen((open) => !open)}
+              >
+                <Text style={[styles.syncToggleText, diagnosticLogsOpen && styles.syncToggleTextOn]}>
+                  {diagnosticLogsOpen ? '已展开' : '已收起'}
+                </Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={[styles.syncToggle, diagnosticLogsOpen && styles.syncToggleOn]}
-              onPress={() => setDiagnosticLogsOpen((open) => !open)}
-            >
-              <Text style={[styles.syncToggleText, diagnosticLogsOpen && styles.syncToggleTextOn]}>
-                {diagnosticLogsOpen ? '已展开' : '已收起'}
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.healthMetricRow}>
+              <HealthMetric label="总数" value={diagnosticSummary.total} tone="unknown" />
+              <HealthMetric label="近 50 错误" value={diagnosticSummary.errors} tone={diagnosticSummary.errors > 0 ? 'error' : 'ok'} />
+              <HealthMetric label="近 50 警告" value={diagnosticSummary.warnings} tone={diagnosticSummary.warnings > 0 ? 'checking' : 'ok'} />
+            </View>
+            <View style={styles.buttonRow}>
+              <SecondaryButton icon="copy-outline" label="复制诊断包" onPress={copyDiagnosticBundle} />
+              <SecondaryButton icon="trash-outline" label="清空日志" onPress={clearDiagnosticLogs} disabled={diagnosticLogs.length === 0} />
+            </View>
+            {diagnosticLogsOpen ? (
+              <View style={styles.diagnosticList}>
+                {diagnosticSummary.recent.length === 0 ? (
+                  <Text style={styles.help}>还没有诊断日志。发送消息、测试连接或同步后会自动记录。</Text>
+                ) : null}
+                {[...diagnosticSummary.recent].reverse().map((log) => (
+                  <View key={log.id} style={styles.diagnosticItem}>
+                    <View style={styles.diagnosticHeader}>
+                      <View style={styles.squareEventSource}>
+                        <Ionicons name={getDiagnosticLogIcon(log)} size={16} color="#2563eb" />
+                        <Text style={styles.squareEventTitle}>{log.title}</Text>
+                      </View>
+                      <Text style={[styles.diagnosticLevel, getDiagnosticLevelStyle(log.level)]}>{getDiagnosticLevelLabel(log.level)}</Text>
+                    </View>
+                    <Text style={styles.squareEventMeta}>
+                      {getDiagnosticCategoryLabel(log.category)}{log.connectionName ? ` · ${log.connectionName}` : ''}{log.roomName ? ` · ${log.roomName}` : ''}{log.durationMs != null ? ` · ${log.durationMs}ms` : ''}{log.requestId ? ` · ${log.requestId}` : ''}
+                    </Text>
+                    {log.message ? <Text style={styles.diagnosticMessage}>{log.message}</Text> : null}
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
-          <View style={styles.healthMetricRow}>
-            <HealthMetric label="总数" value={diagnosticSummary.total} tone="unknown" />
-            <HealthMetric label="近 50 错误" value={diagnosticSummary.errors} tone={diagnosticSummary.errors > 0 ? 'error' : 'ok'} />
-            <HealthMetric label="近 50 警告" value={diagnosticSummary.warnings} tone={diagnosticSummary.warnings > 0 ? 'checking' : 'ok'} />
-          </View>
+
+          <View style={styles.settingsDivider} />
+
           <View style={styles.storageInfoBox}>
-            <Text style={styles.storageInfoTitle}>存储后端</Text>
+            <Text style={styles.storageInfoTitle}>存储与隐私状态</Text>
             <Text style={styles.storageInfoText}>密钥：{storageBackend?.secretBackend ?? '加载中'} · 长期记录：{storageBackend?.durableBackend ?? '加载中'} · SW {getServiceWorkerStatusLabel(serviceWorkerStatus)}{pwaInstalled ? ' · 已安装 PWA' : ''}</Text>
+            <Text style={styles.storageInfoText}>默认本地保存；同步、反馈和完整备份都需要用户显式操作或启用。</Text>
             {storageBackend?.durableDirectory ? <Text style={styles.storageInfoPath}>{storageBackend.durableDirectory}</Text> : null}
           </View>
-          <View style={styles.buttonRow}>
-            <SecondaryButton icon="copy-outline" label="复制诊断包" onPress={copyDiagnosticBundle} />
-            <SecondaryButton icon="trash-outline" label="清空日志" onPress={clearDiagnosticLogs} disabled={diagnosticLogs.length === 0} />
-          </View>
-          {diagnosticLogsOpen ? (
-            <View style={styles.diagnosticList}>
-              {diagnosticSummary.recent.length === 0 ? (
-                <Text style={styles.help}>还没有诊断日志。发送消息、测试连接或同步后会自动记录。</Text>
-              ) : null}
-              {[...diagnosticSummary.recent].reverse().map((log) => (
-                <View key={log.id} style={styles.diagnosticItem}>
-                  <View style={styles.diagnosticHeader}>
-                    <View style={styles.squareEventSource}>
-                      <Ionicons name={getDiagnosticLogIcon(log)} size={16} color="#2563eb" />
-                      <Text style={styles.squareEventTitle}>{log.title}</Text>
-                    </View>
-                    <Text style={[styles.diagnosticLevel, getDiagnosticLevelStyle(log.level)]}>{getDiagnosticLevelLabel(log.level)}</Text>
-                  </View>
-                  <Text style={styles.squareEventMeta}>
-                    {getDiagnosticCategoryLabel(log.category)}{log.connectionName ? ` · ${log.connectionName}` : ''}{log.roomName ? ` · ${log.roomName}` : ''}{log.durationMs != null ? ` · ${log.durationMs}ms` : ''}{log.requestId ? ` · ${log.requestId}` : ''}
-                  </Text>
-                  {log.message ? <Text style={styles.diagnosticMessage}>{log.message}</Text> : null}
-                </View>
-              ))}
-            </View>
-          ) : null}
         </View>
       </ScrollView>
     );
@@ -6909,6 +6979,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e5e7eb',
     backgroundColor: '#ffffff',
+  },
+  settingsSubsection: {
+    gap: 9,
+  },
+  settingsDivider: {
+    height: 1,
+    backgroundColor: '#e5e7eb',
   },
   diagnosticPanel: {
     gap: 10,

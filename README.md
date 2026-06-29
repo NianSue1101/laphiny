@@ -112,7 +112,7 @@ Laphiny 的核心设计理念是 **Soul-native，而不是 Prompt-native**：
 - 新增夜间模式、系统字体 / LXGW WenKai 字体切换和头像个性化入口
 - 新增脱敏反馈日志上传与服务器日志拉取能力，配套 `scripts/feedback-server.mjs`
 - 优化 PR 自动审查 Action：缩短 diff、延长 Hermes 请求超时并增加重试
-- 新增产品策略文档：见 `docs/PRODUCT_STRATEGY.md`
+- 新增产品策略文档：见 `docs/PRODUCT_STRATEGY.zh-CN.md`
 
 ---
 
@@ -172,7 +172,7 @@ npm test
 npm run web:build
 ```
 
-当前测试覆盖 56 个用例，主要覆盖 `src/lib/*` 的纯逻辑模块。
+当前测试覆盖 57 个用例，主要覆盖 `src/lib/*` 的纯逻辑模块。
 
 ---
 

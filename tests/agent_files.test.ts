@@ -58,3 +58,21 @@ test('extracts filename plus text code block fallback', () => {
   assert.equal(result.attachments[0]?.text, 'hello from agent');
   assert.equal(result.content, '下面是文件：');
 });
+
+test('accepts txt file blocks that declare markdown text mime', () => {
+  const result = extractAgentFileAttachments([
+    'ready',
+    '```laphiny-file name="第七卷 山谷还记得她的名字.txt" mime="text/markdown"',
+    '# Chapter',
+    '',
+    'content',
+    '```',
+  ].join('\n'));
+
+  assert.equal(result.attachments.length, 1);
+  assert.equal(result.attachments[0]?.name, '第七卷 山谷还记得她的名字.txt');
+  assert.equal(result.attachments[0]?.mimeType, 'text/plain');
+  assert.equal(result.attachments[0]?.kind, 'text');
+  assert.equal(result.attachments[0]?.text, '# Chapter\n\ncontent');
+  assert.equal(result.content, 'ready');
+});

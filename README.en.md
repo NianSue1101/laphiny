@@ -112,7 +112,7 @@ Laphiny is useful for:
 - Added dark mode, system / LXGW WenKai font selection, and personalization entry points
 - Added redacted feedback log upload and server log pull, backed by `scripts/feedback-server.mjs`
 - Tuned the PR review workflow with a smaller diff payload, longer Hermes request timeout, and retries
-- Added `docs/PRODUCT_STRATEGY.md` for product cleanup, missing capabilities, and differentiation
+- Added `docs/PRODUCT_STRATEGY.md` and `docs/PRODUCT_STRATEGY.zh-CN.md` for product cleanup, missing capabilities, and differentiation
 
 ---
 
@@ -172,7 +172,7 @@ npm test
 npm run web:build
 ```
 
-The current test suite has 56 tests, mostly covering pure logic under `src/lib/*`.
+The current test suite has 57 tests, mostly covering pure logic under `src/lib/*`.
 
 ---
 
