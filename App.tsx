@@ -7,8 +7,6 @@ import {
   AppStateStatus,
   BackHandler,
   FlatList,
-  Image,
-  Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
@@ -18,11 +16,7 @@ import {
   ScrollView,
   StyleSheet,
   StatusBar as NativeStatusBar,
-  Text as NativeText,
-  TextInput as NativeTextInput,
   TouchableOpacity,
-  type TextInputProps,
-  type TextProps,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -37,6 +31,12 @@ import {
   MAX_DELEGATION_DEPTH,
   QUICK_COMMANDS,
 } from './src/config/app_config';
+import { ActiveGoalPanel } from './src/components/ActiveGoalPanel';
+import { AppText as Text, AppTextInput as TextInput, setAppTextFontFamily } from './src/components/AppText';
+import { AttachmentPreviewModal } from './src/components/AttachmentPreviewModal';
+import { ChatSidebar } from './src/components/ChatSidebar';
+import { CollaborationDrawer } from './src/components/CollaborationDrawer';
+import { ComposerModeBar, SlashCommandPanel } from './src/components/ChatCommandPanels';
 import {
   AttachmentPreview,
   AgentAvatar,
@@ -55,6 +55,18 @@ import {
   TabButton,
 } from './src/components/Primitives';
 import { MarkdownText } from './src/components/MarkdownText';
+import { MessageSearchPanel } from './src/components/MessageSearchPanel';
+import { MobileRoomPicker } from './src/components/MobileRoomPicker';
+import { RoleplayArchivePanel } from './src/components/RoleplayArchivePanel';
+import { RoomCollaborationDashboard } from './src/components/RoomCollaborationDashboard';
+import { RoomGrowthPanel } from './src/components/RoomGrowthPanel';
+import { RoomManagementPanel } from './src/components/RoomManagementPanel';
+import { RoomRail } from './src/components/RoomRail';
+import { RoomStatusBar } from './src/components/RoomStatusBar';
+import { RoleplaySceneCard } from './src/components/RoleplaySceneCard';
+import { RuntimeBanner } from './src/components/RuntimeBanner';
+import { SoulRelationsPanel } from './src/components/SoulRelationsPanel';
+import { TaskBoardPanel } from './src/components/TaskBoardPanel';
 import { Ionicons } from './src/components/SafeIcon';
 import {
   buildChatHistory,
@@ -100,6 +112,12 @@ import {
   requestConfirm,
   showNotice,
 } from './src/app/app_utils';
+import {
+  getBlackboardStatusLabel,
+  getDecisionStatusLabel,
+  getGoalPlanItemStatusLabel,
+  getGoalStatusLabel,
+} from './src/app/app_status_labels';
 import type {
   ConnectionFormState,
   ConnectionHealth,
@@ -125,18 +143,6 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
-
-let appTextFontFamily: string | undefined;
-
-function Text(props: TextProps) {
-  const style = appTextFontFamily ? [props.style, { fontFamily: appTextFontFamily }] : props.style;
-  return <NativeText {...props} style={style} />;
-}
-
-function TextInput(props: TextInputProps) {
-  const style = appTextFontFamily ? [props.style, { fontFamily: appTextFontFamily }] : props.style;
-  return <NativeTextInput {...props} style={style} />;
-}
 
 const NOTIFICATION_CHANNEL_ID = 'laphiny-agent-replies';
 
@@ -216,7 +222,6 @@ export default function App() {
   const [feedbackLogs, setFeedbackLogs] = useState<FeedbackLogEntry[]>([]);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
-  const [expandedMobileRoomId, setExpandedMobileRoomId] = useState<string | null>(null);
   const [managedRoomId, setManagedRoomId] = useState<string | null>(null);
   const [, forceFontRender] = useState(0);
   const [storageBackend, setStorageBackend] = useState<StorageBackendInfo | null>(null);
@@ -333,7 +338,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    appTextFontFamily = selectedFontFamily;
+    setAppTextFontFamily(selectedFontFamily);
     forceFontRender((value) => value + 1);
   }, [selectedFontFamily]);
 
@@ -628,10 +633,6 @@ export default function App() {
         leaveFocusedChat();
         return true;
       }
-      if (expandedMobileRoomId) {
-        setExpandedMobileRoomId(null);
-        return true;
-      }
       if (tab !== 'chat') {
         setTab('chat');
         return true;
@@ -639,7 +640,7 @@ export default function App() {
       return false;
     });
     return () => subscription.remove();
-  }, [expandedMobileRoomId, mobileFocusedChat, mobileRoomDetailsOpen, tab]);
+  }, [mobileFocusedChat, mobileRoomDetailsOpen, tab]);
 
   const healthSummary = useMemo(() => {
     let ok = 0;
@@ -1454,7 +1455,6 @@ export default function App() {
 
   function openFocusedChatRoom(roomId: string) {
     setSelectedRoomId(roomId);
-    setExpandedMobileRoomId(null);
     setTab('chat');
     if (!isWideLayout) {
       setMobileFocusedRoomId(roomId);
@@ -1470,7 +1470,6 @@ export default function App() {
     setSelectedRoomId(roomId);
     setManagedRoomId(roomId);
     setTab('rooms');
-    setExpandedMobileRoomId(null);
     setMobileFocusedRoomId(null);
     setMobileRoomDetailsOpen(false);
     setRoomDetailsCollapsed(true);
@@ -4361,73 +4360,28 @@ ${content}`)]);
   }
 
   function renderRuntimeBanner() {
-    if (Platform.OS !== 'web') return null;
-    const shouldShow = !networkOnline || pwaInstallPrompt || serviceWorkerStatus === 'failed' || serviceWorkerStatus === 'registering';
-    if (!shouldShow) return null;
-
     return (
-      <View style={[styles.runtimeBanner, !networkOnline && styles.runtimeBannerOffline]}>
-        <View style={styles.runtimeBannerTextBlock}>
-          <Text style={styles.runtimeBannerTitle}>
-            {!networkOnline ? '当前离线' : serviceWorkerStatus === 'registering' ? '正在准备离线缓存' : serviceWorkerStatus === 'failed' ? '离线缓存不可用' : '可以安装为应用'}
-          </Text>
-          <Text style={styles.runtimeBannerBody}>
-            {!networkOnline
-              ? '你仍可查看本地记录；Hermes 请求和同步会在网络恢复后再使用。'
-              : serviceWorkerStatus === 'registering'
-                ? '首次打开会注册 Service Worker，之后已访问资源可在弱网或离线时继续打开。'
-                : serviceWorkerStatus === 'failed'
-                  ? '浏览器没有成功注册 Service Worker；Web 仍可使用，但离线能力会受限。'
-                  : '浏览器已提供安装入口，安装后可像独立应用一样打开 Laphiny。'}
-          </Text>
-        </View>
-        {pwaInstallPrompt ? <SecondaryButton icon="download-outline" label="安装" onPress={installPwa} /> : null}
-      </View>
+      <RuntimeBanner
+        networkOnline={networkOnline}
+        serviceWorkerStatus={serviceWorkerStatus}
+        canInstallPwa={Boolean(pwaInstallPrompt)}
+        styles={styles}
+        TextComponent={Text}
+        onInstallPwa={installPwa}
+      />
     );
   }
 
   function renderAttachmentPreviewModal() {
-    const attachment = previewAttachment;
-    if (!attachment) return null;
-    const isImage = attachment.kind === 'image' && Boolean(attachment.dataUrl || attachment.uri);
-    const textPreview = attachment.kind === 'text' && attachment.text
-      ? attachment.text
-      : attachment.kind === 'file'
-        ? '这个附件类型暂不支持内联预览，但可以查看文件信息并下载保存。'
-        : '';
-
     return (
-      <Modal visible transparent animationType="fade" onRequestClose={() => setPreviewAttachment(null)}>
-        <View style={styles.attachmentModalOverlay}>
-          <View style={[styles.attachmentModalCard, width < 720 && styles.attachmentModalCardCompact]}>
-            <View style={styles.attachmentModalHeader}>
-              <View style={styles.attachmentModalTitleBlock}>
-                <Text style={styles.attachmentModalTitle} numberOfLines={1}>{attachment.name}</Text>
-                <Text style={styles.attachmentModalMeta} numberOfLines={1}>
-                  {attachment.mimeType || 'unknown'}{attachment.size != null ? ` · ${formatBytes(attachment.size)}` : ''}
-                </Text>
-              </View>
-              <View style={styles.attachmentModalActions}>
-                <IconButton icon="download-outline" label="下载附件" onPress={() => downloadAttachment(attachment)} variant="primary" />
-                <IconButton icon="close-outline" label="关闭预览" onPress={() => setPreviewAttachment(null)} />
-              </View>
-            </View>
-            <ScrollView style={styles.attachmentModalBody} contentContainerStyle={styles.attachmentModalBodyContent}>
-              {isImage ? (
-                <Image source={{ uri: attachment.dataUrl ?? attachment.uri ?? '' }} style={styles.attachmentPreviewImage} resizeMode="contain" />
-              ) : textPreview ? (
-                <Text style={styles.attachmentPreviewText}>{textPreview}</Text>
-              ) : (
-                <View style={styles.attachmentUnsupportedPreview}>
-                  <Ionicons name="document-outline" size={34} color="#2563eb" />
-                  <Text style={styles.attachmentUnsupportedTitle}>暂不支持预览此附件</Text>
-                  <Text style={styles.help}>可以使用右上角下载按钮保存文件。</Text>
-                </View>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+      <AttachmentPreviewModal
+        attachment={previewAttachment}
+        compact={width < 720}
+        styles={styles}
+        TextComponent={Text}
+        onDownload={downloadAttachment}
+        onClose={() => setPreviewAttachment(null)}
+      />
     );
   }
 
@@ -4862,245 +4816,67 @@ ${content}`)]);
 
   function renderMobileRoomPicker() {
     return (
-      <ScrollView style={styles.mobileRoomPicker} contentContainerStyle={styles.mobileRoomPickerContent}>
-        <View style={styles.mobileRoomPickerHeader}>
-          <View>
-            <Text style={[styles.sectionTitle, isDarkMode && styles.titleDark]}>选择房间</Text>
-            <Text style={[styles.help, isDarkMode && styles.subtitleDark]}>点卡片或“进入”开始聊天；点“管理”会回到房间页原地管理，不再跳进聊天旧详情。</Text>
-          </View>
-          <SecondaryButton icon="add-circle-outline" label="新房间" onPress={() => setTab('rooms')} />
-        </View>
-        {rooms.length === 0 ? (
-          <EmptyState
-            icon="albums-outline"
-            title="还没有房间"
-            body="先创建单聊或群聊，再回到这里进入专注聊天。"
-            actionLabel="去创建"
-            onAction={() => setTab('rooms')}
-          />
-        ) : null}
-        {rooms.map((room) => {
-          const roomMessages = messagesByRoom[room.id] ?? [];
-          const lastMessage = roomMessages[roomMessages.length - 1];
-          const unread = unreadByRoom[room.id] ?? 0;
-          const expanded = expandedMobileRoomId === room.id;
-          return (
-            <View
-              key={room.id}
-              style={[styles.mobileRoomCard, isDarkMode && styles.mobileRoomCardDark, expanded && styles.mobileRoomCardExpanded]}
-            >
-              <TouchableOpacity activeOpacity={0.88} onPress={() => openFocusedChatRoom(room.id)}>
-                <View style={styles.mobileRoomCardTop}>
-                  <View style={styles.squareEventSource}>
-                    <Ionicons name={room.kind === 'group' ? 'people-outline' : 'person-outline'} size={17} color="#2563eb" />
-                    <Text style={styles.cardTitle} numberOfLines={1}>{room.name}</Text>
-                  </View>
-                  {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : null}
-                </View>
-                <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
-                  {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
-                </Text>
-              </TouchableOpacity>
-              <View style={styles.mobileRoomCardFooter}>
-                <Text style={styles.help}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes · 上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
-                <View style={styles.buttonRowCompact}>
-                  <MiniButton icon="options-outline" label="管理" onPress={() => openRoomManagement(room.id)} />
-                  <MiniButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => openFocusedChatRoom(room.id)} />
-                </View>
-              </View>
-            </View>
-          );
-        })}
-      </ScrollView>
+      <MobileRoomPicker
+        rooms={rooms}
+        messagesByRoom={messagesByRoom}
+        unreadByRoom={unreadByRoom}
+        isDarkMode={isDarkMode}
+        styles={styles}
+        TextComponent={Text}
+        onCreateRoom={() => setTab('rooms')}
+        onOpenRoom={openFocusedChatRoom}
+        onManageRoom={openRoomManagement}
+      />
     );
   }
 
   function renderRoomManagementPanel(room: Room) {
-    const roomMessages = messagesByRoom[room.id] ?? [];
-    const enabledCount = room.members.filter((member) => member.enabled).length;
-    const roomGrowth = summarizeRoomGrowth(room);
     return (
-      <View style={styles.roomManagementPanel}>
-        <View style={styles.syncHeader}>
-          <View style={styles.syncHeaderText}>
-            <Text style={styles.panelLabel}>房间管理中心</Text>
-            <Text style={styles.help}>当前正在管理「{room.name}」，所有修改直接写入这个房间，不会跳转到聊天旧面板。</Text>
-          </View>
-          <StatusToken icon="settings-outline" label={roomGrowth.label} tone="memory" />
-        </View>
-        <View style={styles.toolMetricRow}>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{roomMessages.length}</Text>
-            <Text style={styles.toolMetricLabel}>消息</Text>
-          </View>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{enabledCount}/{room.members.length}</Text>
-            <Text style={styles.toolMetricLabel}>成员</Text>
-          </View>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
-            <Text style={styles.toolMetricLabel}>上下文</Text>
-          </View>
-        </View>
-        <Text style={styles.panelLabel}>基础信息</Text>
-        <TextInput
-          style={styles.input}
-          value={room.name}
-          onChangeText={(name) => updateRoomInline(room.id, { name })}
-          placeholder="房间名称"
-        />
-        <View style={styles.inlineFormRow}>
-          <Text style={styles.help}>上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT} 条</Text>
-          <View style={styles.stepper}>
-            <MiniButton icon="remove-outline" label="-4" onPress={() => adjustRoomContextLimit(room, -4)} />
-            <MiniButton icon="add-outline" label="+4" onPress={() => adjustRoomContextLimit(room, 4)} />
-          </View>
-        </View>
-        {room.kind === 'group' ? (
-          <>
-            <Text style={styles.panelLabel}>房间模式</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modePillRow}>
-              {ROOM_MODES.map((mode) => (
-                <TouchableOpacity
-                  key={mode.id}
-                  style={[styles.modePill, room.mode === mode.id && styles.modePillActive]}
-                  onPress={() => applyRoomModeInline(room, mode.id)}
-                >
-                  <Text style={[styles.modePillText, room.mode === mode.id && styles.modePillTextActive]}>{mode.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <Text style={styles.panelLabel}>默认协作策略</Text>
-            <View style={styles.toolActions}>
-              <MiniButton icon="hand-left-outline" label={room.defaultCollaborationMode === 'manual' || !room.defaultCollaborationMode ? '默认：手动' : '切手动'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'manual' })} />
-              <MiniButton icon="git-network-outline" label={room.defaultCollaborationMode === 'parallel' ? '默认：并行' : '切并行'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'parallel' })} />
-              <MiniButton icon="git-branch-outline" label={room.defaultCollaborationMode === 'sequential' ? '默认：接力' : '切接力'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'sequential' })} />
-              <MiniButton icon={room.autoDelegationEnabled === false ? 'flash-off-outline' : 'flash-outline'} label={room.autoDelegationEnabled === false ? '自动委托关' : '自动委托开'} onPress={() => updateRoomInline(room.id, { autoDelegationEnabled: room.autoDelegationEnabled === false })} />
-            </View>
-            <View style={styles.stepper}>
-              <MiniButton icon="remove-outline" label="深度 -1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) - 1)) })} />
-              <Text style={styles.help}>最大委托深度：{room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH}</Text>
-              <MiniButton icon="add-outline" label="深度 +1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) + 1)) })} />
-            </View>
-          </>
-        ) : null}
-        <Text style={styles.panelLabel}>成员</Text>
-        <View style={styles.roomMemberManageList}>
-          {room.members.map((member) => {
-            const connection = connectionById.get(member.connectionId);
-            return (
-              <View key={member.connectionId} style={styles.roomMemberManageRow}>
-                <TouchableOpacity onPress={() => toggleRoomMemberEnabledInline(room, member)} disabled={room.kind !== 'group'}>
-                  <AgentBadge alias={member.alias} active={member.enabled} imageUri={connection?.avatarUri} />
-                </TouchableOpacity>
-                <TextInput
-                  style={[styles.input, styles.memberAliasInput]}
-                  value={member.alias}
-                  onChangeText={(alias) => updateRoomInline(room.id, { members: room.members.map((item) => item.connectionId === member.connectionId ? { ...item, alias } : item) })}
-                  placeholder="成员别名"
-                />
-                {connection ? (
-                  <MiniButton icon="image-outline" label="头像" onPress={() => chooseConnectionAvatar(connection)} />
-                ) : null}
-                {room.kind === 'group' && room.members.length > 1 ? (
-                  <MiniButton
-                    icon="remove-circle-outline"
-                    label="移除"
-                    onPress={() => updateRoomInline(room.id, { members: room.members.filter((item) => item.connectionId !== member.connectionId) })}
-                  />
-                ) : null}
-              </View>
-            );
-          })}
-        </View>
-        {room.kind === 'group' ? (
-          <View style={styles.toolActions}>
-            {enabledConnections.filter((connection) => !room.members.some((member) => member.connectionId === connection.id)).map((connection) => (
-              <MiniButton
-                key={connection.id}
-                icon="add-circle-outline"
-                label={`加入 ${connection.name}`}
-                onPress={() => updateRoomInline(room.id, {
-                  members: [...room.members, { connectionId: connection.id, alias: connection.name, enabled: connection.enabled }],
-                  sessionIds: { ...room.sessionIds, [connection.id]: `laphiny-${room.id}-${connection.id}` },
-                  memberSessionKeys: { ...(room.memberSessionKeys ?? {}), [connection.id]: `laphiny-${room.id}-key` },
-                })}
-              />
-            ))}
-          </View>
-        ) : null}
-        <Text style={styles.help}>成员启用、别名、头像、加入和移除都在这里完成；聊天页不再维护另一套重复入口。</Text>
-        <View style={styles.toolActions}>
-          <MiniButton icon="chatbubble-ellipses-outline" label="进入聊天" onPress={() => openFocusedChatRoom(room.id)} />
-          <MiniButton icon="close-outline" label="关闭管理" onPress={() => setManagedRoomId(null)} />
-        </View>
-      </View>
+      <RoomManagementPanel
+        room={room}
+        messageCount={(messagesByRoom[room.id] ?? []).length}
+        enabledConnections={enabledConnections}
+        connectionById={connectionById}
+        styles={styles}
+        TextComponent={Text}
+        TextInputComponent={TextInput}
+        updateRoomInline={updateRoomInline}
+        adjustRoomContextLimit={adjustRoomContextLimit}
+        applyRoomModeInline={applyRoomModeInline}
+        toggleRoomMemberEnabledInline={toggleRoomMemberEnabledInline}
+        chooseConnectionAvatar={chooseConnectionAvatar}
+        openFocusedChatRoom={openFocusedChatRoom}
+        closeManagement={() => setManagedRoomId(null)}
+      />
     );
   }
 
   function renderRoomRail() {
     return (
-      <View style={styles.roomRail}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.roomRailContent}>
-          {rooms.map((room) => (
-            <TouchableOpacity
-              key={room.id}
-              style={[styles.roomPill, room.id === selectedRoomId && styles.roomPillActive]}
-              onPress={() => openFocusedChatRoom(room.id)}
-            >
-              <Ionicons
-                name={room.kind === 'group' ? 'people-outline' : 'person-outline'}
-                size={14}
-                color={room.id === selectedRoomId ? '#ffffff' : '#4b5563'}
-              />
-              <Text style={[styles.roomPillText, room.id === selectedRoomId && styles.roomPillTextActive]}>{room.name}</Text>
-              {unreadByRoom[room.id] ? <Text style={styles.roomUnreadBadge}>{unreadByRoom[room.id]}</Text> : null}
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity style={styles.roomCreatePill} onPress={() => setTab('rooms')}>
-            <Ionicons name="add" size={16} color="#2563eb" />
-            <Text style={styles.roomCreateText}>新房间</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </View>
+      <RoomRail
+        rooms={rooms}
+        selectedRoomId={selectedRoomId}
+        unreadByRoom={unreadByRoom}
+        styles={styles}
+        TextComponent={Text}
+        onOpenRoom={openFocusedChatRoom}
+        onCreateRoom={() => setTab('rooms')}
+      />
     );
   }
 
   function renderChatSidebar() {
     return (
-      <View style={styles.chatSidebar}>
-        <View style={styles.sidebarHeader}>
-          <Text style={styles.sidebarTitle}>房间</Text>
-          <TouchableOpacity style={styles.sidebarIconButton} onPress={() => setTab('rooms')}>
-            <Ionicons name="add" size={18} color="#2563eb" />
-          </TouchableOpacity>
-        </View>
-        <ScrollView style={styles.sidebarRooms} contentContainerStyle={styles.sidebarRoomsContent}>
-          {rooms.length === 0 ? <Text style={styles.help}>还没有房间。</Text> : null}
-          {rooms.map((room) => {
-            const roomMessages = messagesByRoom[room.id] ?? [];
-            const lastMessage = roomMessages[roomMessages.length - 1];
-            const active = room.id === selectedRoomId;
-            const unread = unreadByRoom[room.id] ?? 0;
-            return (
-              <TouchableOpacity
-                key={room.id}
-                style={[styles.sidebarRoom, active && styles.sidebarRoomActive]}
-                onPress={() => openFocusedChatRoom(room.id)}
-              >
-                <View style={styles.sidebarRoomTop}>
-                  <Text style={[styles.sidebarRoomTitle, active && styles.sidebarRoomTitleActive]}>{room.name}</Text>
-                  {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : <Text style={styles.sidebarRoomMeta}>{room.members.length}</Text>}
-                </View>
-                <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
-                  {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
+      <ChatSidebar
+        rooms={rooms}
+        selectedRoomId={selectedRoomId}
+        messagesByRoom={messagesByRoom}
+        unreadByRoom={unreadByRoom}
+        styles={styles}
+        TextComponent={Text}
+        onOpenRoom={openFocusedChatRoom}
+        onCreateRoom={() => setTab('rooms')}
+      />
     );
   }
 
@@ -5153,79 +4929,20 @@ ${content}`)]);
   }
 
   function renderRoomStatusBar() {
-    if (!selectedRoom) return null;
-    const enabledCount = selectedRoom.members.filter((member) => member.enabled).length;
-    const openTaskCount = selectedRoomDelegationTasks.filter((task) => task.status === 'pending' || task.status === 'running').length;
-    const modeLabel = selectedRoom.roleplay?.enabled
-      ? '桌游 RP'
-      : selectedRoom.kind === 'direct'
-        ? '单聊'
-        : getRoomModeLabel(selectedRoom.mode);
-    const summaryAlias = selectedRoom.members.find((member) => member.connectionId === selectedRoom.summaryConnectionId)?.alias;
-    const gmAlias = selectedRoom.members.find((member) => member.connectionId === selectedRoom.roleplay?.gmConnectionId)?.alias;
-
-    return (
-      <View style={styles.roomStatusBar}>
-        <StatusToken icon={selectedRoom.roleplay?.enabled ? 'game-controller-outline' : selectedRoom.kind === 'group' ? 'git-network-outline' : 'person-outline'} label={`模式 ${modeLabel}`} tone={selectedRoom.roleplay?.enabled ? 'rp' : 'default'} />
-        {selectedRoom.kind === 'group' ? <StatusToken icon="people-outline" label={`${enabledCount}/${selectedRoom.members.length} 可用`} tone="default" /> : null}
-        {selectedRoom.roleplay?.enabled ? <StatusToken icon="sparkles-outline" label={`GM ${gmAlias ?? '未选'}`} tone="rp" /> : null}
-        {selectedRoom.kind === 'group' && !selectedRoom.roleplay?.enabled ? <StatusToken icon="reader-outline" label={`总结 ${summaryAlias ?? '自动'}`} tone="default" /> : null}
-        {selectedRoom.memoryCapsule ? <StatusToken icon="file-tray-full-outline" label={`记忆 v${selectedRoom.memoryCapsule.version}`} tone="memory" /> : null}
-        {selectedRoom.roleplay?.archive ? <StatusToken icon="map-outline" label={`档案 v${selectedRoom.roleplay.archive.version}`} tone="rp" /> : null}
-        {openTaskCount > 0 ? <StatusToken icon="git-branch-outline" label={`${openTaskCount} 个委托`} tone="warning" /> : null}
-      </View>
-    );
+    return <RoomStatusBar room={selectedRoom} delegationTasks={selectedRoomDelegationTasks} styles={styles} />;
   }
 
   function renderActiveGoalPanel() {
-    const activeGoal = selectedRoom?.activeGoal;
-    if (!selectedRoom || !activeGoal || activeGoal.status === 'cancelled') return null;
-    const waiting = activeGoal.status === 'awaiting_user';
-    const statusLabel = getGoalStatusLabel(activeGoal.status, activeGoal.statusSignal);
-    const planItems = activeGoal.planItems.slice(0, 8);
-
     return (
-      <View style={styles.goalPanel}>
-        <View style={styles.goalPanelHeader}>
-          <View style={styles.rowMain}>
-            <View style={styles.squareEventSource}>
-              <Ionicons name="flag-outline" size={16} color="#2563eb" />
-              <Text style={styles.goalTitle} numberOfLines={1}>目标模式 · {statusLabel}</Text>
-            </View>
-            <Text style={styles.help} numberOfLines={2}>{activeGoal.goal}</Text>
-            <Text style={styles.goalMeta}>主 AI：{activeGoal.leadAlias} · 第 {activeGoal.round} 轮 · {formatDateTime(activeGoal.updatedAt)}</Text>
-          </View>
-          {waiting ? (
-            <View style={styles.goalActionRow}>
-              <MiniButton icon="play-circle-outline" label="继续" onPress={() => continueActiveGoalFromPanel(activeGoal)} />
-              <MiniButton icon="checkmark-circle-outline" label="结束" onPress={() => finishActiveGoalFromPanel(activeGoal)} />
-              <MiniButton icon="create-outline" label="调整" onPress={() => setDraft(`/goal @${activeGoal.leadAlias} ${activeGoal.goal} `)} />
-            </View>
-          ) : null}
-        </View>
-
-        {planItems.length ? (
-          <View style={styles.goalPlanList}>
-            {planItems.map((item) => (
-              <View key={item.id} style={styles.goalPlanItem}>
-                <View style={styles.conflictHeader}>
-                  <Text style={styles.taskTitle} numberOfLines={1}>{item.title}</Text>
-                  <Text style={[styles.badge, getGoalPlanItemStatusStyle(item.status)]}>{getGoalPlanItemStatusLabel(item.status)}</Text>
-                </View>
-                <Text style={styles.help} numberOfLines={2}>
-                  {item.ownerAlias ? `负责人：${item.ownerAlias}` : '负责人：未指定'}
-                  {item.deliverable ? ` · 产物：${item.deliverable}` : ''}
-                </Text>
-                {item.acceptance ? <Text style={styles.goalAcceptance} numberOfLines={2}>验收：{item.acceptance}</Text> : null}
-              </View>
-            ))}
-          </View>
-        ) : <Text style={styles.help}>等待主 AI 输出结构化计划卡。</Text>}
-
-        {activeGoal.lastReview ? (
-          <Text style={styles.goalReview} numberOfLines={4}>{activeGoal.lastReview}</Text>
-        ) : null}
-      </View>
+      <ActiveGoalPanel
+        activeGoal={selectedRoom?.activeGoal}
+        styles={styles}
+        TextComponent={Text}
+        getPlanItemStatusStyle={getGoalPlanItemStatusStyle}
+        onContinue={continueActiveGoalFromPanel}
+        onFinish={finishActiveGoalFromPanel}
+        onAdjust={(activeGoal) => setDraft(`/goal @${activeGoal.leadAlias} ${activeGoal.goal} `)}
+      />
     );
   }
 
@@ -5240,249 +4957,81 @@ ${content}`)]);
   }
 
   function renderRoleplaySceneCard() {
-    if (!selectedRoom?.roleplay?.enabled) return null;
-    const roleplay = selectedRoom.roleplay;
-    const gmAlias = selectedRoom.members.find((member) => member.connectionId === roleplay.gmConnectionId)?.alias ?? 'GM';
-    return (
-      <View style={styles.rpSceneCard}>
-        <View style={styles.rpSceneHeader}>
-          <View style={styles.squareEventSource}>
-            <Ionicons name="game-controller-outline" size={16} color="#7c3aed" />
-            <Text style={styles.rpSceneTitle}>{roleplay.genre || '自由冒险'} · {gmAlias} 主持</Text>
-          </View>
-          <Text style={styles.rpSceneBadge}>{roleplay.includeAllAgents === false ? '仅 GM' : '全员入戏'}</Text>
-        </View>
-        <Text style={styles.rpSceneTone}>{roleplay.tone || '沉浸、轻桌游、重角色互动'}</Text>
-        {roleplay.currentScene ? <Text style={styles.rpSceneBody} numberOfLines={3}>{roleplay.currentScene}</Text> : <Text style={styles.rpSceneBody}>还没有当前场景。用 /scene 写下开场，或直接用 /rp 开始行动。</Text>}
-        {roleplay.archive ? <Text style={styles.rpSceneArchive}>档案：{summarizeRoleplayArchive(roleplay.archive)}</Text> : null}
-      </View>
-    );
+    return <RoleplaySceneCard room={selectedRoom} styles={styles} TextComponent={Text} />;
   }
 
   function renderComposerModeBar() {
-    if (!selectedRoom) return null;
-    const items = selectedRoom.kind === 'group'
-      ? UX_SLASH_COMMANDS.filter((item) => ['council', 'redteam', 'review', 'retro', 'rp', 'scene', 'ooc'].includes(item.id))
-      : UX_SLASH_COMMANDS.filter((item) => item.id === 'rp' || item.id === 'ooc');
     return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modeShortcutList}>
-        <TouchableOpacity style={[styles.modeShortcut, quickCommandsOpen && styles.modeShortcutActive]} onPress={() => setQuickCommandsOpen((open) => !open)}>
-          <Ionicons name="apps-outline" size={14} color={quickCommandsOpen ? '#ffffff' : '#4b5563'} />
-          <Text style={[styles.modeShortcutText, quickCommandsOpen && styles.modeShortcutTextActive]}>模式</Text>
-        </TouchableOpacity>
-        {items.slice(0, isWideLayout ? 7 : 5).map((command) => (
-          <TouchableOpacity key={command.id} style={styles.modeShortcut} onPress={() => insertUxCommand(command)}>
-            <Ionicons name={command.kind === 'roleplay' ? 'game-controller-outline' : 'sparkles-outline'} size={14} color="#4b5563" />
-            <Text style={styles.modeShortcutText}>{command.command}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <ComposerModeBar
+        room={selectedRoom}
+        quickCommandsOpen={quickCommandsOpen}
+        isWideLayout={isWideLayout}
+        styles={styles}
+        TextComponent={Text}
+        onToggleQuickCommands={() => setQuickCommandsOpen((open) => !open)}
+        onInsertCommand={insertUxCommand}
+      />
     );
   }
 
   function renderSlashCommandPanel() {
-    if (!selectedRoom || slashCommandSuggestions.length === 0) return null;
     return (
-      <View style={styles.slashPanel}>
-        <Text style={styles.panelLabel}>指令补全</Text>
-        {slashCommandSuggestions.map((command) => (
-          <TouchableOpacity key={command.id} style={styles.slashCommandRow} onPress={() => insertUxCommand(command)}>
-            <View style={styles.slashCommandIcon}>
-              <Ionicons name={command.kind === 'roleplay' ? 'game-controller-outline' : command.kind === 'memory' ? 'file-tray-full-outline' : 'people-circle-outline'} size={16} color="#2563eb" />
-            </View>
-            <View style={styles.rowMain}>
-              <Text style={styles.slashCommandTitle}>{command.command} · {command.label}</Text>
-              <Text style={styles.help}>{getUxCommandKindLabel(command.kind)} · {command.description}</Text>
-            </View>
-          </TouchableOpacity>
-        ))}
-      </View>
+      <SlashCommandPanel
+        room={selectedRoom}
+        suggestions={slashCommandSuggestions}
+        styles={styles}
+        TextComponent={Text}
+        onInsertCommand={insertUxCommand}
+      />
     );
   }
 
   function renderCollaborationDrawer() {
-    if (!selectedRoom || selectedRoom.kind !== 'group') return null;
     return (
-      <View style={styles.collabDrawer}>
-        <ScrollView style={styles.collabDrawerScroll} contentContainerStyle={styles.collabDrawerContent}>
-          <View style={styles.drawerHeader}>
-            <View>
-              <Text style={styles.drawerTitle}>Soul 房间侧栏</Text>
-              <Text style={styles.help}>协作、委托、记忆和 RP 场景集中在这里。</Text>
-            </View>
-            <TouchableOpacity style={styles.sidebarIconButton} onPress={() => setCollaborationDrawerOpen(false)}>
-              <Ionicons name="close" size={18} color="#4b5563" />
-            </TouchableOpacity>
-          </View>
-          {renderRoomStatusBar()}
-          {renderRoleplaySceneCard()}
-          {selectedRoom.lastSummary ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>最近共识 · {selectedRoom.lastSummary.authorName}</Text>
-              <MarkdownText content={selectedRoom.lastSummary.content} fontFamily={selectedFontFamily} />
-            </View>
-          ) : <Text style={styles.help}>还没有最近共识。可在工具里生成总结。</Text>}
-          {selectedRoom.memoryCapsule ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>房间记忆胶囊 · v{selectedRoom.memoryCapsule.version}</Text>
-              <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
-            </View>
-          ) : null}
-          {selectedRoomGrowth ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>房间成长层 · {selectedRoomGrowth.label}</Text>
-              <Text style={styles.help}>知识 {selectedRoomGrowth.knowledgeCount} · 开放黑板 {selectedRoomGrowth.blackboardOpenCount} · 决策 {selectedRoomGrowth.decisionCount}{selectedRoomGrowth.pendingMemory ? ' · 有待确认记忆草案' : ''}</Text>
-            </View>
-          ) : null}
-          {selectedRoom.roleplay?.archive ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>RP 剧本档案 · v{selectedRoom.roleplay.archive.version}</Text>
-              <Text style={styles.help}>{summarizeRoleplayArchive(selectedRoom.roleplay.archive)}</Text>
-              <Text style={styles.help}>主线：{selectedRoom.roleplay.archive.currentQuest}</Text>
-            </View>
-          ) : null}
-          <Text style={styles.panelLabel}>任务看板</Text>
-          {selectedTaskBoard.map((column) => (
-            <View key={column.id} style={styles.drawerTaskColumn}>
-              <Text style={styles.taskBoardTitle}>{column.label} · {column.tasks.length}</Text>
-              {column.tasks.slice(0, 3).map((task) => (
-                <Text key={task.id} style={styles.help} numberOfLines={2}>• {task.toAlias}：{task.taskText}</Text>
-              ))}
-            </View>
-          ))}
-          <Text style={styles.panelLabel}>委托任务</Text>
-          {selectedRoomDelegationTasks.length ? selectedRoomDelegationTasks.slice(0, 8).map((task) => (
-            <View key={task.id} style={styles.taskCard}>
-              <View style={styles.conflictHeader}>
-                <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias}</Text>
-                <Text style={[styles.badge, getDelegationTaskStatusStyle(task.status)]}>{getDelegationTaskStatusLabel(task.status)}</Text>
-              </View>
-              <Text style={styles.help} numberOfLines={3}>{task.taskText}</Text>
-            </View>
-          )) : <Text style={styles.help}>暂无委托任务。</Text>}
-          <Text style={styles.panelLabel}>最近协作</Text>
-          {selectedRoomCollaborationEvents.length ? selectedRoomCollaborationEvents.slice(0, 10).map((event) => (
-            <View key={event.id} style={styles.timelineItem}>
-              <Ionicons name={getCollaborationEventIcon(event.kind)} size={14} color="#2563eb" />
-              <View style={styles.timelineBody}>
-                <Text style={styles.timelineTitle}>{event.title}</Text>
-                <Text style={styles.timelineMeta}>{formatDateTime(event.createdAt)}{event.source ? ` · ${event.source}` : ''}{event.target ? ` → ${event.target}` : ''}</Text>
-              </View>
-            </View>
-          )) : <Text style={styles.help}>暂无协作时间线。</Text>}
-        </ScrollView>
-      </View>
+      <CollaborationDrawer
+        room={selectedRoom}
+        taskBoard={selectedTaskBoard}
+        delegationTasks={selectedRoomDelegationTasks}
+        collaborationEvents={selectedRoomCollaborationEvents}
+        growth={selectedRoomGrowth}
+        selectedFontFamily={selectedFontFamily}
+        styles={styles}
+        TextComponent={Text}
+        getDelegationTaskStatusStyle={getDelegationTaskStatusStyle}
+        onClose={() => setCollaborationDrawerOpen(false)}
+      />
     );
   }
 
   function renderMessageSearchPanel() {
-    const query = messageSearchQuery.trim();
     return (
-      <View style={styles.searchPanel}>
-        <View style={styles.searchInputRow}>
-          <Ionicons name="search-outline" size={16} color="#6b7280" />
-          <TextInput
-            style={styles.searchInput}
-            value={messageSearchQuery}
-            onChangeText={setMessageSearchQuery}
-            placeholder="搜索全部房间消息、作者或附件名"
-            placeholderTextColor="#9ca3af"
-          />
-          {query ? (
-            <TouchableOpacity onPress={() => setMessageSearchQuery('')}>
-              <Ionicons name="close-circle" size={16} color="#9ca3af" />
-            </TouchableOpacity>
-          ) : null}
-        </View>
-        {query ? (
-          <View style={styles.searchResults}>
-            <Text style={styles.help}>找到 {messageSearchResults.length} 条匹配，最多显示前 8 条。</Text>
-            {messageSearchResults.slice(0, 8).map((result) => (
-              <TouchableOpacity
-                key={`${result.room.id}-${result.message.id}`}
-                style={[styles.searchResult, result.room.id === selectedRoomId && styles.searchResultActive]}
-                onPress={() => {
-                  openFocusedChatRoom(result.room.id);
-                }}
-              >
-                <View style={styles.searchResultHeader}>
-                  <Text style={styles.searchResultTitle}>{result.room.name}</Text>
-                  <Text style={styles.searchResultMeta}>{result.message.authorName} · {formatDateTime(result.message.createdAt)}</Text>
-                </View>
-                <Text style={styles.searchResultSnippet} numberOfLines={2}>{result.snippet}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        ) : null}
-      </View>
+      <MessageSearchPanel
+        query={messageSearchQuery}
+        results={messageSearchResults}
+        selectedRoomId={selectedRoomId}
+        styles={styles}
+        TextComponent={Text}
+        TextInputComponent={TextInput}
+        onChangeQuery={setMessageSearchQuery}
+        onOpenRoom={openFocusedChatRoom}
+      />
     );
   }
 
   function renderRoomCollaborationDashboard() {
-    if (!selectedRoom || selectedRoom.kind !== 'group') return null;
-    const latestSummary = selectedRoom.lastSummary;
     return (
-      <View style={styles.collabPanel}>
-        <TouchableOpacity style={styles.collabPanelHeader} onPress={() => setCollaborationPanelOpen((open) => !open)}>
-          <View style={styles.squareEventSource}>
-            <Ionicons name="git-network-outline" size={16} color="#2563eb" />
-            <Text style={styles.panelLabel}>Soul 协作时间线</Text>
-          </View>
-          <Text style={styles.help}>{collaborationPanelOpen ? '收起' : '展开'}</Text>
-        </TouchableOpacity>
-        {collaborationPanelOpen ? (
-          <>
-            {latestSummary ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>最近共识 · {latestSummary.authorName} · {formatDateTime(latestSummary.createdAt)}</Text>
-                <MarkdownText content={latestSummary.content} fontFamily={selectedFontFamily} />
-              </View>
-            ) : <Text style={styles.help}>还没有房间共识。可在“工具 → 团队模板与总结”里生成。</Text>}
-            {selectedRoom.roleplay?.enabled ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>RP 房间 · {selectedRoom.members.find((member) => member.connectionId === selectedRoom.roleplay?.gmConnectionId)?.alias ?? 'GM'} 主持</Text>
-                <Text style={styles.help}>{summarizeRoleplayConfig(selectedRoom.roleplay)}</Text>
-                {selectedRoom.roleplay.currentScene ? <Text style={styles.help}>当前场景：{selectedRoom.roleplay.currentScene}</Text> : null}
-              </View>
-            ) : null}
-            {selectedRoom.memoryCapsule ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>房间记忆胶囊 · v{selectedRoom.memoryCapsule.version}</Text>
-                <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
-              </View>
-            ) : null}
-            {selectedRoomGrowth ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>房间成长层 · {selectedRoomGrowth.label}</Text>
-                <Text style={styles.help}>知识 {selectedRoomGrowth.knowledgeCount} · 黑板 {selectedRoomGrowth.blackboardOpenCount} · 决策 {selectedRoomGrowth.decisionCount}{selectedRoomGrowth.pendingMemory ? ' · 待确认记忆' : ''}</Text>
-              </View>
-            ) : null}
-            {selectedRoomDelegationTasks.length ? (
-              <View style={styles.taskList}>
-                {selectedRoomDelegationTasks.slice(0, 4).map((task) => (
-                  <View key={task.id} style={styles.taskCard}>
-                    <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias} · {getDelegationTaskStatusLabel(task.status)}</Text>
-                    <Text style={styles.help} numberOfLines={2}>{task.taskText}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-            {selectedRoomCollaborationEvents.length ? (
-              <View style={styles.timelineList}>
-                {selectedRoomCollaborationEvents.slice(0, 6).map((event) => (
-                  <View key={event.id} style={styles.timelineItem}>
-                    <Ionicons name={getCollaborationEventIcon(event.kind)} size={14} color="#2563eb" />
-                    <View style={styles.timelineBody}>
-                      <Text style={styles.timelineTitle}>{event.title}</Text>
-                      <Text style={styles.timelineMeta}>{formatDateTime(event.createdAt)}{event.source ? ` · ${event.source}` : ''}{event.target ? ` → ${event.target}` : ''}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            ) : <Text style={styles.help}>本房间还没有协作事件。</Text>}
-          </>
-        ) : null}
-      </View>
+      <RoomCollaborationDashboard
+        room={selectedRoom}
+        open={collaborationPanelOpen}
+        growth={selectedRoomGrowth}
+        delegationTasks={selectedRoomDelegationTasks}
+        collaborationEvents={selectedRoomCollaborationEvents}
+        selectedFontFamily={selectedFontFamily}
+        styles={styles}
+        TextComponent={Text}
+        getDelegationTaskStatusStyle={getDelegationTaskStatusStyle}
+        onToggleOpen={() => setCollaborationPanelOpen((open) => !open)}
+      />
     );
   }
 
@@ -6316,210 +5865,55 @@ ${content}`)]);
   }
 
   function renderRoleplayArchivePanel() {
-    if (!selectedRoom?.roleplay?.enabled) return null;
-    const archive = selectedRoom.roleplay.archive;
     return (
-      <View style={styles.roomEditPanel}>
-        <View style={styles.syncHeader}>
-          <View>
-            <Text style={styles.panelLabel}>RP 剧本档案</Text>
-            <Text style={styles.help}>长期记录世界观、章节、NPC、地点、道具、线索、谜团、玩家选择和 GM 幕后笔记。</Text>
-          </View>
-          <View style={styles.buttonRowCompact}>
-            <MiniButton icon="file-tray-full-outline" label={rpArchiveGenerating ? '整理中...' : '整理档案'} onPress={generateRoleplayArchive} />
-            {archive ? <MiniButton icon="trash-outline" label="清空" onPress={clearRoleplayArchive} /> : null}
-          </View>
-        </View>
-        {archive ? (
-          <View style={styles.archiveCard}>
-            <Text style={styles.summaryTitle}>{archive.title} · 第 {archive.chapter} 章</Text>
-            <Text style={styles.help}>{summarizeRoleplayArchive(archive)} · 更新于 {formatDateTime(archive.updatedAt)}</Text>
-            <Text style={styles.diagnosticMessage}>主线：{archive.currentQuest}</Text>
-            <Text style={styles.help}>NPC：{archive.npcs.slice(0, 4).join('、') || '暂无'} </Text>
-            <Text style={styles.help}>线索：{archive.clues.slice(0, 4).join('、') || '暂无'} </Text>
-            {archive.gmNotes ? <Text style={styles.conflictWarning}>GM 幕后笔记：{archive.gmNotes}</Text> : null}
-          </View>
-        ) : <Text style={styles.help}>还没有 RP 剧本档案。开始几轮剧情后，点击“整理档案”。</Text>}
-      </View>
+      <RoleplayArchivePanel
+        room={selectedRoom}
+        generating={rpArchiveGenerating}
+        styles={styles}
+        TextComponent={Text}
+        onGenerate={generateRoleplayArchive}
+        onClear={clearRoleplayArchive}
+      />
     );
   }
 
   function renderTaskBoardPanel() {
-    if (!selectedRoom || selectedRoom.kind !== 'group') return null;
-    return (
-      <View style={styles.roomEditPanel}>
-        <Text style={styles.panelLabel}>任务看板</Text>
-        <Text style={styles.help}>委托任务会按状态进入看板。专业协作里是项目任务；RP 房间里也可作为主线/支线任务。</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.taskBoardRow}>
-          {selectedTaskBoard.map((column) => (
-            <View key={column.id} style={styles.taskBoardColumn}>
-              <Text style={styles.taskBoardTitle}>{column.label} · {column.tasks.length}</Text>
-              {column.tasks.slice(0, 5).map((task) => (
-                <View key={task.id} style={styles.taskBoardItem}>
-                  <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias}</Text>
-                  <Text style={styles.help} numberOfLines={3}>{task.taskText}</Text>
-                </View>
-              ))}
-              {column.tasks.length === 0 ? <Text style={styles.help}>暂无</Text> : null}
-            </View>
-          ))}
-        </ScrollView>
-      </View>
-    );
+    return <TaskBoardPanel room={selectedRoom} columns={selectedTaskBoard} styles={styles} TextComponent={Text} />;
   }
 
   function renderRoomGrowthPanel() {
-    if (!selectedRoom || !selectedRoomGrowth) return null;
-    const knowledgeItems = [...(selectedRoom.knowledgeBase ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    const blackboardItems = [...(selectedRoom.blackboardItems ?? [])].sort((a, b) => {
-      const statusRank = (item: typeof a) => item.status === 'pinned' ? 2 : item.status === 'open' ? 1 : 0;
-      return statusRank(b) - statusRank(a) || b.updatedAt.localeCompare(a.updatedAt);
-    });
-    const decisionRecords = [...(selectedRoom.decisionRecords ?? [])].sort((a, b) => {
-      const statusRank = (item: typeof a) => item.status === 'active' ? 1 : 0;
-      return statusRank(b) - statusRank(a) || b.updatedAt.localeCompare(a.updatedAt);
-    });
-
     return (
-      <View style={styles.roomEditPanel}>
-        <View style={styles.syncHeader}>
-          <View style={styles.syncHeaderText}>
-            <Text style={styles.panelLabel}>房间成长层</Text>
-            <Text style={styles.help}>把几轮协作后的稳定知识、开放问题、决策和 Agent 关系沉淀下来；确认后的内容会进入后续群聊上下文。</Text>
-          </View>
-          <StatusToken icon="leaf-outline" label={selectedRoomGrowth.label} tone="memory" />
-        </View>
-        <View style={styles.healthMetricRow}>
-          <HealthMetric label="知识" value={selectedRoomGrowth.knowledgeCount} tone={selectedRoomGrowth.knowledgeCount ? 'ok' : 'unknown'} />
-          <HealthMetric label="黑板" value={selectedRoomGrowth.blackboardOpenCount} tone={selectedRoomGrowth.blackboardOpenCount ? 'checking' : 'unknown'} />
-          <HealthMetric label="决策" value={selectedRoomGrowth.decisionCount} tone={selectedRoomGrowth.decisionCount ? 'ok' : 'unknown'} />
-          <HealthMetric label="草案" value={selectedRoomGrowth.pendingMemory ? 1 : 0} tone={selectedRoomGrowth.pendingMemory ? 'checking' : 'unknown'} />
-        </View>
-
-        <Text style={styles.panelLabel}>房间知识库</Text>
-        <TextInput style={styles.input} value={knowledgeTitleDraft} onChangeText={setKnowledgeTitleDraft} placeholder="知识标题，例如：发布约束 / 用户偏好 / 项目定位" />
-        <TextInput
-          style={[styles.input, styles.jsonPasteInput]}
-          multiline
-          value={knowledgeBodyDraft}
-          onChangeText={setKnowledgeBodyDraft}
-          placeholder="稳定事实、偏好、约束或交接信息"
-          textAlignVertical="top"
-        />
-        <View style={styles.toolActions}>
-          <MiniButton icon="add-circle-outline" label="加入知识库" onPress={addRoomKnowledgeItem} />
-        </View>
-        {knowledgeItems.length ? knowledgeItems.slice(0, 8).map((item) => (
-          <View key={item.id} style={styles.conflictItem}>
-            <View style={styles.conflictHeader}>
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{item.title}</Text>
-                <Text style={styles.help}>{item.source} · {formatDateTime(item.updatedAt)}{item.tags.length ? ` · ${item.tags.join('、')}` : ''}</Text>
-                <Text style={styles.diagnosticMessage}>{item.body}</Text>
-              </View>
-              <MiniButton icon="trash-outline" label="删除" onPress={() => removeRoomKnowledgeItem(item.id)} />
-            </View>
-          </View>
-        )) : <Text style={styles.help}>还没有结构化知识。确认记忆草案或手动添加后，这里会成为房间的长期参考层。</Text>}
-
-        <Text style={styles.panelLabel}>协作黑板</Text>
-        <View style={styles.inlineFormRow}>
-          <TextInput style={[styles.input, styles.inlineInput]} value={blackboardDraft} onChangeText={setBlackboardDraft} placeholder="开放问题、待办、下一步动作" />
-          <MiniButton icon="add-circle-outline" label="贴上" onPress={addRoomBlackboardItem} />
-        </View>
-        {blackboardItems.length ? blackboardItems.slice(0, 10).map((item) => (
-          <View key={item.id} style={styles.conflictItem}>
-            <View style={styles.conflictHeader}>
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{getBlackboardStatusLabel(item.status)} · {item.text}</Text>
-                <Text style={styles.help}>{item.authorName} · {formatDateTime(item.updatedAt)}</Text>
-              </View>
-              <View style={styles.buttonRowCompact}>
-                <MiniButton icon="pin-outline" label="置顶" onPress={() => updateRoomBlackboardItemStatus(item.id, 'pinned')} />
-                <MiniButton icon="checkmark-outline" label="完成" onPress={() => updateRoomBlackboardItemStatus(item.id, 'resolved')} />
-                <MiniButton icon="trash-outline" label="删" onPress={() => removeRoomBlackboardItem(item.id)} />
-              </View>
-            </View>
-          </View>
-        )) : <Text style={styles.help}>黑板适合放还没进入正式结论的开放事项。</Text>}
-
-        <Text style={styles.panelLabel}>决策记录</Text>
-        <TextInput style={styles.input} value={decisionTitleDraft} onChangeText={setDecisionTitleDraft} placeholder="决策标题，例如：采用本地优先架构" />
-        <TextInput
-          style={[styles.input, styles.jsonPasteInput]}
-          multiline
-          value={decisionRationaleDraft}
-          onChangeText={setDecisionRationaleDraft}
-          placeholder="决策理由、取舍和适用边界"
-          textAlignVertical="top"
-        />
-        <View style={styles.toolActions}>
-          <MiniButton icon="ribbon-outline" label="记录决策" onPress={addRoomDecisionRecord} />
-        </View>
-        {decisionRecords.length ? decisionRecords.slice(0, 8).map((item) => (
-          <View key={item.id} style={styles.conflictItem}>
-            <View style={styles.conflictHeader}>
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{getDecisionStatusLabel(item.status)} · {item.title}</Text>
-                <Text style={styles.help}>{item.source}{item.ownerName ? ` · ${item.ownerName}` : ''} · {formatDateTime(item.updatedAt)}</Text>
-                {item.rationale ? <Text style={styles.diagnosticMessage}>{item.rationale}</Text> : null}
-              </View>
-              <View style={styles.buttonRowCompact}>
-                <MiniButton icon="archive-outline" label="过期" onPress={() => updateRoomDecisionStatus(item.id, 'superseded')} />
-                <MiniButton icon="trash-outline" label="删" onPress={() => removeRoomDecisionRecord(item.id)} />
-              </View>
-            </View>
-          </View>
-        )) : <Text style={styles.help}>重要结论放到决策记录里，后续 Agent 会把它当作稳定边界，而不是普通聊天噪音。</Text>}
-
-        <Text style={styles.panelLabel}>本房间 Soul 关系图</Text>
-        {selectedRoomSoulRelations.length ? selectedRoomSoulRelations.slice(0, 6).map((edge) => (
-          <View key={edge.id} style={styles.relationCard}>
-            <View style={styles.relationHeader}>
-              <AgentAvatar alias={edge.fromName} size={24} />
-              <Text style={styles.relationArrow}>→</Text>
-              <AgentAvatar alias={edge.toName} size={24} />
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{edge.fromName} → {edge.toName}</Text>
-                <Text style={styles.help}>{edge.label} · 强度 {edge.strength} · 委托 {edge.delegations} / 完成 {edge.completions} / 引用 {edge.mentions}</Text>
-              </View>
-            </View>
-          </View>
-        )) : <Text style={styles.help}>几轮委托、接力或互相引用后，这里会显示当前房间里的 Agent 关系变化。</Text>}
-      </View>
+      <RoomGrowthPanel
+        room={selectedRoom}
+        growth={selectedRoomGrowth}
+        soulRelations={selectedRoomSoulRelations}
+        knowledgeTitleDraft={knowledgeTitleDraft}
+        knowledgeBodyDraft={knowledgeBodyDraft}
+        blackboardDraft={blackboardDraft}
+        decisionTitleDraft={decisionTitleDraft}
+        decisionRationaleDraft={decisionRationaleDraft}
+        styles={styles}
+        TextComponent={Text}
+        TextInputComponent={TextInput}
+        onChangeKnowledgeTitle={setKnowledgeTitleDraft}
+        onChangeKnowledgeBody={setKnowledgeBodyDraft}
+        onAddKnowledgeItem={addRoomKnowledgeItem}
+        onRemoveKnowledgeItem={removeRoomKnowledgeItem}
+        onChangeBlackboardDraft={setBlackboardDraft}
+        onAddBlackboardItem={addRoomBlackboardItem}
+        onUpdateBlackboardStatus={updateRoomBlackboardItemStatus}
+        onRemoveBlackboardItem={removeRoomBlackboardItem}
+        onChangeDecisionTitle={setDecisionTitleDraft}
+        onChangeDecisionRationale={setDecisionRationaleDraft}
+        onAddDecisionRecord={addRoomDecisionRecord}
+        onUpdateDecisionStatus={updateRoomDecisionStatus}
+        onRemoveDecisionRecord={removeRoomDecisionRecord}
+      />
     );
   }
 
   function renderSoulRelationsPanel() {
-    return (
-      <View style={styles.diagnosticPanel}>
-        <View style={styles.syncHeader}>
-          <View>
-            <Text style={styles.cardTitle}>Soul 关系图</Text>
-            <Text style={styles.help}>根据委托、完成、互相引用统计 Agent 之间的协作关系。</Text>
-          </View>
-          <Text style={styles.squareCount}>{soulRelations.length} 条关系</Text>
-        </View>
-        {soulRelations.length ? soulRelations.map((edge) => (
-          <View key={edge.id} style={styles.relationCard}>
-            <View style={styles.relationHeader}>
-              <AgentAvatar alias={edge.fromName} size={26} />
-              <Text style={styles.relationArrow}>→</Text>
-              <AgentAvatar alias={edge.toName} size={26} />
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{edge.fromName} → {edge.toName}</Text>
-                <Text style={styles.help}>{edge.label} · 强度 {edge.strength}</Text>
-              </View>
-            </View>
-            <View style={styles.healthMetricRow}>
-              <HealthMetric label="委托" value={edge.delegations} tone={edge.delegations ? 'checking' : 'unknown'} />
-              <HealthMetric label="完成" value={edge.completions} tone={edge.completions ? 'ok' : 'unknown'} />
-              <HealthMetric label="引用" value={edge.mentions} tone={edge.mentions ? 'checking' : 'unknown'} />
-            </View>
-          </View>
-        )) : <Text style={styles.help}>还没有足够的协作数据。多进行几次委托或接力后，这里会出现关系图。</Text>}
-      </View>
-    );
+    return <SoulRelationsPanel relations={soulRelations} styles={styles} TextComponent={Text} />;
   }
 
   function renderRooms() {
@@ -6766,33 +6160,6 @@ function getDelegationTaskStatusStyle(status: DelegationTask['status']) {
   return styles.diagnosticLevelInfo;
 }
 
-function getGoalStatusLabel(status: GoalSession['status'], signal?: GoalStatusSignal): string {
-  if (status === 'awaiting_user') return signal === 'blocked' ? '等待确认：受阻' : '等待确认：已完成';
-  if (status === 'done') return '已结束';
-  if (status === 'blocked') return '已受阻';
-  if (status === 'reviewing') return '复盘中';
-  if (status === 'running') return '推进中';
-  if (status === 'planning') return '规划中';
-  return '已取消';
-}
-
-function getGoalPlanItemStatusLabel(status: GoalSession['planItems'][number]['status']): string {
-  if (status === 'done') return '完成';
-  if (status === 'running') return '进行中';
-  if (status === 'blocked') return '受阻';
-  return '待办';
-}
-
-function getBlackboardStatusLabel(status: RoomBlackboardItemStatus): string {
-  if (status === 'pinned') return '置顶';
-  if (status === 'resolved') return '已完成';
-  return '开放';
-}
-
-function getDecisionStatusLabel(status: RoomDecisionRecordStatus): string {
-  if (status === 'superseded') return '已过期';
-  return '生效中';
-}
 
 function getGoalPlanItemStatusStyle(status: GoalSession['planItems'][number]['status']) {
   if (status === 'done') return styles.diagnosticLevelSuccess;
@@ -9128,16 +8495,6 @@ const styles = StyleSheet.create({
   mobileDetailsCardDark: {
     borderColor: '#334155',
     backgroundColor: '#111827',
-  },
-  mobileRoomCardExpanded: {
-    borderColor: '#93c5fd',
-    backgroundColor: '#f8fbff',
-  },
-  mobileRoomSettings: {
-    gap: 9,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
   },
   modePillRow: {
     gap: 8,
