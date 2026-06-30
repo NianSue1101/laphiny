@@ -62,6 +62,7 @@ import { RoomStatusBar } from './src/components/RoomStatusBar';
 import { RoleplaySceneCard } from './src/components/RoleplaySceneCard';
 import { RuntimeBanner } from './src/components/RuntimeBanner';
 import { QuickCommandsPanel } from './src/components/QuickCommandsPanel';
+import { CollaborationArchivePanel } from './src/components/square/CollaborationArchivePanel';
 import { SoulDailyPanel } from './src/components/square/SoulDailyPanel';
 import {
   PersonalizationSettingsPanel,
@@ -86,7 +87,6 @@ import {
   formatBytes,
   formatDateTime,
   formatTime,
-  getCollaborationEventIcon,
   getDelegationTaskStatusLabel,
   getDiagnosticCategoryLabel,
   getDiagnosticLevelLabel,
@@ -95,7 +95,6 @@ import {
   getServiceWorkerStatusLabel,
   getSquareEventIcon,
   getStatusLabel,
-  getTeamTemplateModeLabel,
   getWebBasePath,
   isAbortError,
   isSecureWebContext,
@@ -155,6 +154,8 @@ import { buildAgentPermissionDecisionPrompt, extractAgentPermissionRequest, getA
 import { COLLABORATION_RITUALS, buildRitualConsensusMessages, buildRitualPrompt, getRitualTargets, parseCollaborationRitualCommand, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
 import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle, makeDiagnosticLog, sanitizeDiagnosticLogs } from './src/lib/diagnostics';
 import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
+import { runHermesCompletion } from './src/lib/hermes_completion';
+import { beginBackgroundAgentTask, shouldStreamHermesReplies } from './src/lib/background_agent';
 import { buildGoalModePrompt, buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
 import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText, stripRoomStatePatchBlocks, summarizeRoomGrowth } from './src/lib/room_growth';
@@ -1849,25 +1850,26 @@ export default function App() {
     const controller = new AbortController();
     streamControllersRef.current[placeholderId] = controller;
     setStreamActive(placeholderId, true);
+    const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
 
     let streamedText = '';
     updateMessageInRoom(room.id, placeholderId, { content: '', status: 'running', error: undefined });
 
     try {
       const client = new HermesClient(connection);
-      for await (const chunk of client.chatCompletionStream({
-        model: connection.model,
-        messages: buildChatHistory(previousMessages, room, member, text, attachments, connections, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT),
-        stream: true,
-      }, {
+      const shouldStream = shouldStreamHermesReplies();
+      streamedText = await runHermesCompletion(client, {
+        request: {
+          model: connection.model,
+          messages: buildChatHistory(previousMessages, room, member, text, attachments, connections, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT),
+        },
         sessionId: room.sessionIds[connection.id],
         sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
         timeoutMs: 120_000,
         signal: controller.signal,
-      })) {
-        streamedText += chunk;
-        queueStreamMessageUpdate(room.id, placeholderId, streamedText);
-      }
+        stream: shouldStream,
+        onChunk: (content) => queueStreamMessageUpdate(room.id, placeholderId, content),
+      });
 
       flushStreamMessage(room.id, placeholderId);
       const parsedReply = extractAgentReplyArtifacts(streamedText.trim());
@@ -1923,6 +1925,7 @@ export default function App() {
         delete next[placeholderId];
         return next;
       });
+      await releaseBackgroundAgentTask();
     }
   }
 
@@ -2140,6 +2143,7 @@ export default function App() {
       const controller = new AbortController();
       streamControllersRef.current[placeholder.id] = controller;
       setStreamActive(placeholder.id, true);
+      const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
       updateMessageInRoom(room.id, placeholder.id, { status: 'running', content: '', error: undefined });
       const requestId = makeId('req');
       const startedAt = Date.now();
@@ -2221,19 +2225,19 @@ export default function App() {
         });
 
         const client = new HermesClient(connection);
-        for await (const chunk of client.chatCompletionStream({
-          model: connection.model,
-          messages: historyMessages,
-          stream: true,
-        }, {
+        const shouldStream = shouldStreamHermesReplies();
+        accumulated = await runHermesCompletion(client, {
+          request: {
+            model: connection.model,
+            messages: historyMessages,
+          },
           sessionId: room.sessionIds[connection.id],
           sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
-        })) {
-          accumulated += chunk;
-          queueStreamMessageUpdate(room.id, placeholder.id, accumulated);
-        }
+          stream: shouldStream,
+          onChunk: (content) => queueStreamMessageUpdate(room.id, placeholder.id, content),
+        });
 
         flushStreamMessage(room.id, placeholder.id);
         const parsedReply = extractAgentReplyArtifacts(accumulated.trim());
@@ -2417,6 +2421,7 @@ export default function App() {
           delete next[placeholder.id];
           return next;
         });
+        await releaseBackgroundAgentTask();
       }
     };
 
@@ -5481,7 +5486,17 @@ ${content}`)]);
           onOpenRoomManagement={openRoomManagement}
         />
 
-        {renderCollaborationArchive()}
+        <CollaborationArchivePanel
+          collaborationEvents={collaborationEvents}
+          delegationTasks={delegationTasks}
+          teamTemplates={teamTemplates}
+          latestProfileVersions={latestProfileVersions}
+          styles={styles}
+          TextComponent={Text}
+          getDelegationTaskStatusStyle={getDelegationTaskStatusStyle}
+          onDeleteTeamTemplate={deleteTeamTemplate}
+          onRestoreProfileVersion={restoreProfileVersion}
+        />
 
         {renderSoulRelationsPanel()}
 
@@ -5509,73 +5524,6 @@ ${content}`)]);
           </View>
         ))}
       </ScrollView>
-    );
-  }
-
-  function renderCollaborationArchive() {
-    const recentEvents = [...collaborationEvents].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 12);
-    const recentTasks = [...delegationTasks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8);
-    return (
-      <View style={styles.diagnosticPanel}>
-        <View style={styles.syncHeader}>
-          <View>
-            <Text style={styles.cardTitle}>Soul 协作工作台</Text>
-            <Text style={styles.help}>阶段四差异点：协作时间线、委托任务卡、团队模板和协作卡片版本都集中在这里。</Text>
-          </View>
-          <Text style={styles.squareCount}>{recentEvents.length} 条协作</Text>
-        </View>
-
-        <Text style={styles.panelLabel}>委托任务卡</Text>
-        {recentTasks.length ? recentTasks.map((task) => (
-          <View key={task.id} style={styles.taskCard}>
-            <View style={styles.conflictHeader}>
-              <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias}</Text>
-              <Text style={[styles.badge, getDelegationTaskStatusStyle(task.status)]}>{getDelegationTaskStatusLabel(task.status)}</Text>
-            </View>
-            <Text style={styles.help}>{task.roomName} · 深度 {task.depth} · {formatDateTime(task.updatedAt)}</Text>
-            <Text style={styles.diagnosticMessage}>{task.taskText}</Text>
-          </View>
-        )) : <Text style={styles.help}>还没有 Agent-to-Agent 委托任务。</Text>}
-
-        <Text style={styles.panelLabel}>团队模板</Text>
-        {teamTemplates.length ? teamTemplates.map((template) => (
-          <View key={template.id} style={styles.conflictItem}>
-            <View style={styles.conflictHeader}>
-              <View>
-                <Text style={styles.conflictItemTitle}>{template.name}</Text>
-                <Text style={styles.help}>{getTeamTemplateModeLabel(template.defaultMode)} · 委托深度 {template.maxDelegationDepth} · {template.autoDelegationEnabled ? '自动委托' : '不自动委托'}</Text>
-              </View>
-              <SecondaryButton icon="trash-outline" label="删除" onPress={() => deleteTeamTemplate(template)} />
-            </View>
-          </View>
-        )) : <Text style={styles.help}>还没有保存团队模板。可在房间工具里保存当前小队配置。</Text>}
-
-        <Text style={styles.panelLabel}>协作卡片版本</Text>
-        {latestProfileVersions.length ? latestProfileVersions.map((version) => (
-          <View key={version.id} style={styles.conflictItem}>
-            <View style={styles.conflictHeader}>
-              <View style={styles.rowMain}>
-                <Text style={styles.conflictItemTitle}>{version.connectionName}</Text>
-                <Text style={styles.help}>{formatDateTime(version.createdAt)} · {version.note ?? '协作卡片版本'}</Text>
-                <Text style={styles.diagnosticMessage} numberOfLines={2}>{summarizeAgentProfile(version.profile)}</Text>
-              </View>
-              <SecondaryButton icon="reload-outline" label="回滚" onPress={() => restoreProfileVersion(version)} />
-            </View>
-          </View>
-        )) : <Text style={styles.help}>生成或更新协作卡片后，这里会保留版本历史。</Text>}
-
-        <Text style={styles.panelLabel}>最近协作时间线</Text>
-        {recentEvents.length ? recentEvents.map((event) => (
-          <View key={event.id} style={styles.timelineItemLarge}>
-            <Ionicons name={getCollaborationEventIcon(event.kind)} size={16} color="#2563eb" />
-            <View style={styles.timelineBody}>
-              <Text style={styles.timelineTitle}>{event.title}</Text>
-              <Text style={styles.timelineMeta}>{event.roomName} · {formatDateTime(event.createdAt)}{event.source ? ` · ${event.source}` : ''}{event.target ? ` → ${event.target}` : ''}</Text>
-              {event.body ? <Text style={styles.help} numberOfLines={2}>{event.body}</Text> : null}
-            </View>
-          </View>
-        )) : <Text style={styles.help}>还没有协作事件。</Text>}
-      </View>
     );
   }
 
