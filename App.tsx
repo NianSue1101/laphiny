@@ -62,7 +62,12 @@ import { RoomStatusBar } from './src/components/RoomStatusBar';
 import { RoleplaySceneCard } from './src/components/RoleplaySceneCard';
 import { RuntimeBanner } from './src/components/RuntimeBanner';
 import { QuickCommandsPanel } from './src/components/QuickCommandsPanel';
-import { PersonalizationSettingsPanel, ProjectInfoSettingsPanel, SyncBackendSettingsPanel } from './src/components/settings/SettingsInfoPanels';
+import {
+  PersonalizationSettingsPanel,
+  ProjectInfoSettingsPanel,
+  SyncBackendSettingsPanel,
+  SyncConflictReportPanel,
+} from './src/components/settings';
 import { SoulRelationsPanel } from './src/components/SoulRelationsPanel';
 import { TaskBoardPanel } from './src/components/TaskBoardPanel';
 import { Ionicons } from './src/components/SafeIcon';
@@ -89,8 +94,6 @@ import {
   getServiceWorkerStatusLabel,
   getSquareEventIcon,
   getStatusLabel,
-  getSyncConflictEntityLabel,
-  getSyncConflictStatusLabel,
   getTeamTemplateModeLabel,
   getWebBasePath,
   isAbortError,
@@ -5291,7 +5294,13 @@ ${content}`)]);
           syncConfig={syncConfig}
           syncing={syncing}
           checkingSyncConflicts={checkingSyncConflicts}
-          syncConflictReport={renderSyncConflictReport()}
+          syncConflictReport={
+            <SyncConflictReportPanel
+              report={syncConflictReport}
+              styles={styles}
+              TextComponent={Text}
+            />
+          }
           styles={styles}
           TextComponent={Text}
           TextInputComponent={TextInput}
@@ -5622,50 +5631,6 @@ ${content}`)]);
       </View>
     );
   }
-
-  function renderSyncConflictReport() {
-    if (!syncConflictReport) {
-      return <Text style={styles.help}>推送/拉取前可先点“检查差异”，只读取远端快照，不会修改本机数据。</Text>;
-    }
-
-    const summary = syncConflictReport.summary;
-    return (
-      <View style={styles.conflictPanel}>
-        <View style={styles.conflictHeader}>
-          <View>
-            <Text style={styles.cardTitle}>同步差异预检</Text>
-            <Text style={styles.help}>检查于 {formatDateTime(syncConflictReport.checkedAt)}。本报告只读远端数据，不会自动合并。</Text>
-          </View>
-          <Text style={[styles.badge, summary.total > 0 ? styles.diagnosticLevelWarning : styles.diagnosticLevelSuccess]}>
-            {summary.total > 0 ? `${summary.total} 项差异` : '无差异'}
-          </Text>
-        </View>
-        <View style={styles.healthMetricRow}>
-          <HealthMetric label="本地独有" value={summary.localOnly} tone={summary.localOnly > 0 ? 'checking' : 'ok'} />
-          <HealthMetric label="远端独有" value={summary.remoteOnly} tone={summary.remoteOnly > 0 ? 'checking' : 'ok'} />
-          <HealthMetric label="本地较新" value={summary.localNewer} tone={summary.localNewer > 0 ? 'error' : 'ok'} />
-          <HealthMetric label="远端较新" value={summary.remoteNewer} tone={summary.remoteNewer > 0 ? 'checking' : 'ok'} />
-        </View>
-        {summary.localNewer > 0 || summary.sameTimeDifferent > 0 ? (
-          <Text style={styles.conflictWarning}>拉取快照会按 updatedAt 合并，远端较新的连接/房间会覆盖本地版本；本地较新的内容建议先推送或备份。</Text>
-        ) : null}
-        {syncConflictReport.items.length > 0 ? (
-          <View style={styles.conflictList}>
-            {syncConflictReport.items.slice(0, 12).map((item) => (
-              <View key={`${item.entity}:${item.id}:${item.status}`} style={styles.conflictItem}>
-                <Text style={styles.conflictItemTitle}>{getSyncConflictEntityLabel(item.entity)} · {item.label}</Text>
-                <Text style={styles.conflictItemMeta}>{getSyncConflictStatusLabel(item.status)} · 本地 {item.localUpdatedAt ? formatDateTime(item.localUpdatedAt) : '无'} · 远端 {item.remoteUpdatedAt ? formatDateTime(item.remoteUpdatedAt) : '无'}</Text>
-                {item.detail ? <Text style={styles.help}>{item.detail}</Text> : null}
-              </View>
-            ))}
-            {syncConflictReport.truncated ? <Text style={styles.help}>差异较多，已展示最近 {syncConflictReport.items.length} 项；完整摘要会保留在诊断日志。</Text> : null}
-          </View>
-        ) : <Text style={styles.help}>本地与远端快照内容一致。</Text>}
-      </View>
-    );
-  }
-
-
 
   function renderOnboardingPanel() {
     if (onboardingDismissed || onboardingComplete) return null;
