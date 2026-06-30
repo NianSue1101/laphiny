@@ -15,12 +15,6 @@ class LaphinyBackgroundAgentService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action == ACTION_STOP) {
-      stopForegroundCompat()
-      stopSelf()
-      return START_NOT_STICKY
-    }
-
     ensureNotificationChannel()
     val notification = buildNotification()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -33,6 +27,11 @@ class LaphinyBackgroundAgentService : Service() {
       startForeground(NOTIFICATION_ID, notification)
     }
     return START_STICKY
+  }
+
+  override fun onDestroy() {
+    stopForegroundCompat()
+    super.onDestroy()
   }
 
   private fun buildNotification(): Notification {
@@ -97,7 +96,6 @@ class LaphinyBackgroundAgentService : Service() {
   companion object {
     private const val CHANNEL_ID = "laphiny-agent-runtime"
     private const val NOTIFICATION_ID = 2404
-    private const val ACTION_STOP = "site.nianxxz.laphiny.action.STOP_BACKGROUND_AGENT"
 
     fun start(context: Context) {
       val intent = Intent(context, LaphinyBackgroundAgentService::class.java)
@@ -109,10 +107,8 @@ class LaphinyBackgroundAgentService : Service() {
     }
 
     fun stop(context: Context) {
-      val intent = Intent(context, LaphinyBackgroundAgentService::class.java).apply {
-        action = ACTION_STOP
-      }
-      context.startService(intent)
+      val intent = Intent(context, LaphinyBackgroundAgentService::class.java)
+      context.stopService(intent)
     }
   }
 }

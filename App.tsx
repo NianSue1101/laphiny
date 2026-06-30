@@ -2086,6 +2086,8 @@ export default function App() {
       return;
     }
 
+    const releaseBackgroundAgentTurn = await beginBackgroundAgentTask();
+    try {
     const turnMessages: ChatMessage[] = [...previousMessages, userMessage];
     const dispatchRoom = activeGoalForTurn ? { ...effectiveRoom, activeGoal: activeGoalForTurn } : effectiveRoom;
     const scheduledKeys = new Set<string>();
@@ -2471,6 +2473,9 @@ export default function App() {
       for (const message of turnMessages) {
         delayedGoalMessageIdsRef.current.delete(message.id);
       }
+    }
+    } finally {
+      await releaseBackgroundAgentTurn();
     }
   }
 
