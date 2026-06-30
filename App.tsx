@@ -222,7 +222,6 @@ export default function App() {
   const [feedbackLogs, setFeedbackLogs] = useState<FeedbackLogEntry[]>([]);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
-  const [expandedMobileRoomId, setExpandedMobileRoomId] = useState<string | null>(null);
   const [managedRoomId, setManagedRoomId] = useState<string | null>(null);
   const [, forceFontRender] = useState(0);
   const [storageBackend, setStorageBackend] = useState<StorageBackendInfo | null>(null);
@@ -634,10 +633,6 @@ export default function App() {
         leaveFocusedChat();
         return true;
       }
-      if (expandedMobileRoomId) {
-        setExpandedMobileRoomId(null);
-        return true;
-      }
       if (tab !== 'chat') {
         setTab('chat');
         return true;
@@ -645,7 +640,7 @@ export default function App() {
       return false;
     });
     return () => subscription.remove();
-  }, [expandedMobileRoomId, mobileFocusedChat, mobileRoomDetailsOpen, tab]);
+  }, [mobileFocusedChat, mobileRoomDetailsOpen, tab]);
 
   const healthSummary = useMemo(() => {
     let ok = 0;
@@ -1460,7 +1455,6 @@ export default function App() {
 
   function openFocusedChatRoom(roomId: string) {
     setSelectedRoomId(roomId);
-    setExpandedMobileRoomId(null);
     setTab('chat');
     if (!isWideLayout) {
       setMobileFocusedRoomId(roomId);
@@ -1476,7 +1470,6 @@ export default function App() {
     setSelectedRoomId(roomId);
     setManagedRoomId(roomId);
     setTab('rooms');
-    setExpandedMobileRoomId(null);
     setMobileFocusedRoomId(null);
     setMobileRoomDetailsOpen(false);
     setRoomDetailsCollapsed(true);
@@ -8502,16 +8495,6 @@ const styles = StyleSheet.create({
   mobileDetailsCardDark: {
     borderColor: '#334155',
     backgroundColor: '#111827',
-  },
-  mobileRoomCardExpanded: {
-    borderColor: '#93c5fd',
-    backgroundColor: '#f8fbff',
-  },
-  mobileRoomSettings: {
-    gap: 9,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
   },
   modePillRow: {
     gap: 8,

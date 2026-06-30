@@ -99,6 +99,7 @@ Soul 房间侧栏抽屉，负责展示房间状态、RP 场景、最近共识、
 约束：
 
 - “管理”只能调用 `onManageRoom`，不在移动选择器内展开第二套表单。
+- 移动端房间卡片不再支持旧的 inline expanded settings；这是预期行为，基础管理统一在房间页 `RoomManagementPanel`。
 - “进入”只调用 `onOpenRoom`。
 
 ### `src/components/RoomRail.tsx`
