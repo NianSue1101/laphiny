@@ -12,9 +12,7 @@ import type {
   SyncSnapshot,
   TeamTemplate,
 } from '../types';
-import type { ParsedCollaborationRitual } from '../lib/collaboration_rituals';
 import type { GoalModeCommand } from '../lib/goal_mode';
-import type { ParsedRoleplayCommand } from '../lib/roleplay';
 
 export type Tab = 'chat' | 'connections' | 'rooms' | 'square' | 'settings';
 export type IconName = string;
@@ -25,17 +23,6 @@ export type QuickCommand = {
   icon: IconName;
   targetAlias: string;
   prompt: string;
-};
-
-export type CollaborationMode = 'parallel' | 'sequential';
-
-export type SendTargetSelection = {
-  targets: RoomMember[];
-  textForHermes: string;
-  mode: CollaborationMode;
-  ritual?: ParsedCollaborationRitual;
-  goalMode?: GoalModeCommand;
-  roleplayCommand?: ParsedRoleplayCommand;
 };
 
 export type ScheduledReply = {

@@ -29,6 +29,7 @@ import {
   MAX_DELEGATION_DEPTH,
 } from './src/config/app_config';
 import { ActiveGoalPanel } from './src/components/ActiveGoalPanel';
+import { AppShellHeader } from './src/components/AppShellHeader';
 import { AppText as Text, AppTextInput as TextInput, setAppTextFontFamily } from './src/components/AppText';
 import { AttachmentPreviewModal } from './src/components/AttachmentPreviewModal';
 import { ChatSidebar } from './src/components/ChatSidebar';
@@ -49,7 +50,6 @@ import {
   PrimaryButton,
   RoomHint,
   SecondaryButton,
-  TabButton,
 } from './src/components/Primitives';
 import { MarkdownText } from './src/components/MarkdownText';
 import { MessageSearchPanel } from './src/components/MessageSearchPanel';
@@ -120,7 +120,6 @@ import type {
   QuickCommand,
   PWAInstallPromptEvent,
   ScheduledReply,
-  SendTargetSelection,
   ServiceWorkerStatus,
   StorageBackendInfo,
   Tab,
@@ -142,18 +141,27 @@ const NOTIFICATION_CHANNEL_ID = 'laphiny-agent-replies';
 
 import { pickDocuments, pickImages } from './src/lib/attachments';
 import { buildAgentProfileInquiryMessages, normalizeImportedAgentProfile, parseAgentProfileResponse, summarizeAgentProfile } from './src/lib/agent_profile';
-import { extractAgentFileAttachments } from './src/lib/agent_files';
-import { buildAgentPermissionDecisionPrompt, extractAgentPermissionRequest, getAgentPermissionKey } from './src/lib/agent_permissions';
-import { COLLABORATION_RITUALS, buildRitualConsensusMessages, buildRitualPrompt, getRitualTargets, parseCollaborationRitualCommand, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
+import { buildAgentPermissionDecisionPrompt, getAgentPermissionKey } from './src/lib/agent_permissions';
+import { extractAgentReplyArtifacts, getAgentReplyFallback, getRenderableMessageArtifacts } from './src/lib/chat_rendering';
+import { COLLABORATION_RITUALS, buildRitualConsensusMessages, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
 import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle, makeDiagnosticLog, sanitizeDiagnosticLogs } from './src/lib/diagnostics';
 import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
 import { runHermesCompletion } from './src/lib/hermes_completion';
 import { beginBackgroundAgentTask, shouldStreamHermesReplies } from './src/lib/background_agent';
-import { buildGoalModePrompt, buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
-import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
+import { buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
+import {
+  buildGoalMemoryCapsule,
+  getActiveGoalLeadMember,
+  getGoalControlCommand,
+  getGoalStatusFromSignal,
+  makeGoalSession,
+  mergeGoalPlanItems,
+} from './src/lib/goal_session';
+import { getSendTargets, type SendTargetSelection } from './src/lib/chat_targets';
+import { resolveAssistantDelegations } from './src/lib/mentions';
 import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText, stripRoomStatePatchBlocks, summarizeRoomGrowth } from './src/lib/room_growth';
 import { buildRoomMemoryMessages, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
-import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
+import { getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
 import { buildRoomReplyNotification, type RoomReplyNotification } from './src/lib/room_reply_notifications';
 import { buildSoulDailyDigest } from './src/lib/square_insights';
 import { buildOnboardingSteps, buildRoleplayArchiveMessages, buildSoulRelations, buildTaskBoard, getRoomModeDefinition, makeDefaultRoleplayArchive, parseRoleplayArchiveResponse, summarizeRoleplayArchive, type StarterRoomTemplate } from './src/lib/stage4_plus';
@@ -188,7 +196,7 @@ import {
   saveSyncConfig,
 } from './src/storage/repository';
 import { describeStorageBackend } from './src/storage/kv';
-import { AgentPermissionDecision, AgentPermissionRequest, AgentProfile, AgentProfileVersion, AppPreferences, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, FeedbackConfig, FeedbackLogEntry, GoalSession, GoalStatusSignal, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomBlackboardItemStatus, RoomDecisionRecordStatus, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
+import { AgentPermissionDecision, AgentPermissionRequest, AgentProfile, AgentProfileVersion, AppPreferences, Attachment, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, FeedbackConfig, FeedbackLogEntry, GoalSession, HermesConnection, RoleplayConfig, RoleplayArchive, Room, RoomBlackboardItemStatus, RoomDecisionRecordStatus, RoomMemoryCapsule, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
 
 const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
 const MAX_GOAL_REVIEW_ROUNDS = 3;
@@ -1587,50 +1595,6 @@ export default function App() {
     }, 'goal');
   }
 
-  function extractAgentReplyArtifacts(rawContent: string): {
-    content: string;
-    attachments: Attachment[];
-    permissionRequest?: AgentPermissionRequest;
-  } {
-    const fileReply = extractAgentFileAttachments(rawContent);
-    const permissionReply = extractAgentPermissionRequest(fileReply.content);
-    return {
-      content: permissionReply.content,
-      attachments: fileReply.attachments,
-      permissionRequest: permissionReply.request,
-    };
-  }
-
-  function getRenderableMessageArtifacts(message: ChatMessage): { content: string; attachments: Attachment[] } {
-    const currentAttachments = message.attachments ?? [];
-    if (message.authorId === 'user') return { content: message.content, attachments: currentAttachments };
-    const fileReply = extractAgentFileAttachments(message.content);
-    if (!fileReply.attachments.length) return { content: message.content, attachments: currentAttachments };
-    return {
-      content: fileReply.content || (currentAttachments.length || fileReply.attachments.length ? '已生成附件' : message.content),
-      attachments: mergeRenderableAttachments(currentAttachments, fileReply.attachments),
-    };
-  }
-
-  function mergeRenderableAttachments(current: Attachment[], extracted: Attachment[]): Attachment[] {
-    const seen = new Set(current.map((attachment) => `${attachment.name}:${attachment.size}:${attachment.kind}`));
-    const merged = [...current];
-    for (const attachment of extracted) {
-      const key = `${attachment.name}:${attachment.size}:${attachment.kind}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push(attachment);
-    }
-    return merged;
-  }
-
-  function getAgentReplyFallback(parsedReply: { content: string; attachments: Attachment[]; permissionRequest?: AgentPermissionRequest }) {
-    if (parsedReply.content) return parsedReply.content;
-    if (parsedReply.permissionRequest) return parsedReply.permissionRequest.body;
-    if (parsedReply.attachments.length) return '已生成附件';
-    return '[Hermes 没有返回内容]';
-  }
-
   function applyAlwaysPermissionIfNeeded(permissionRequest: AgentPermissionRequest | undefined): AgentPermissionRequest | undefined {
     if (!permissionRequest) return undefined;
     const permissionKey = getAgentPermissionKey(permissionRequest);
@@ -1731,93 +1695,9 @@ export default function App() {
     streamControllersRef.current[messageId]?.abort();
   }
 
-  function getSendTargets(room: Room, rawText: string, explicitTargetIds = selectedTargetIds): SendTargetSelection {
-    const goalMode = parseGoalCommand(rawText);
-    if (goalMode) {
-      const resolution = resolveMentionTargets(room, rawText);
-      const explicitTargetSet = new Set(explicitTargetIds);
-      const manuallySelectedTargets = room.members.filter((member) => (
-        member.enabled && explicitTargetSet.has(member.connectionId)
-      ));
-      const summaryTarget = room.members.find((member) => member.enabled && member.connectionId === room.summaryConnectionId);
-      const strippedGoal = parseGoalCommand(resolution.strippedText)?.goal.trim();
-      const promptGoal = strippedGoal || goalMode.goal;
-      const commandLead = goalMode.leadMention
-        ? room.members.find((member) => member.enabled && (
-          member.alias.toLowerCase() === goalMode.leadMention?.toLowerCase()
-          || member.connectionId.toLowerCase() === goalMode.leadMention?.toLowerCase()
-        ))
-        : undefined;
-      const leadMember = commandLead
-        ?? manuallySelectedTargets[0]
-        ?? resolution.targets[0]
-        ?? summaryTarget
-        ?? room.members.find((member) => member.enabled);
-      const normalizedGoalMode = { ...goalMode, goal: promptGoal };
-
-      return {
-        targets: leadMember ? [leadMember] : [],
-        textForHermes: leadMember
-          ? buildGoalModePrompt({ goal: promptGoal, room, leadMember, connections })
-          : promptGoal,
-        mode: 'sequential',
-        goalMode: normalizedGoalMode,
-      };
-    }
-
-    const ritual = room.kind === 'group' ? parseCollaborationRitualCommand(rawText) : null;
-    if (ritual) {
-      return {
-        targets: getRitualTargets(room),
-        textForHermes: buildRitualPrompt(ritual, room),
-        mode: ritual.definition.mode,
-        ritual,
-      };
-    }
-
-    const resolution = resolveMentionTargets(room, rawText);
-    const explicitTargetSet = new Set(explicitTargetIds);
-    const manuallySelectedTargets = room.members.filter((member) => (
-      member.enabled && explicitTargetSet.has(member.connectionId)
-    ));
-    const textForHermes = resolution.strippedText || rawText;
-
-    if (
-      room.kind === 'group'
-      && isRoleplayUserTurn(room, rawText)
-      && manuallySelectedTargets.length === 0
-      && resolution.targets.length === 0
-    ) {
-      return {
-        targets: getRoleplayTargets(room),
-        textForHermes: buildRoleplayTurnPrompt(room, rawText),
-        mode: 'sequential',
-      };
-    }
-
-    if (room.kind === 'group' && manuallySelectedTargets.length > 0) {
-      return {
-        targets: manuallySelectedTargets,
-        textForHermes,
-        mode: resolution.reason === 'all-seq' || room.defaultCollaborationMode === 'sequential' ? 'sequential' : 'parallel',
-      };
-    }
-
-    if (room.kind === 'group' && resolution.targets.length === 0 && room.defaultCollaborationMode && room.defaultCollaborationMode !== 'manual') {
-      return {
-        targets: room.members.filter((member) => member.enabled),
-        textForHermes,
-        mode: room.defaultCollaborationMode === 'sequential' ? 'sequential' : 'parallel',
-      };
-    }
-
-    return {
-      targets: resolution.targets,
-      textForHermes,
-      mode: resolution.reason === 'all-seq' ? 'sequential' : 'parallel',
-    };
+  function resolveSendTargets(room: Room, rawText: string, explicitTargetIds = selectedTargetIds): SendTargetSelection {
+    return getSendTargets({ room, rawText, explicitTargetIds, connections });
   }
-
   async function streamHermesReply({
     room,
     member,
@@ -1997,7 +1877,7 @@ export default function App() {
       return;
     }
 
-    let sendSelection = getSendTargets(effectiveRoom, rawText, explicitTargetIds);
+    let sendSelection = resolveSendTargets(effectiveRoom, rawText, explicitTargetIds);
     if (goalControl?.type === 'continue' && effectiveRoom.activeGoal) {
       const leadMember = getActiveGoalLeadMember(effectiveRoom);
       if (leadMember) {
@@ -3585,40 +3465,6 @@ ${content}`)]);
     return connectionById.get(connectionId)?.avatarUri;
   }
 
-  function makeGoalSession(roomId: string, goal: string, leadMember: RoomMember, now: string, sourceMessageId?: string): GoalSession {
-    return {
-      id: makeId('goal'),
-      roomId,
-      goal: goal || '未命名目标',
-      leadConnectionId: leadMember.connectionId,
-      leadAlias: leadMember.alias,
-      round: 1,
-      status: 'running',
-      planItems: [],
-      lastMessageId: sourceMessageId,
-      createdAt: now,
-      updatedAt: now,
-    };
-  }
-
-  function getGoalControlCommand(room: Room, rawText: string): { type: 'continue' | 'finish' } | null {
-    const activeGoal = room.activeGoal;
-    if (!activeGoal || activeGoal.status !== 'awaiting_user') return null;
-    const normalized = rawText.trim().toLowerCase();
-    if (!normalized) return null;
-    if (['继续', '繼續', 'continue', '/goal-continue'].includes(normalized)) return { type: 'continue' };
-    if (['结束', '完成', '結束', 'finish', 'end', '/goal-finish', '/goal-end'].includes(normalized)) return { type: 'finish' };
-    return null;
-  }
-
-  function getActiveGoalLeadMember(room: Room): RoomMember | undefined {
-    const activeGoal = room.activeGoal;
-    if (!activeGoal) return undefined;
-    return room.members.find((member) => member.enabled && member.connectionId === activeGoal.leadConnectionId)
-      ?? room.members.find((member) => member.enabled && member.alias === activeGoal.leadAlias)
-      ?? room.members.find((member) => member.enabled);
-  }
-
   function updateActiveGoal(roomId: string, updater: (goal: GoalSession) => GoalSession) {
     setRooms((current) => current.map((room) => {
       if (room.id !== roomId || !room.activeGoal) return room;
@@ -3647,21 +3493,6 @@ ${content}`)]);
     });
   }
 
-  function getGoalStatusFromSignal(signal: GoalStatusSignal | null): GoalSession['status'] {
-    if (signal === 'done' || signal === 'blocked') return 'awaiting_user';
-    if (signal === 'continue') return 'running';
-    return 'reviewing';
-  }
-
-  function mergeGoalPlanItems(current: GoalSession['planItems'], incoming: GoalSession['planItems']): GoalSession['planItems'] {
-    const byId = new Map(current.map((item) => [item.id, item]));
-    for (const item of incoming) {
-      const existing = byId.get(item.id);
-      byId.set(item.id, existing ? { ...existing, ...item } : item);
-    }
-    return Array.from(byId.values());
-  }
-
   function finishActiveGoal(room: Room, decision: 'finish') {
     const activeGoal = room.activeGoal;
     if (!activeGoal) return;
@@ -3687,49 +3518,6 @@ ${content}`)]);
       title: '目标记忆草案待确认',
       body: completedGoal.goal,
     });
-  }
-
-  function buildGoalMemoryCapsule(room: Room, goal: GoalSession, now: string): RoomMemoryCapsule {
-    const previous = room.memoryCapsule;
-    const doneItems = goal.planItems.filter((item) => item.status === 'done').map((item) => item.title);
-    const remainingItems = goal.planItems.filter((item) => item.status !== 'done').map((item) => `${item.title}${item.ownerAlias ? `（${item.ownerAlias}）` : ''}`);
-    return {
-      id: previous?.id ?? makeId('memory'),
-      roomId: room.id,
-      goal: goal.goal,
-      decisions: uniqueStrings([
-        ...(previous?.decisions ?? []),
-        `${goal.status === 'blocked' ? '目标暂停/受阻' : '目标完成'}：${goal.goal}`,
-        ...doneItems.map((item) => `完成：${item}`),
-      ]).slice(-12),
-      todos: uniqueStrings([
-        ...remainingItems,
-        ...(previous?.todos ?? []),
-      ]).slice(0, 12),
-      preferences: previous?.preferences ?? [],
-      openQuestions: uniqueStrings([
-        ...(goal.status === 'blocked' ? ['目标受阻，需要用户确认下一步。'] : []),
-        ...(previous?.openQuestions ?? []),
-      ]).slice(0, 12),
-      handoffNotes: goal.lastReview || previous?.handoffNotes,
-      source: 'agent-generated',
-      authorName: goal.leadAlias,
-      version: (previous?.version ?? 0) + 1,
-      createdAt: previous?.createdAt ?? now,
-      updatedAt: now,
-    };
-  }
-
-  function uniqueStrings(values: string[]): string[] {
-    const seen = new Set<string>();
-    const result: string[] = [];
-    for (const value of values) {
-      const normalized = value.trim();
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      result.push(normalized);
-    }
-    return result;
   }
 
   function beginEditLastUserMessage() {
@@ -4296,40 +4084,17 @@ ${content}`)]);
       <ExpoStatusBar style={isDarkMode ? 'light' : 'dark'} />
       {renderRoomReplyNotification()}
       {!mobileFocusedChat ? (
-      <View style={[styles.header, isDarkMode && styles.headerDark]}>
-        <View style={styles.brandBlock}>
-          <Text style={[styles.title, isDarkMode && styles.titleDark]}>Laphiny</Text>
-          <Text style={[styles.subtitle, isDarkMode && styles.subtitleDark]}>多 Hermes 协作聊天</Text>
-        </View>
-        <View style={styles.headerStats}>
-          <View style={styles.statPill}>
-            <Ionicons name="chatbubbles-outline" size={14} color="#1f2937" />
-            <Text style={styles.statText}>{rooms.length} 房间</Text>
-          </View>
-          <View style={[styles.statPill, styles.statPillAccent]}>
-            <Ionicons name="radio-outline" size={14} color="#065f46" />
-            <Text style={[styles.statText, styles.statTextAccent]}>{enabledConnections.length} 可用</Text>
-          </View>
-          {totalUnread > 0 ? (
-            <View style={styles.unreadPill}>
-              <Ionicons name="notifications" size={14} color="#991b1b" />
-              <Text style={styles.unreadPillText}>{totalUnread} 未读</Text>
-            </View>
-          ) : null}
-        </View>
-      </View>
+        <AppShellHeader
+          activeTab={tab}
+          roomsCount={rooms.length}
+          enabledConnectionsCount={enabledConnections.length}
+          totalUnread={totalUnread}
+          isDarkMode={isDarkMode}
+          styles={styles}
+          TextComponent={Text}
+          onChangeTab={setTab}
+        />
       ) : null}
-
-      {!mobileFocusedChat ? (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
-        <TabButton icon="chatbubble-ellipses-outline" label="聊天" active={tab === 'chat'} onPress={() => setTab('chat')} />
-        <TabButton icon="planet-outline" label="灵庭" active={tab === 'square'} onPress={() => setTab('square')} />
-        <TabButton icon="albums-outline" label="房间" active={tab === 'rooms'} onPress={() => setTab('rooms')} />
-        <TabButton icon="git-network-outline" label="连接" active={tab === 'connections'} onPress={() => setTab('connections')} />
-        <TabButton icon="settings-outline" label="设置" active={tab === 'settings'} onPress={() => setTab('settings')} />
-      </ScrollView>
-      ) : null}
-
       {!mobileFocusedChat ? renderRuntimeBanner() : null}
       {renderAttachmentPreviewModal()}
 
