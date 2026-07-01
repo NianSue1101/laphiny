@@ -33,14 +33,18 @@ import { AppText as Text, AppTextInput as TextInput, setAppTextFontFamily } from
 import { AttachmentPreviewModal } from './src/components/AttachmentPreviewModal';
 import { ChatSidebar } from './src/components/ChatSidebar';
 import { CollaborationDrawer } from './src/components/CollaborationDrawer';
+import {
+  ChatComposer,
+  ChatMessagesList,
+  ChatRoomHeader,
+  FocusedChatHeader,
+  MessageBubble,
+  MobileRoomDetailsDrawer,
+} from './src/components/chat';
 import { ConnectionsTab } from './src/components/connections';
 import { ComposerModeBar, SlashCommandPanel } from './src/components/ChatCommandPanels';
 import {
-  AttachmentPreview,
-  AgentAvatar,
-  AgentBadge,
   EmptyState,
-  IconButton,
   MiniButton,
   PrimaryButton,
   RoomHint,
@@ -81,11 +85,9 @@ import {
   findPreviousUserMessageIndex,
   formatBytes,
   formatDateTime,
-  formatTime,
   getDelegationTaskStatusLabel,
   getErrorMessage,
   getSquareEventIcon,
-  getStatusLabel,
   getWebBasePath,
   isAbortError,
   isSecureWebContext,
@@ -4486,115 +4488,130 @@ ${content}`)]);
   }
 
   function renderMessageBubble(message: ChatMessage) {
-    const renderable = getRenderableMessageArtifacts(message);
-    const displayContent = message.authorId === 'user'
-      ? renderable.content
-      : normalizeHermesReplyText(renderable.content);
-
     return (
-      <View
-        style={[
-          styles.messageBubble,
-          isDarkMode && styles.messageBubbleDark,
-          getMessageBubbleStyle(message),
-          isWideLayout && styles.messageBubbleWide,
-        ]}
-      >
-        {message.delegatedFrom ? (
-          <View style={styles.delegationBadge}>
-            <Ionicons name="git-branch-outline" size={12} color="#6b7280" />
-            <Text style={styles.delegationText}>→ {message.delegatedFrom} 委托</Text>
-          </View>
-        ) : null}
-        <View style={styles.messageMeta}>
-          <View style={styles.authorBlock}>
-            {message.authorId !== 'user' && message.authorId !== 'system' ? <AgentAvatar alias={message.authorName} size={22} imageUri={getConnectionAvatarUri(message.authorId)} /> : null}
-            <Text style={styles.author}>{message.authorName}</Text>
-            {message.authorId !== 'user' && message.authorId !== 'system' ? <Text style={styles.messageRoleBadge}>{getMessageRoleBadge(message)}</Text> : null}
-          </View>
-          <Text style={[styles.status, message.status === 'error' && styles.statusError]}>
-            {getStatusLabel(message.status)} · {formatTime(message.createdAt)}
-            {message.error ? ` · ${message.error}` : ''}
-          </Text>
-        </View>
-        <MarkdownText content={displayContent} fontFamily={selectedFontFamily} />
-        {renderable.attachments.length ? (
-          <View style={styles.attachments}>
-            {renderable.attachments.map((attachment) => (
-              <AttachmentPreview
-                key={attachment.id}
-                attachment={attachment}
-                actionIcon="eye-outline"
-                onPress={() => setPreviewAttachment(attachment)}
-              />
-            ))}
-          </View>
-        ) : null}
-        {message.permissionRequest ? renderAgentPermissionPanel(message) : null}
-        {message.authorId !== 'user' && message.authorId !== 'system' ? (
-          <View style={styles.messageActions}>
-            <MiniButton icon="copy-outline" label="复制" onPress={() => copyAgentReply(message)} />
-            {message.status === 'running' ? (
-              <MiniButton icon="stop-circle-outline" label={stoppingStreamIds[message.id] ? '停止中' : '停止'} onPress={() => stopMessage(message.id)} />
-            ) : (
-              <MiniButton icon="refresh-outline" label="重试" onPress={() => retryMessage(message)} />
-            )}
-          </View>
-        ) : null}
-        {message.authorId === 'user' && message.id === lastEditableUserMessage?.id && !sending ? (
-          <View style={styles.messageActions}>
-            <MiniButton icon="create-outline" label="编辑并回滚" onPress={beginEditLastUserMessage} />
-          </View>
-        ) : null}
-      </View>
+      <MessageBubble
+        message={message}
+        renderable={getRenderableMessageArtifacts(message)}
+        isDarkMode={isDarkMode}
+        isWideLayout={isWideLayout}
+        selectedFontFamily={selectedFontFamily}
+        isLastEditableUserMessage={message.id === lastEditableUserMessage?.id}
+        sending={sending}
+        stopping={Boolean(stoppingStreamIds[message.id])}
+        styles={styles}
+        TextComponent={Text}
+        getConnectionAvatarUri={getConnectionAvatarUri}
+        getMessageBubbleStyle={getMessageBubbleStyle}
+        getMessageRoleBadge={getMessageRoleBadge}
+        onPreviewAttachment={setPreviewAttachment}
+        onResolvePermissionRequest={resolveAgentPermissionRequest}
+        onCopyAgentReply={copyAgentReply}
+        onStopMessage={stopMessage}
+        onRetryMessage={retryMessage}
+        onEditLastUserMessage={beginEditLastUserMessage}
+      />
     );
   }
 
-  function renderAgentPermissionPanel(message: ChatMessage) {
-    const request = message.permissionRequest;
-    if (!request) return null;
-    const pending = request.status === 'pending';
-    const statusText = request.status === 'pending'
-      ? '等待选择'
-      : request.status === 'denied'
-        ? '已拒绝'
-        : request.status === 'always'
-          ? '已设为总是同意'
-          : '已同意';
-
+  function renderChatComposer() {
     return (
-      <View style={styles.permissionPanel}>
-        <View style={styles.permissionHeader}>
-          <View style={styles.permissionTitleRow}>
-            <Ionicons name="shield-checkmark-outline" size={16} color="#92400e" />
-            <Text style={styles.permissionTitle}>{request.title}</Text>
-          </View>
-          <Text style={[styles.permissionStatus, !pending && styles.permissionStatusDone]}>{statusText}</Text>
-        </View>
-        <Text style={styles.permissionBody}>{request.body}</Text>
-        {request.reason ? <Text style={styles.permissionReason}>{request.reason}</Text> : null}
-        {pending ? (
-          <View style={styles.permissionActions}>
-            <TouchableOpacity style={[styles.permissionButton, styles.permissionButtonPrimary]} onPress={() => resolveAgentPermissionRequest(message, 'allow')}>
-              <Ionicons name="checkmark-outline" size={15} color="#ffffff" />
-              <Text style={[styles.permissionButtonText, styles.permissionButtonTextPrimary]}>同意</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.permissionButton} onPress={() => resolveAgentPermissionRequest(message, 'deny')}>
-              <Ionicons name="close-outline" size={15} color="#374151" />
-              <Text style={styles.permissionButtonText}>拒绝</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.permissionButton} onPress={() => resolveAgentPermissionRequest(message, 'always')}>
-              <Ionicons name="infinite-outline" size={15} color="#374151" />
-              <Text style={styles.permissionButtonText}>总是同意</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-      </View>
+      <ChatComposer
+        room={selectedRoom}
+        draft={draft}
+        pendingAttachments={pendingAttachments}
+        selectedTargetIds={selectedTargetIds}
+        selectedTargetSet={selectedTargetSet}
+        sending={sending}
+        isDarkMode={isDarkMode}
+        androidKeyboardLift={androidKeyboardLift}
+        modeBar={renderComposerModeBar()}
+        slashCommandPanel={renderSlashCommandPanel()}
+        styles={styles}
+        TextComponent={Text}
+        TextInputComponent={TextInput}
+        onSelectAllTargets={selectAllTargets}
+        onToggleTargetSelection={toggleTargetSelection}
+        onPreviewAttachment={setPreviewAttachment}
+        onRemoveAttachment={(attachmentId) => setPendingAttachments((current) => current.filter((item) => item.id !== attachmentId))}
+        onAttachImages={attachImages}
+        onAttachDocuments={attachDocuments}
+        onChangeDraft={setDraft}
+        onFocusInput={() => {
+          pendingMessageScrollToEndRef.current = true;
+          setTimeout(() => messageScrollRef.current?.scrollToEnd({ animated: true }), 180);
+        }}
+        onSendMessage={sendMessage}
+      />
+    );
+  }
+
+  function renderChatRoomHeader(focused: boolean) {
+    if (!selectedRoom || focused) return null;
+    return (
+      <ChatRoomHeader
+        room={selectedRoom}
+        roomDetailsOpen={!roomDetailsCollapsed}
+        quickCommandsOpen={quickCommandsOpen}
+        roomToolsOpen={roomToolsOpen}
+        collaborationDrawerOpen={collaborationDrawerOpen}
+        isWideLayout={isWideLayout}
+        roomDetailsMaxHeight={roomDetailsMaxHeight}
+        selectedTargetIds={selectedTargetIds}
+        selectedTargetSet={selectedTargetSet}
+        contextLimitFallback={DEFAULT_CONTEXT_LIMIT}
+        detailsLeadContent={(
+          <>
+            {renderRoomStatusBar()}
+            {renderActiveGoalPanel()}
+            {renderRoleplaySceneCard()}
+          </>
+        )}
+        detailsTailContent={(
+          <>
+            {quickCommandsOpen ? renderQuickCommands() : null}
+            {roomToolsOpen ? renderRoomTools() : null}
+            {renderMessageSearchPanel()}
+            {!isWideLayout ? renderRoomCollaborationDashboard() : null}
+          </>
+        )}
+        styles={styles}
+        TextComponent={Text}
+        getConnectionAvatarUri={getConnectionAvatarUri}
+        getMemberRuntimeStatus={getMemberRuntimeStatus}
+        onSelectAllTargets={selectAllTargets}
+        onToggleTargetSelection={toggleTargetSelection}
+        onInsertMention={insertMention}
+        onToggleQuickCommands={() => {
+          setRoomDetailsCollapsed(false);
+          setQuickCommandsOpen((open) => !open);
+        }}
+        onToggleRoomTools={() => {
+          setRoomDetailsCollapsed(false);
+          setRoomToolsOpen((open) => !open);
+        }}
+        onToggleCollaborationDrawer={() => setCollaborationDrawerOpen((open) => !open)}
+        onToggleRoomDetails={() => setRoomDetailsCollapsed((collapsed) => !collapsed)}
+      />
+    );
+  }
+
+  function renderChatMessagesList() {
+    return (
+      <ChatMessagesList
+        messageScrollRef={messageScrollRef}
+        room={selectedRoom}
+        messages={visibleSelectedMessages}
+        normalizedSearchQuery={normalizedSearchQuery}
+        styles={styles}
+        renderMessageBubble={renderMessageBubble}
+        onContentSizeChange={handleMessagesContentSizeChange}
+        onScroll={handleMessagesScroll}
+        onOpenRoomsTab={() => setTab('rooms')}
+      />
     );
   }
 
   function renderChat() {
-    const roomDetailsOpen = !roomDetailsCollapsed;
     const focused = !isWideLayout && selectedRoom && mobileFocusedRoomId === selectedRoom.id;
     if (!isWideLayout && !focused && roomDetailsCollapsed && !roomToolsOpen && !quickCommandsOpen && !normalizedSearchQuery) {
       return renderMobileRoomPicker();
@@ -4615,199 +4632,11 @@ ${content}`)]);
         {focused ? renderFocusedChatHeader() : null}
         {focused ? renderMobileRoomDetailsDrawer() : null}
 
-        {selectedRoom && !focused ? (
-          <View style={styles.chatHeader}>
-            <View style={styles.roomTitleBlock}>
-              <Text style={styles.roomTitle}>{selectedRoom.name}</Text>
-              <Text style={styles.roomSummary}>
-                {selectedRoom.kind === 'group' ? '群聊' : '单聊'} · {selectedRoom.members.length} 位 Hermes · 上下文 {selectedRoom.contextLimit ?? DEFAULT_CONTEXT_LIMIT} 条
-              </Text>
-            </View>
-            <View style={styles.roomHeaderActions}>
-              <MiniButton
-                icon={quickCommandsOpen ? 'flash' : 'flash-outline'}
-                label="模式"
-                onPress={() => {
-                  setRoomDetailsCollapsed(false);
-                  setQuickCommandsOpen((open) => !open);
-                }}
-              />
-              <MiniButton
-                icon={roomToolsOpen ? 'options' : 'options-outline'}
-                label="工具"
-                onPress={() => {
-                  setRoomDetailsCollapsed(false);
-                  setRoomToolsOpen((open) => !open);
-                }}
-              />
-              {isWideLayout && selectedRoom.kind === 'group' ? (
-                <MiniButton
-                  icon={collaborationDrawerOpen ? 'albums' : 'albums-outline'}
-                  label={collaborationDrawerOpen ? '收起侧栏' : '协作侧栏'}
-                  onPress={() => setCollaborationDrawerOpen((open) => !open)}
-                />
-              ) : null}
-              <MiniButton
-                icon={roomDetailsOpen ? 'chevron-up-outline' : 'chevron-down-outline'}
-                label={roomDetailsOpen ? '收起详情' : '展开详情'}
-                onPress={() => setRoomDetailsCollapsed((collapsed) => !collapsed)}
-              />
-            </View>
-            {roomDetailsOpen ? (
-              <ScrollView
-                style={[styles.roomDetailsScroll, { maxHeight: roomDetailsMaxHeight }]}
-                contentContainerStyle={styles.roomDetailsContent}
-                nestedScrollEnabled
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator
-              >
-                {renderRoomStatusBar()}
-                {renderActiveGoalPanel()}
-                {renderRoleplaySceneCard()}
-                <View style={styles.memberChips}>
-                  {selectedRoom.kind === 'group' ? (
-                    <TouchableOpacity
-                      style={[
-                        styles.memberChip,
-                        selectedTargetIds.length === selectedRoom.members.filter((member) => member.enabled).length && styles.memberChipSelected,
-                      ]}
-                      onPress={selectAllTargets}
-                    >
-                      <Text style={styles.memberChipText}>@all</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  {selectedRoom.members.map((member) => (
-                    <TouchableOpacity
-                      key={member.connectionId}
-                      style={[styles.memberChip, selectedTargetSet.has(member.connectionId) && styles.memberChipSelected, !member.enabled && styles.memberChipDisabled]}
-                      onPress={() => selectedRoom.kind === 'group' ? toggleTargetSelection(member.connectionId) : insertMention(`@${member.alias}`)}
-                      disabled={selectedRoom.kind === 'group' && !member.enabled}
-                    >
-                      <AgentBadge alias={member.alias} active={selectedTargetSet.has(member.connectionId)} status={getMemberRuntimeStatus(member)} imageUri={getConnectionAvatarUri(member.connectionId)} />
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                {quickCommandsOpen ? renderQuickCommands() : null}
-                {roomToolsOpen ? renderRoomTools() : null}
-                {renderMessageSearchPanel()}
-                {!isWideLayout ? renderRoomCollaborationDashboard() : null}
-              </ScrollView>
-            ) : null}
-          </View>
-        ) : null}
+        {renderChatRoomHeader(Boolean(focused))}
 
-        <FlatList
-          ref={messageScrollRef}
-          data={selectedRoom ? visibleSelectedMessages : []}
-          keyExtractor={(message) => message.id}
-          style={styles.messages}
-          contentContainerStyle={styles.messagesContent}
-          onContentSizeChange={handleMessagesContentSizeChange}
-          onScroll={handleMessagesScroll}
-          scrollEventThrottle={80}
-          initialNumToRender={18}
-          maxToRenderPerBatch={10}
-          updateCellsBatchingPeriod={50}
-          windowSize={7}
-          ListEmptyComponent={(
-            !selectedRoom ? (
-              <EmptyState
-                icon="albums-outline"
-                title="还没有可聊天的房间"
-                body="先在房间页创建单聊或群聊，再回到这里开始对话。"
-                actionLabel="去创建"
-                onAction={() => setTab('rooms')}
-              />
-            ) : selectedRoom && normalizedSearchQuery ? (
-              <EmptyState
-                icon="search-outline"
-                title="当前房间没有匹配消息"
-                body="搜索会跨全部房间进行；可以点击上方结果跳转到其他房间。"
-              />
-            ) : (
-              <EmptyState
-                icon="sparkles-outline"
-                title="新的对话已经就绪"
-                body={selectedRoom.kind === 'group' ? '点成员标签选择回复对象；也可以输入 @成员名、@all/@all-seq、/council 等协作仪式，或在 RP 模式下输入 /rp /scene /ooc。' : '输入消息后发送，Laphiny 会保留最近上下文。'}
-              />
-            )
-          )}
-          renderItem={({ item }) => renderMessageBubble(item)}
-        />
+        {renderChatMessagesList()}
 
-        <View style={[styles.composer, isDarkMode && styles.composerDark, androidKeyboardLift > 0 && { marginBottom: androidKeyboardLift }]}>
-          {selectedRoom?.kind === 'group' ? (
-            <View style={styles.mentionBar}>
-              <Text style={styles.mentionHint}>本次回复</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mentionList}>
-                <TouchableOpacity
-                  style={[
-                    styles.mentionChip,
-                    selectedTargetIds.length === selectedRoom.members.filter((member) => member.enabled).length && styles.mentionChipSelected,
-                  ]}
-                  onPress={selectAllTargets}
-                >
-                  <Text style={styles.mentionChipText}>@all</Text>
-                </TouchableOpacity>
-                {selectedRoom.members.map((member) => (
-                  <TouchableOpacity
-                    key={member.connectionId}
-                    style={[styles.mentionChip, selectedTargetSet.has(member.connectionId) && styles.mentionChipSelected, !member.enabled && styles.mentionChipDisabled]}
-                    onPress={() => toggleTargetSelection(member.connectionId)}
-                    disabled={!member.enabled}
-                  >
-                    <Text style={[styles.mentionChipText, selectedTargetSet.has(member.connectionId) && styles.mentionChipTextSelected]}>
-                      @{member.alias}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          ) : null}
-
-          {renderComposerModeBar()}
-          {renderSlashCommandPanel()}
-
-          {pendingAttachments.length ? (
-            <View style={styles.pendingAttachments}>
-              {pendingAttachments.map((attachment) => (
-                <View key={attachment.id} style={styles.pendingAttachmentRow}>
-                  <View style={styles.pendingAttachmentPreviewCell}>
-                    <AttachmentPreview
-                      attachment={attachment}
-                      actionIcon="eye-outline"
-                      onPress={() => setPreviewAttachment(attachment)}
-                    />
-                  </View>
-                  <IconButton
-                    icon="close-outline"
-                    label={`移除 ${attachment.name}`}
-                    onPress={() => setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id))}
-                  />
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          <View style={styles.composerInputRow}>
-            <IconButton icon="image-outline" label="添加图片" onPress={attachImages} disabled={!selectedRoom || sending} />
-            <IconButton icon="document-attach-outline" label="添加文件" onPress={attachDocuments} disabled={!selectedRoom || sending} />
-            <TextInput
-              style={[styles.composerInput, isDarkMode && styles.inputDark]}
-              placeholder={selectedRoom?.kind === 'group' ? (selectedRoom.roleplay?.enabled ? '输入角色行动，或 /rp /scene /ooc' : '@成员名、@all 或 /council 后输入消息') : '输入消息'}
-              placeholderTextColor="#9ca3af"
-              multiline
-              value={draft}
-              onChangeText={setDraft}
-              onFocus={() => {
-                pendingMessageScrollToEndRef.current = true;
-                setTimeout(() => messageScrollRef.current?.scrollToEnd({ animated: true }), 180);
-              }}
-              textAlignVertical="top"
-            />
-            <IconButton icon={sending ? 'hourglass-outline' : 'send'} label="发送" onPress={sendMessage} disabled={sending || !selectedRoom} variant="primary" />
-          </View>
-        </View>
+        {renderChatComposer()}
         </KeyboardAvoidingView>
         {isWideLayout && collaborationDrawerOpen ? renderCollaborationDrawer() : null}
       </View>
@@ -4817,100 +4646,44 @@ ${content}`)]);
   function renderFocusedChatHeader() {
     if (!selectedRoom) return null;
     return (
-      <View style={[styles.focusedChatHeader, isDarkMode && styles.focusedChatHeaderDark]}>
-        <TouchableOpacity style={styles.focusedBackButton} onPress={leaveFocusedChat} accessibilityRole="button">
-          <Ionicons name="chevron-back" size={22} color={isDarkMode ? '#e5e7eb' : '#111827'} />
-          <Text style={[styles.focusedBackText, isDarkMode && styles.titleDark]}>返回</Text>
-        </TouchableOpacity>
-        <View style={styles.focusedChatTitleBlock}>
-          <Text style={[styles.focusedChatTitle, isDarkMode && styles.titleDark]} numberOfLines={1}>{selectedRoom.name}</Text>
-          <Text style={[styles.focusedChatMeta, isDarkMode && styles.subtitleDark]} numberOfLines={1}>
-            {selectedRoom.kind === 'group' ? '群聊' : '单聊'} · {selectedRoom.members.filter((member) => member.enabled).length}/{selectedRoom.members.length}
-          </Text>
-        </View>
-        <TouchableOpacity
-          style={[styles.focusedDetailsButton, mobileRoomDetailsOpen && styles.focusedDetailsButtonActive]}
-          onPress={() => setMobileRoomDetailsOpen((open) => !open)}
-          accessibilityRole="button"
-          accessibilityLabel={mobileRoomDetailsOpen ? '关闭房间详情' : '打开房间详情'}
-        >
-          <Ionicons name={mobileRoomDetailsOpen ? 'close-outline' : 'albums-outline'} size={18} color={mobileRoomDetailsOpen ? '#ffffff' : '#2563eb'} />
-        </TouchableOpacity>
-      </View>
+      <FocusedChatHeader
+        room={selectedRoom}
+        isDarkMode={isDarkMode}
+        detailsOpen={mobileRoomDetailsOpen}
+        styles={styles}
+        TextComponent={Text}
+        onBack={leaveFocusedChat}
+        onToggleDetails={() => setMobileRoomDetailsOpen((open) => !open)}
+      />
     );
   }
 
   function renderMobileRoomDetailsDrawer() {
     if (!selectedRoom || !mobileRoomDetailsOpen) return null;
     return (
-      <View style={styles.mobileDetailsLayer} pointerEvents="box-none">
-        <TouchableOpacity
-          style={styles.mobileDetailsBackdrop}
-          activeOpacity={1}
-          onPress={() => setMobileRoomDetailsOpen(false)}
-          accessibilityRole="button"
-          accessibilityLabel="关闭房间详情"
-        />
-        <View style={[styles.mobileDetailsCard, isDarkMode && styles.mobileDetailsCardDark]}>
-          <View style={styles.mobileDetailsHeader}>
-            <View style={styles.rowMain}>
-              <Text style={[styles.cardTitle, isDarkMode && styles.titleDark]} numberOfLines={1}>房间详情</Text>
-              <Text style={[styles.help, isDarkMode && styles.subtitleDark]} numberOfLines={1}>左滑打开 · 右滑或点击空白关闭</Text>
-            </View>
-            <TouchableOpacity style={styles.sidebarIconButton} onPress={() => setMobileRoomDetailsOpen(false)}>
-              <Ionicons name="close" size={18} color="#4b5563" />
-            </TouchableOpacity>
-          </View>
-          <ScrollView
-            style={styles.mobileDetailsScroll}
-            contentContainerStyle={styles.mobileDetailsContent}
-            nestedScrollEnabled
-            showsVerticalScrollIndicator
-          >
+      <MobileRoomDetailsDrawer
+        room={selectedRoom}
+        isDarkMode={isDarkMode}
+        isWideLayout={isWideLayout}
+        selectedFontFamily={selectedFontFamily}
+        memoryGenerating={memoryGenerating}
+        leadContent={(
+          <>
             {renderRoomStatusBar()}
             {renderActiveGoalPanel()}
             {renderRoleplaySceneCard()}
-
-            {selectedRoom.lastSummary ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>最近共识 · {selectedRoom.lastSummary.authorName}</Text>
-                <MarkdownText content={selectedRoom.lastSummary.content} fontFamily={selectedFontFamily} />
-              </View>
-            ) : null}
-
-            {selectedRoom.kind === 'group' ? (
-              <View style={styles.roomEditPanel}>
-                <Text style={styles.panelLabel}>房间记忆胶囊</Text>
-                {selectedRoom.pendingMemoryCapsule ? (
-                  <View style={styles.summaryBox}>
-                    <Text style={styles.summaryTitle}>待确认记忆草案 · v{selectedRoom.pendingMemoryCapsule.version}</Text>
-                    <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.pendingMemoryCapsule)}</Text>
-                    <View style={styles.toolActions}>
-                      <MiniButton icon="checkmark-circle-outline" label="确认沉淀" onPress={confirmPendingRoomMemoryCapsule} />
-                      <MiniButton icon="close-circle-outline" label="丢弃草案" onPress={discardPendingRoomMemoryCapsule} />
-                    </View>
-                  </View>
-                ) : null}
-                {selectedRoom.memoryCapsule ? (
-                  <View style={styles.summaryBox}>
-                    <Text style={styles.summaryTitle}>v{selectedRoom.memoryCapsule.version} · {selectedRoom.memoryCapsule.authorName ?? 'Laphiny'} · {formatDateTime(selectedRoom.memoryCapsule.updatedAt)}</Text>
-                    <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.help}>还没有房间记忆。生成并确认后，会沉淀到成长层并进入后续群聊上下文。</Text>
-                )}
-                <View style={styles.toolActions}>
-                  <MiniButton icon="sparkles-outline" label={memoryGenerating ? '生成中...' : selectedRoom.memoryCapsule ? '更新记忆' : '生成记忆'} onPress={generateRoomMemoryCapsule} />
-                </View>
-              </View>
-            ) : null}
-
-            {renderRoomGrowthPanel()}
-            {renderTaskBoardPanel()}
-            {!isWideLayout ? renderRoomCollaborationDashboard() : null}
-          </ScrollView>
-        </View>
-      </View>
+          </>
+        )}
+        roomGrowthPanel={renderRoomGrowthPanel()}
+        taskBoardPanel={renderTaskBoardPanel()}
+        collaborationDashboard={renderRoomCollaborationDashboard()}
+        styles={styles}
+        TextComponent={Text}
+        onClose={() => setMobileRoomDetailsOpen(false)}
+        onConfirmPendingMemory={confirmPendingRoomMemoryCapsule}
+        onDiscardPendingMemory={discardPendingRoomMemoryCapsule}
+        onGenerateMemory={generateRoomMemoryCapsule}
+      />
     );
   }
 
