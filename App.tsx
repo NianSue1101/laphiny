@@ -56,7 +56,7 @@ import { RoomGrowthPanel } from './src/components/RoomGrowthPanel';
 import { RoomManagementPanel } from './src/components/RoomManagementPanel';
 import { RoomRail } from './src/components/RoomRail';
 import { RoomStatusBar } from './src/components/RoomStatusBar';
-import { RoomsTab } from './src/components/rooms';
+import { RoomsTab, RoomToolsPanel } from './src/components/rooms';
 import { RoleplaySceneCard } from './src/components/RoleplaySceneCard';
 import { RuntimeBanner } from './src/components/RuntimeBanner';
 import { QuickCommandsPanel } from './src/components/QuickCommandsPanel';
@@ -150,11 +150,11 @@ import { beginBackgroundAgentTask, shouldStreamHermesReplies } from './src/lib/b
 import { buildGoalModePrompt, buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { resolveAssistantDelegations, resolveMentionTargets } from './src/lib/mentions';
 import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText, stripRoomStatePatchBlocks, summarizeRoomGrowth } from './src/lib/room_growth';
-import { buildRoomMemoryMessages, formatRoomMemoryForPrompt, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
+import { buildRoomMemoryMessages, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
 import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
 import { buildRoomReplyNotification, type RoomReplyNotification } from './src/lib/room_reply_notifications';
 import { buildSoulDailyDigest } from './src/lib/square_insights';
-import { ROOM_MODES, buildOnboardingSteps, buildRoleplayArchiveMessages, buildSoulRelations, buildTaskBoard, getRoomModeDefinition, makeDefaultRoleplayArchive, parseRoleplayArchiveResponse, summarizeRoleplayArchive, type StarterRoomTemplate } from './src/lib/stage4_plus';
+import { buildOnboardingSteps, buildRoleplayArchiveMessages, buildSoulRelations, buildTaskBoard, getRoomModeDefinition, makeDefaultRoleplayArchive, parseRoleplayArchiveResponse, summarizeRoleplayArchive, type StarterRoomTemplate } from './src/lib/stage4_plus';
 import { getSlashCommandSuggestions, getUxCommandKindLabel, type UXCommandDefinition } from './src/lib/ux';
 import { LaphinySyncClient } from './src/lib/sync_client';
 import { buildSyncConflictReport, type SyncConflictReport } from './src/lib/sync_conflicts';
@@ -5151,210 +5151,47 @@ ${content}`)]);
 
   function renderRoomTools() {
     if (!selectedRoom) return null;
-    const messages = messagesByRoom[selectedRoom.id] ?? [];
-    const attachmentsCount = messages.reduce((total, message) => total + (message.attachments?.length ?? 0), 0);
-
     return (
-      <View style={styles.toolsPanel}>
-        <View style={styles.toolMetricRow}>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{messages.length}</Text>
-            <Text style={styles.toolMetricLabel}>消息</Text>
-          </View>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{attachmentsCount}</Text>
-            <Text style={styles.toolMetricLabel}>附件</Text>
-          </View>
-          <View style={styles.toolMetric}>
-            <Text style={styles.toolMetricValue}>{selectedRoom.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
-            <Text style={styles.toolMetricLabel}>上下文</Text>
-          </View>
-        </View>
-
-        <View style={styles.roomEditPanel}>
-          <Text style={styles.panelLabel}>聊天内工具</Text>
-          <Text style={styles.help}>聊天页只保留协作、记忆和导出等工具；房间名称、成员、模式、上下文等基础设置请在房间页统一管理，避免两套入口状态错乱。</Text>
-          <View style={styles.toolActions}>
-            <MiniButton icon="options-outline" label="打开房间管理" onPress={() => openRoomManagement(selectedRoom.id)} />
-          </View>
-        </View>
-
-        {selectedRoom.kind === 'group' ? (
-          <View style={styles.roomEditPanel}>
-            <Text style={styles.panelLabel}>Soul 协作策略</Text>
-            <View style={styles.toolActions}>
-              <MiniButton icon="hand-left-outline" label={selectedRoom.defaultCollaborationMode === 'manual' || !selectedRoom.defaultCollaborationMode ? '默认：手动' : '切手动'} onPress={() => setRoomDefaultCollaborationMode('manual')} />
-              <MiniButton icon="git-network-outline" label={selectedRoom.defaultCollaborationMode === 'parallel' ? '默认：并行' : '切并行'} onPress={() => setRoomDefaultCollaborationMode('parallel')} />
-              <MiniButton icon="git-branch-outline" label={selectedRoom.defaultCollaborationMode === 'sequential' ? '默认：接力' : '切接力'} onPress={() => setRoomDefaultCollaborationMode('sequential')} />
-              <MiniButton icon={selectedRoom.autoDelegationEnabled === false ? 'flash-off-outline' : 'flash-outline'} label={selectedRoom.autoDelegationEnabled === false ? '自动委托关' : '自动委托开'} onPress={toggleRoomAutoDelegation} />
-            </View>
-            <View style={styles.stepper}>
-              <MiniButton icon="remove-outline" label="深度 -1" onPress={() => updateRoomDelegationDepth(-1)} />
-              <Text style={styles.help}>最大委托深度：{selectedRoom.maxDelegationDepth ?? MAX_DELEGATION_DEPTH}</Text>
-              <MiniButton icon="add-outline" label="深度 +1" onPress={() => updateRoomDelegationDepth(1)} />
-            </View>
-            <Text style={styles.help}>默认模式会在群聊无 @ 时自动决定是否叫全员；手动模式保持“无 @ 不回复”。</Text>
-          </View>
-        ) : null}
-
-        {selectedRoom.kind === 'group' ? (
-          <View style={styles.roomEditPanel}>
-            <Text style={styles.panelLabel}>角色扮演 RP 模式</Text>
-            <Text style={styles.help}>桌游店式多人 RP：选择一位主 Agent 作为 GM/主持人负责推进剧情，其他 Agent 作为角色、NPC 或氛围补充依次入戏。</Text>
-            <View style={styles.toolActions}>
-              <MiniButton icon={selectedRoom.roleplay?.enabled ? 'game-controller' : 'game-controller-outline'} label={selectedRoom.roleplay?.enabled ? '关闭 RP' : '开启 RP'} onPress={toggleSelectedRoomRoleplay} />
-              <MiniButton icon={selectedRoom.roleplay?.includeAllAgents === false ? 'person-outline' : 'people-outline'} label={selectedRoom.roleplay?.includeAllAgents === false ? '仅 GM' : '全员入戏'} onPress={() => updateSelectedRoomRoleplay({ includeAllAgents: selectedRoom.roleplay?.includeAllAgents === false })} />
-            </View>
-            <Text style={styles.help}>状态：{summarizeRoleplayConfig(selectedRoom.roleplay)}</Text>
-            <Text style={styles.help}>GM：{selectedRoom.members.find((member) => member.connectionId === selectedRoom.roleplay?.gmConnectionId)?.alias ?? selectedRoom.members.find((member) => member.enabled)?.alias ?? '未选择'}</Text>
-            <View style={styles.toolActions}>
-              {selectedRoom.members.filter((member) => member.enabled).map((member) => (
-                <MiniButton key={member.connectionId} icon="sparkles-outline" label={`GM ${member.alias}`} onPress={() => updateSelectedRoomRoleplay({ gmConnectionId: member.connectionId })} />
-              ))}
-            </View>
-            <TextInput
-              style={styles.input}
-              value={selectedRoom.roleplay?.playerName ?? '玩家'}
-              onChangeText={(playerName) => updateSelectedRoomRoleplay({ playerName })}
-              placeholder="玩家称呼，例如：调查员 / 旅人 / 店员"
-            />
-            <TextInput
-              style={styles.input}
-              value={selectedRoom.roleplay?.genre ?? '奇幻冒险'}
-              onChangeText={(genre) => updateSelectedRoomRoleplay({ genre })}
-              placeholder="类型，例如：都市怪谈 / 奇幻冒险 / 科幻悬疑"
-            />
-            <TextInput
-              style={styles.input}
-              value={selectedRoom.roleplay?.tone ?? '沉浸、轻桌游、重角色互动'}
-              onChangeText={(tone) => updateSelectedRoomRoleplay({ tone })}
-              placeholder="基调，例如：温柔治愈 / 黑暗悬疑 / 轻松搞笑"
-            />
-            <TextInput
-              style={[styles.input, styles.jsonPasteInput]}
-              multiline
-              value={selectedRoom.roleplay?.premise ?? ''}
-              onChangeText={(premise) => updateSelectedRoomRoleplay({ premise })}
-              placeholder="世界观 / 剧情前提 / 开局设定"
-              textAlignVertical="top"
-            />
-            <TextInput
-              style={[styles.input, styles.jsonPasteInput]}
-              multiline
-              value={selectedRoom.roleplay?.currentScene ?? ''}
-              onChangeText={(currentScene) => updateSelectedRoomRoleplay({ currentScene })}
-              placeholder="当前场景，可用 /scene 指令或在这里手动维护"
-              textAlignVertical="top"
-            />
-            <Text style={styles.help}>输入 /rp 开始或继续故事；/scene 更新场景；/ooc 进行场外规则讨论。RP 开启后，普通输入也会自动进入“GM → 其他 Agent”的接力回合。</Text>
-          </View>
-        ) : null}
-
-        {renderRoleplayArchivePanel()}
-        {renderTaskBoardPanel()}
-        {renderRoomGrowthPanel()}
-
-        {selectedRoom.kind === 'group' ? (
-          <View style={styles.roomEditPanel}>
-            <Text style={styles.panelLabel}>群成员</Text>
-            {selectedRoom.members.map((member) => (
-              <View key={member.connectionId} style={styles.memberEditorRow}>
-                <TouchableOpacity
-                  style={[styles.syncToggle, member.enabled && styles.syncToggleOn]}
-                  onPress={() => updateSelectedRoomMember(member.connectionId, { enabled: !member.enabled })}
-                >
-                  <Text style={[styles.syncToggleText, member.enabled && styles.syncToggleTextOn]}>
-                    {member.enabled ? '启用' : '停用'}
-                  </Text>
-                </TouchableOpacity>
-                <TextInput
-                  style={[styles.input, styles.memberAliasInput]}
-                  value={member.alias}
-                  onChangeText={(alias) => updateSelectedRoomMember(member.connectionId, { alias })}
-                  placeholder="成员别名"
-                />
-                <MiniButton icon="remove-circle-outline" label="移除" onPress={() => removeMemberFromSelectedRoom(member)} />
-              </View>
-            ))}
-            {availableConnectionsForSelectedRoom.length ? (
-              <View style={styles.toolActions}>
-                {availableConnectionsForSelectedRoom.map((connection) => (
-                  <MiniButton key={connection.id} icon="add-circle-outline" label={`加入 ${connection.name}`} onPress={() => addMemberToSelectedRoom(connection)} />
-                ))}
-              </View>
-            ) : (
-              <Text style={styles.help}>没有可加入的新连接。</Text>
-            )}
-          </View>
-        ) : null}
-
-        {selectedRoom.kind === 'group' ? (
-          <View style={styles.roomEditPanel}>
-            <Text style={styles.panelLabel}>团队模板与总结</Text>
-            <View style={styles.inlineFormRow}>
-              <TextInput
-                style={[styles.input, styles.inlineInput]}
-                value={teamTemplateName}
-                onChangeText={setTeamTemplateName}
-                placeholder="模板名称"
-              />
-              <MiniButton icon="bookmark-outline" label="保存模板" onPress={saveSelectedRoomAsTeamTemplate} />
-            </View>
-            {selectedRoomTeamTemplates.length ? (
-              <View style={styles.toolActions}>
-                {selectedRoomTeamTemplates.slice(0, 4).map((template) => (
-                  <MiniButton key={template.id} icon="albums-outline" label={`应用 ${template.name}`} onPress={() => applyTeamTemplateToSelectedRoom(template)} />
-                ))}
-              </View>
-            ) : <Text style={styles.help}>还没有匹配当前房间成员的团队模板。</Text>}
-            <Text style={styles.help}>总结者：{selectedRoom.members.find((member) => member.connectionId === selectedRoom.summaryConnectionId)?.alias ?? '自动选择首个启用成员'}</Text>
-            <View style={styles.toolActions}>
-              {selectedRoom.members.filter((member) => member.enabled).map((member) => (
-                <MiniButton key={member.connectionId} icon="reader-outline" label={`总结者 ${member.alias}`} onPress={() => setRoomSummaryConnection(member.connectionId)} />
-              ))}
-              <MiniButton icon="sparkles-outline" label={summaryGenerating ? '总结中...' : '生成共识总结'} onPress={generateRoomSummary} />
-            </View>
-          </View>
-        ) : null}
-
-        {selectedRoom.kind === 'group' ? (
-          <View style={styles.roomEditPanel}>
-            <Text style={styles.panelLabel}>房间记忆胶囊</Text>
-            {selectedRoom.pendingMemoryCapsule ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>待确认记忆草案 · v{selectedRoom.pendingMemoryCapsule.version}</Text>
-                <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.pendingMemoryCapsule)}</Text>
-                <MarkdownText content={formatRoomMemoryForPrompt(selectedRoom.pendingMemoryCapsule)} fontFamily={selectedFontFamily} />
-                <View style={styles.toolActions}>
-                  <MiniButton icon="checkmark-circle-outline" label="确认沉淀" onPress={confirmPendingRoomMemoryCapsule} />
-                  <MiniButton icon="close-circle-outline" label="丢弃草案" onPress={discardPendingRoomMemoryCapsule} />
-                </View>
-              </View>
-            ) : null}
-            {selectedRoom.memoryCapsule ? (
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>v{selectedRoom.memoryCapsule.version} · {selectedRoom.memoryCapsule.authorName ?? 'Laphiny'} · {formatDateTime(selectedRoom.memoryCapsule.updatedAt)}</Text>
-                <Text style={styles.help}>{summarizeRoomMemory(selectedRoom.memoryCapsule)}</Text>
-                <MarkdownText content={formatRoomMemoryForPrompt(selectedRoom.memoryCapsule)} fontFamily={selectedFontFamily} />
-              </View>
-            ) : (
-              <Text style={styles.help}>还没有房间记忆。生成后会把目标、共识、待办、偏好和未解决问题注入后续群聊上下文。</Text>
-            )}
-            <View style={styles.toolActions}>
-              <MiniButton icon="sparkles-outline" label={memoryGenerating ? '生成中...' : selectedRoom.memoryCapsule ? '更新记忆' : '生成记忆'} onPress={generateRoomMemoryCapsule} />
-              <MiniButton icon="trash-outline" label="清空记忆胶囊" onPress={clearRoomMemoryCapsule} />
-            </View>
-          </View>
-        ) : null}
-
-        <View style={styles.toolActions}>
-          <MiniButton icon="download-outline" label="导出 JSON" onPress={() => exportSelectedRoom('json')} />
-          <MiniButton icon="document-text-outline" label="导出 MD" onPress={() => exportSelectedRoom('markdown')} />
-          <MiniButton icon="refresh-circle-outline" label="清空记忆" onPress={resetRoomSession} />
-          <MiniButton icon="trash-outline" label="清空记录" onPress={clearSelectedRoomMessages} />
-          <MiniButton icon="close-circle-outline" label="删除房间" onPress={deleteSelectedRoom} />
-        </View>
-      </View>
+      <RoomToolsPanel
+        room={selectedRoom}
+        messages={messagesByRoom[selectedRoom.id] ?? []}
+        contextLimitFallback={DEFAULT_CONTEXT_LIMIT}
+        maxDelegationDepthFallback={MAX_DELEGATION_DEPTH}
+        selectedFontFamily={selectedFontFamily}
+        teamTemplateName={teamTemplateName}
+        selectedRoomTeamTemplates={selectedRoomTeamTemplates}
+        availableConnectionsForRoom={availableConnectionsForSelectedRoom}
+        summaryGenerating={summaryGenerating}
+        memoryGenerating={memoryGenerating}
+        roleplayArchivePanel={renderRoleplayArchivePanel()}
+        taskBoardPanel={renderTaskBoardPanel()}
+        roomGrowthPanel={renderRoomGrowthPanel()}
+        styles={styles}
+        TextComponent={Text}
+        TextInputComponent={TextInput}
+        onOpenRoomManagement={openRoomManagement}
+        onSetDefaultCollaborationMode={setRoomDefaultCollaborationMode}
+        onToggleRoomAutoDelegation={toggleRoomAutoDelegation}
+        onUpdateRoomDelegationDepth={updateRoomDelegationDepth}
+        onToggleRoomRoleplay={toggleSelectedRoomRoleplay}
+        onUpdateRoomRoleplay={updateSelectedRoomRoleplay}
+        onUpdateRoomMember={updateSelectedRoomMember}
+        onRemoveRoomMember={removeMemberFromSelectedRoom}
+        onAddRoomMember={addMemberToSelectedRoom}
+        onChangeTeamTemplateName={setTeamTemplateName}
+        onSaveTeamTemplate={saveSelectedRoomAsTeamTemplate}
+        onApplyTeamTemplate={applyTeamTemplateToSelectedRoom}
+        onSetSummaryConnection={setRoomSummaryConnection}
+        onGenerateSummary={generateRoomSummary}
+        onConfirmPendingMemory={confirmPendingRoomMemoryCapsule}
+        onDiscardPendingMemory={discardPendingRoomMemoryCapsule}
+        onGenerateMemory={generateRoomMemoryCapsule}
+        onClearMemory={clearRoomMemoryCapsule}
+        onExportRoom={exportSelectedRoom}
+        onResetSession={resetRoomSession}
+        onClearMessages={clearSelectedRoomMessages}
+        onDeleteRoom={deleteSelectedRoom}
+      />
     );
   }
 
@@ -5447,28 +5284,6 @@ ${content}`)]);
     );
   }
 
-
-  function renderRoomModePanel() {
-    if (!selectedRoom || selectedRoom.kind !== 'group') return null;
-    return (
-      <View style={styles.roomEditPanel}>
-        <Text style={styles.panelLabel}>房间模式</Text>
-        <Text style={styles.help}>一键切换整套默认行为：协作触发、委托开关、RP 舞台和提示词语气。</Text>
-        <View style={styles.modeGrid}>
-          {ROOM_MODES.map((mode) => (
-            <TouchableOpacity
-              key={mode.id}
-              style={[styles.roomModeCard, selectedRoom.mode === mode.id && styles.roomModeCardActive]}
-              onPress={() => applyRoomMode(mode.id)}
-            >
-              <Text style={[styles.roomModeTitle, selectedRoom.mode === mode.id && styles.roomModeTitleActive]}>{mode.label}</Text>
-              <Text style={[styles.roomModeDescription, selectedRoom.mode === mode.id && styles.roomModeDescriptionActive]} numberOfLines={3}>{mode.description}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-    );
-  }
 
   function renderRoleplayArchivePanel() {
     return (
