@@ -33,16 +33,13 @@ import { AppText as Text, AppTextInput as TextInput, setAppTextFontFamily } from
 import { AttachmentPreviewModal } from './src/components/AttachmentPreviewModal';
 import { ChatSidebar } from './src/components/ChatSidebar';
 import { CollaborationDrawer } from './src/components/CollaborationDrawer';
+import { ConnectionsTab } from './src/components/connections';
 import { ComposerModeBar, SlashCommandPanel } from './src/components/ChatCommandPanels';
 import {
   AttachmentPreview,
   AgentAvatar,
   AgentBadge,
-  ConnectionHealthDetails,
-  ConnectionProfileCard,
   EmptyState,
-  HealthBadge,
-  HealthMetric,
   IconButton,
   MiniButton,
   PrimaryButton,
@@ -59,16 +56,14 @@ import { RoomGrowthPanel } from './src/components/RoomGrowthPanel';
 import { RoomManagementPanel } from './src/components/RoomManagementPanel';
 import { RoomRail } from './src/components/RoomRail';
 import { RoomStatusBar } from './src/components/RoomStatusBar';
+import { RoomsTab } from './src/components/rooms';
 import { RoleplaySceneCard } from './src/components/RoleplaySceneCard';
 import { RuntimeBanner } from './src/components/RuntimeBanner';
 import { QuickCommandsPanel } from './src/components/QuickCommandsPanel';
 import { CollaborationArchivePanel } from './src/components/square/CollaborationArchivePanel';
 import { SoulDailyPanel } from './src/components/square/SoulDailyPanel';
 import {
-  PersonalizationSettingsPanel,
-  ProjectInfoSettingsPanel,
-  SyncBackendSettingsPanel,
-  SyncConflictReportPanel,
+  SettingsTab,
 } from './src/components/settings';
 import { SoulRelationsPanel } from './src/components/SoulRelationsPanel';
 import { TaskBoardPanel } from './src/components/TaskBoardPanel';
@@ -79,7 +74,7 @@ import {
   buildChatHistoryForSequentialTurn,
   buildSummaryMessages,
 } from './src/app/chat_history';
-import { getDelegationTaskStatusStyle, getDiagnosticLevelStyle, getGoalPlanItemStatusStyle, styles } from './src/app/app_styles';
+import { getDelegationTaskStatusStyle, getGoalPlanItemStatusStyle, styles } from './src/app/app_styles';
 import {
   buildMarkdownExport,
   buildSearchSnippet,
@@ -88,11 +83,7 @@ import {
   formatDateTime,
   formatTime,
   getDelegationTaskStatusLabel,
-  getDiagnosticCategoryLabel,
-  getDiagnosticLevelLabel,
-  getDiagnosticLogIcon,
   getErrorMessage,
-  getServiceWorkerStatusLabel,
   getSquareEventIcon,
   getStatusLabel,
   getWebBasePath,
@@ -163,7 +154,7 @@ import { buildRoomMemoryMessages, formatRoomMemoryForPrompt, parseRoomMemoryResp
 import { buildRoleplayTurnPrompt, getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
 import { buildRoomReplyNotification, type RoomReplyNotification } from './src/lib/room_reply_notifications';
 import { buildSoulDailyDigest } from './src/lib/square_insights';
-import { ROOM_MODES, STARTER_ROOM_TEMPLATES, buildOnboardingSteps, buildRoleplayArchiveMessages, buildSoulRelations, buildTaskBoard, getRoomModeDefinition, getRoomModeLabel, makeDefaultRoleplayArchive, parseRoleplayArchiveResponse, summarizeRoleplayArchive, type StarterRoomTemplate } from './src/lib/stage4_plus';
+import { ROOM_MODES, buildOnboardingSteps, buildRoleplayArchiveMessages, buildSoulRelations, buildTaskBoard, getRoomModeDefinition, makeDefaultRoleplayArchive, parseRoleplayArchiveResponse, summarizeRoleplayArchive, type StarterRoomTemplate } from './src/lib/stage4_plus';
 import { getSlashCommandSuggestions, getUxCommandKindLabel, type UXCommandDefinition } from './src/lib/ux';
 import { LaphinySyncClient } from './src/lib/sync_client';
 import { buildSyncConflictReport, type SyncConflictReport } from './src/lib/sync_conflicts';
@@ -622,7 +613,6 @@ export default function App() {
   const sending = Object.keys(activeStreamIds).length > 0;
   const totalUnread = Object.values(unreadByRoom).reduce<number>((total, count) => total + Number(count ?? 0), 0);
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
-  const groupMemberDraftSet = useMemo(() => new Set(groupMemberDraftIds), [groupMemberDraftIds]);
   const slashCommandSuggestions = useMemo(() => getSlashCommandSuggestions(draft), [draft]);
 
   useEffect(() => {
@@ -4343,9 +4333,107 @@ ${content}`)]);
 
       {tab === 'chat' ? renderChat() : null}
       {tab === 'square' ? renderSquare() : null}
-      {tab === 'rooms' ? renderRooms() : null}
-      {tab === 'connections' ? renderConnections() : null}
-      {tab === 'settings' ? renderSettings() : null}
+      {tab === 'rooms' ? (
+        <RoomsTab
+          rooms={rooms}
+          enabledConnections={enabledConnections}
+          messagesByRoom={messagesByRoom}
+          groupName={groupName}
+          groupMemberDraftIds={groupMemberDraftIds}
+          managedRoomId={managedRoomId}
+          styles={styles}
+          TextComponent={Text}
+          TextInputComponent={TextInput}
+          onboardingPanel={renderOnboardingPanel()}
+          setGroupName={setGroupName}
+          setGroupMemberDraftIds={setGroupMemberDraftIds}
+          setManagedRoomId={setManagedRoomId}
+          createStarterRoom={createStarterRoom}
+          createDirectRoom={createDirectRoom}
+          createGroupRoom={createGroupRoom}
+          openFocusedChatRoom={openFocusedChatRoom}
+          renderRoomManagementPanel={renderRoomManagementPanel}
+        />
+      ) : null}
+      {tab === 'connections' ? (
+        <ConnectionsTab
+          connections={connections}
+          connectionForm={connectionForm}
+          connectionEditForm={connectionEditForm}
+          editingConnectionId={editingConnectionId}
+          jsonPaste={jsonPaste}
+          healthSummary={healthSummary}
+          connectionHealth={connectionHealth}
+          testingConnectionId={testingConnectionId}
+          profilingConnectionId={profilingConnectionId}
+          styles={styles}
+          TextComponent={Text}
+          TextInputComponent={TextInput}
+          setConnectionForm={setConnectionForm}
+          setConnectionEditForm={setConnectionEditForm}
+          setJsonPaste={setJsonPaste}
+          addConnection={addConnection}
+          importConnections={importConnections}
+          handlePasteImport={handlePasteImport}
+          refreshConnectionHealth={refreshConnectionHealth}
+          toggleConnection={toggleConnection}
+          beginEditConnection={beginEditConnection}
+          cancelEditConnection={cancelEditConnection}
+          saveConnectionEdit={saveConnectionEdit}
+          chooseConnectionAvatar={chooseConnectionAvatar}
+          clearConnectionAvatar={clearConnectionAvatar}
+          testConnection={testConnection}
+          refreshAgentProfile={refreshAgentProfile}
+          createDirectRoom={createDirectRoom}
+          deleteConnection={deleteConnection}
+        />
+      ) : null}
+      {tab === 'settings' ? (
+        <SettingsTab
+          appVersion={APP_VERSION}
+          layoutMode={layoutMode}
+          width={width}
+          networkOnline={networkOnline}
+          connectionsCount={connections.length}
+          roomsCount={rooms.length}
+          storageSummary={storageSummary}
+          appPreferences={appPreferences}
+          fontsLoaded={fontsLoaded}
+          syncConfig={syncConfig}
+          syncing={syncing}
+          checkingSyncConflicts={checkingSyncConflicts}
+          syncConflictReport={syncConflictReport}
+          backupPaste={backupPaste}
+          feedbackConfig={feedbackConfig}
+          feedbackBusy={feedbackBusy}
+          feedbackLogs={feedbackLogs}
+          diagnosticLogs={diagnosticLogs}
+          diagnosticLogsOpen={diagnosticLogsOpen}
+          diagnosticSummary={diagnosticSummary}
+          storageBackend={storageBackend}
+          serviceWorkerStatus={serviceWorkerStatus}
+          pwaInstalled={pwaInstalled}
+          defaultFeedbackBaseUrl={DEFAULT_FEEDBACK_BASE_URL}
+          styles={styles}
+          TextComponent={Text}
+          TextInputComponent={TextInput}
+          updateAppPreferences={updateAppPreferences}
+          setSyncConfig={setSyncConfig}
+          testSyncBackend={testSyncBackend}
+          checkSyncConflicts={checkSyncConflicts}
+          pullSyncSnapshot={pullSyncSnapshot}
+          pushSyncSnapshot={pushSyncSnapshot}
+          exportAppBackup={exportAppBackup}
+          importBackupFile={importBackupFile}
+          handlePasteBackup={handlePasteBackup}
+          setBackupPaste={setBackupPaste}
+          setFeedbackConfig={setFeedbackConfig}
+          uploadFeedbackLogs={uploadFeedbackLogs}
+          setDiagnosticLogsOpen={setDiagnosticLogsOpen}
+          exportDiagnosticBundle={exportDiagnosticBundle}
+          clearDiagnosticLogs={clearDiagnosticLogs}
+        />
+      ) : null}
     </SafeAreaView>
   );
 
@@ -5270,203 +5358,6 @@ ${content}`)]);
     );
   }
 
-  function renderSettings() {
-    return (
-      <ScrollView style={styles.content} contentContainerStyle={styles.panel}>
-        <View style={styles.squareHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>设置</Text>
-            <Text style={styles.help}>管理同步、备份、诊断日志和项目运行信息。</Text>
-          </View>
-          <Text style={styles.squareCount}>v{APP_VERSION}</Text>
-        </View>
-
-        <ProjectInfoSettingsPanel
-          appVersion={APP_VERSION}
-          layoutMode={layoutMode}
-          width={width}
-          networkOnline={networkOnline}
-          connectionsCount={connections.length}
-          roomsCount={rooms.length}
-          storageSummary={storageSummary}
-          styles={styles}
-          TextComponent={Text}
-        />
-
-        <PersonalizationSettingsPanel
-          appPreferences={appPreferences}
-          fontsLoaded={fontsLoaded}
-          styles={styles}
-          TextComponent={Text}
-          updateAppPreferences={updateAppPreferences}
-        />
-
-        <SyncBackendSettingsPanel
-          syncConfig={syncConfig}
-          syncing={syncing}
-          checkingSyncConflicts={checkingSyncConflicts}
-          syncConflictReport={
-            <SyncConflictReportPanel
-              report={syncConflictReport}
-              styles={styles}
-              TextComponent={Text}
-            />
-          }
-          styles={styles}
-          TextComponent={Text}
-          TextInputComponent={TextInput}
-          setSyncConfig={setSyncConfig}
-          testSyncBackend={testSyncBackend}
-          checkSyncConflicts={checkSyncConflicts}
-          pullSyncSnapshot={pullSyncSnapshot}
-          pushSyncSnapshot={pushSyncSnapshot}
-        />
-
-        <View style={styles.syncPanel}>
-          <View style={styles.syncHeader}>
-            <View style={styles.syncHeaderText}>
-              <Text style={styles.cardTitle}>数据、备份与日志</Text>
-              <Text style={styles.help}>把本地备份、脱敏反馈、诊断日志和存储状态放在一起，避免在设置页里来回找。</Text>
-            </View>
-            <Text style={styles.squareCount}>v5</Text>
-          </View>
-
-          <View style={styles.settingsSubsection}>
-            <Text style={styles.panelLabel}>本地备份 / 恢复</Text>
-            <Text style={styles.help}>完整备份可能包含 API Key，请只保存在可信位置；恢复时会合并当前数据。</Text>
-            <View style={styles.buttonRow}>
-              <SecondaryButton icon="download-outline" label="导出备份文件" onPress={exportAppBackup} />
-              <SecondaryButton icon="cloud-upload-outline" label="上传备份文件" onPress={importBackupFile} />
-              <SecondaryButton icon="clipboard-outline" label="粘贴恢复" onPress={handlePasteBackup} disabled={!backupPaste.trim()} />
-            </View>
-            <TextInput
-              style={[styles.input, styles.jsonPasteInput]}
-              multiline
-              value={backupPaste}
-              onChangeText={setBackupPaste}
-              placeholder="粘贴 Laphiny 完整备份 JSON，恢复时会合并当前数据。"
-              autoCapitalize="none"
-              textAlignVertical="top"
-            />
-          </View>
-
-          <View style={styles.settingsDivider} />
-
-          <View style={styles.settingsSubsection}>
-            <View style={styles.syncHeader}>
-              <View style={styles.syncHeaderText}>
-                <Text style={styles.panelLabel}>反馈日志</Text>
-                <Text style={styles.help}>默认使用服务器反馈后端，只允许从本机上传脱敏日志；不会从服务器拉取历史日志。</Text>
-              </View>
-              <TouchableOpacity
-                style={[styles.syncToggle, feedbackConfig.enabled && styles.syncToggleOn]}
-                onPress={() => setFeedbackConfig((current) => ({ ...current, enabled: !current.enabled, updatedAt: new Date().toISOString() }))}
-              >
-                <Text style={[styles.syncToggleText, feedbackConfig.enabled && styles.syncToggleTextOn]}>
-                  {feedbackConfig.enabled ? '已启用' : '未启用'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <TextInput
-              style={styles.input}
-              value={feedbackConfig.baseUrl}
-              onChangeText={(baseUrl) => setFeedbackConfig((current) => ({ ...current, baseUrl, updatedAt: new Date().toISOString() }))}
-              placeholder={DEFAULT_FEEDBACK_BASE_URL}
-              autoCapitalize="none"
-              keyboardType="url"
-            />
-            <TextInput
-              style={styles.input}
-              value={feedbackConfig.apiKey}
-              onChangeText={(apiKey) => setFeedbackConfig((current) => ({ ...current, apiKey, updatedAt: new Date().toISOString() }))}
-              placeholder="反馈服务 API Key，可留空"
-              autoCapitalize="none"
-              secureTextEntry
-            />
-            <View style={styles.buttonRow}>
-              <PrimaryButton icon="cloud-upload-outline" label={feedbackBusy ? '上传中...' : '上传反馈日志'} onPress={uploadFeedbackLogs} disabled={feedbackBusy} />
-            </View>
-            {feedbackLogs.length ? (
-              <View style={styles.diagnosticList}>
-                {feedbackLogs.map((entry) => (
-                  <View key={entry.id} style={styles.diagnosticItem}>
-                    <View style={styles.diagnosticHeader}>
-                      <Text style={styles.squareEventTitle}>{entry.source || 'Laphiny App'}</Text>
-                      <Text style={styles.squareEventMeta}>{formatDateTime(entry.createdAt)}</Text>
-                    </View>
-                    <Text style={styles.squareEventMeta}>
-                      {entry.platform ?? 'unknown'} · v{entry.appVersion ?? 'unknown'} · {entry.id}
-                    </Text>
-                    {entry.summary ? <Text style={styles.diagnosticMessage}>{entry.summary}</Text> : null}
-                  </View>
-                ))}
-              </View>
-            ) : null}
-          </View>
-
-          <View style={styles.settingsDivider} />
-
-          <View style={styles.settingsSubsection}>
-            <View style={styles.syncHeader}>
-              <View style={styles.syncHeaderText}>
-                <Text style={styles.panelLabel}>诊断日志</Text>
-                <Text style={styles.help}>记录最近的请求、委托、连接测试、同步和备份恢复结果。导出诊断包会脱敏，并保存为 JSON 文件。</Text>
-              </View>
-              <TouchableOpacity
-                style={[styles.syncToggle, diagnosticLogsOpen && styles.syncToggleOn]}
-                onPress={() => setDiagnosticLogsOpen((open) => !open)}
-              >
-                <Text style={[styles.syncToggleText, diagnosticLogsOpen && styles.syncToggleTextOn]}>
-                  {diagnosticLogsOpen ? '已展开' : '已收起'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.healthMetricRow}>
-              <HealthMetric label="总数" value={diagnosticSummary.total} tone="unknown" />
-              <HealthMetric label="近 50 错误" value={diagnosticSummary.errors} tone={diagnosticSummary.errors > 0 ? 'error' : 'ok'} />
-              <HealthMetric label="近 50 警告" value={diagnosticSummary.warnings} tone={diagnosticSummary.warnings > 0 ? 'checking' : 'ok'} />
-            </View>
-            <View style={styles.buttonRow}>
-              <SecondaryButton icon="download-outline" label="导出诊断 JSON" onPress={exportDiagnosticBundle} />
-              <SecondaryButton icon="trash-outline" label="清空日志" onPress={clearDiagnosticLogs} disabled={diagnosticLogs.length === 0} />
-            </View>
-            {diagnosticLogsOpen ? (
-              <View style={styles.diagnosticList}>
-                {diagnosticSummary.recent.length === 0 ? (
-                  <Text style={styles.help}>还没有诊断日志。发送消息、测试连接或同步后会自动记录。</Text>
-                ) : null}
-                {[...diagnosticSummary.recent].reverse().map((log) => (
-                  <View key={log.id} style={styles.diagnosticItem}>
-                    <View style={styles.diagnosticHeader}>
-                      <View style={styles.squareEventSource}>
-                        <Ionicons name={getDiagnosticLogIcon(log)} size={16} color="#2563eb" />
-                        <Text style={styles.squareEventTitle}>{log.title}</Text>
-                      </View>
-                      <Text style={[styles.diagnosticLevel, getDiagnosticLevelStyle(log.level)]}>{getDiagnosticLevelLabel(log.level)}</Text>
-                    </View>
-                    <Text style={styles.squareEventMeta}>
-                      {getDiagnosticCategoryLabel(log.category)}{log.connectionName ? ` · ${log.connectionName}` : ''}{log.roomName ? ` · ${log.roomName}` : ''}{log.durationMs != null ? ` · ${log.durationMs}ms` : ''}{log.requestId ? ` · ${log.requestId}` : ''}
-                    </Text>
-                    {log.message ? <Text style={styles.diagnosticMessage}>{log.message}</Text> : null}
-                  </View>
-                ))}
-              </View>
-            ) : null}
-          </View>
-
-          <View style={styles.settingsDivider} />
-
-          <View style={styles.storageInfoBox}>
-            <Text style={styles.storageInfoTitle}>存储与隐私状态</Text>
-            <Text style={styles.storageInfoText}>密钥：{storageBackend?.secretBackend ?? '加载中'} · 长期记录：{storageBackend?.durableBackend ?? '加载中'} · SW {getServiceWorkerStatusLabel(serviceWorkerStatus)}{pwaInstalled ? ' · 已安装 PWA' : ''}</Text>
-            <Text style={styles.storageInfoText}>默认本地保存；同步、反馈和完整备份都需要用户显式操作或启用。</Text>
-            {storageBackend?.durableDirectory ? <Text style={styles.storageInfoPath}>{storageBackend.durableDirectory}</Text> : null}
-          </View>
-        </View>
-      </ScrollView>
-    );
-  }
-
   function renderSquare() {
     const events = [...squareEvents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     const dailyDigest = buildSoulDailyDigest({ rooms, connections, messagesByRoom, collaborationEvents, delegationTasks });
@@ -5556,22 +5447,6 @@ ${content}`)]);
     );
   }
 
-  function renderStarterTemplates() {
-    return (
-      <View style={styles.templateGrid}>
-        {STARTER_ROOM_TEMPLATES.map((template) => (
-          <TouchableOpacity key={template.id} style={styles.templateCard} onPress={() => createStarterRoom(template)}>
-            <View style={styles.squareEventSource}>
-              <Ionicons name={template.mode === 'tabletop' ? 'game-controller-outline' : template.mode === 'review' ? 'shield-checkmark-outline' : 'sparkles-outline'} size={16} color="#2563eb" />
-              <Text style={styles.conflictItemTitle}>{template.title}</Text>
-            </View>
-            <Text style={styles.help}>{template.description}</Text>
-            <Text style={styles.badge}>{getRoomModeLabel(template.mode)}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    );
-  }
 
   function renderRoomModePanel() {
     if (!selectedRoom || selectedRoom.kind !== 'group') return null;
@@ -5647,239 +5522,4 @@ ${content}`)]);
     return <SoulRelationsPanel relations={soulRelations} styles={styles} TextComponent={Text} />;
   }
 
-  function renderRooms() {
-    return (
-      <ScrollView style={styles.content} contentContainerStyle={styles.panel}>
-        {renderOnboardingPanel()}
-        <Text style={styles.sectionTitle}>房间模板</Text>
-        <Text style={styles.help}>用模板一键创建工作室、审查室、桌游店或日常房间，不包含 API Key。你也可以创建后再微调成员和模式。</Text>
-        {renderStarterTemplates()}
-
-        <Text style={styles.sectionTitle}>创建单聊</Text>
-        {enabledConnections.length === 0 ? <Text style={styles.muted}>还没有已启用的 Hermes 连接。</Text> : null}
-        {enabledConnections.map((connection) => (
-          <View key={connection.id} style={styles.rowCard}>
-            <View style={styles.rowMain}>
-              <Text style={styles.cardTitle}>{connection.name}</Text>
-              <Text style={styles.muted}>{connection.baseUrl}</Text>
-            </View>
-            <SecondaryButton icon="chatbubble-outline" label="单聊" onPress={() => createDirectRoom(connection)} />
-          </View>
-        ))}
-
-        <Text style={styles.sectionTitle}>创建群聊</Text>
-        <TextInput style={styles.input} value={groupName} onChangeText={setGroupName} placeholder="群聊名称" />
-        <View style={styles.roomEditPanel}>
-          <View style={styles.conflictHeader}>
-            <Text style={styles.panelLabel}>选择初始成员 · {groupMemberDraftIds.length}/{enabledConnections.length}</Text>
-            <View style={styles.stepper}>
-              <MiniButton icon="checkmark-done-outline" label="全选" onPress={() => setGroupMemberDraftIds(enabledConnections.map((connection) => connection.id))} />
-              <MiniButton icon="remove-circle-outline" label="清空" onPress={() => setGroupMemberDraftIds([])} />
-            </View>
-          </View>
-          <View style={styles.memberChips}>
-            {enabledConnections.map((connection) => (
-              <TouchableOpacity
-                key={connection.id}
-                style={[styles.memberChip, groupMemberDraftSet.has(connection.id) && styles.memberChipSelected]}
-                onPress={() => setGroupMemberDraftIds((current) => (
-                  current.includes(connection.id)
-                    ? current.filter((id) => id !== connection.id)
-                    : [...current, connection.id]
-                ))}
-              >
-                <AgentBadge alias={connection.name} active={groupMemberDraftSet.has(connection.id)} imageUri={connection.avatarUri} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-        <Text style={styles.help}>群聊只会加入上面选中的连接。发送时使用 @成员名、@all/@all-seq，或 /council /redteam /review /retro 启动协作仪式。</Text>
-        <PrimaryButton icon="people-outline" label="创建群聊" onPress={createGroupRoom} disabled={groupMemberDraftIds.length < 2} />
-
-        <Text style={styles.sectionTitle}>已有房间</Text>
-        <Text style={styles.help}>这里是唯一的房间管理入口：管理会在当前列表原地展开，不会再跳到聊天页旧详情。</Text>
-        {rooms.map((room) => {
-          const managing = managedRoomId === room.id;
-          return (
-            <View key={room.id} style={[styles.card, managing && styles.managedRoomCard]}>
-              <TouchableOpacity onPress={() => openFocusedChatRoom(room.id)}>
-                <Text style={styles.cardTitle}>{room.name}</Text>
-                <Text style={styles.muted}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.map((member) => `${member.enabled ? '' : '停用:'}${member.alias}`).join('、')}</Text>
-                <Text style={styles.help}>{(messagesByRoom[room.id] ?? []).length} 条消息 · 更新于 {formatDateTime(room.updatedAt)}</Text>
-              </TouchableOpacity>
-              <View style={styles.buttonRow}>
-                <SecondaryButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => openFocusedChatRoom(room.id)} />
-                <SecondaryButton
-                  icon={managing ? 'chevron-up-outline' : 'options-outline'}
-                  label={managing ? '收起管理' : '管理'}
-                  onPress={() => setManagedRoomId((current) => current === room.id ? null : room.id)}
-                />
-              </View>
-              {managing ? renderRoomManagementPanel(room) : null}
-            </View>
-          );
-        })}
-      </ScrollView>
-    );
-  }
-
-  function renderConnections() {
-    return (
-      <ScrollView style={styles.content} contentContainerStyle={styles.panel}>
-        <Text style={styles.sectionTitle}>添加 Hermes Gateway</Text>
-        <TextInput
-          style={styles.input}
-          value={connectionForm.name}
-          onChangeText={(name) => setConnectionForm((current) => ({ ...current, name }))}
-          placeholder="名称，例如 Flor"
-        />
-        <TextInput
-          style={styles.input}
-          value={connectionForm.baseUrl}
-          onChangeText={(baseUrl) => setConnectionForm((current) => ({ ...current, baseUrl }))}
-          placeholder="http://127.0.0.1:8642"
-          autoCapitalize="none"
-          keyboardType="url"
-        />
-        <TextInput
-          style={styles.input}
-          value={connectionForm.apiKey}
-          onChangeText={(apiKey) => setConnectionForm((current) => ({ ...current, apiKey }))}
-          placeholder="API Key，可留空"
-          autoCapitalize="none"
-          secureTextEntry
-        />
-        <TextInput
-          style={styles.input}
-          value={connectionForm.model}
-          onChangeText={(model) => setConnectionForm((current) => ({ ...current, model }))}
-          placeholder="模型名"
-          autoCapitalize="none"
-        />
-        <PrimaryButton icon="add-circle-outline" label="添加连接" onPress={addConnection} />
-        <View style={styles.importSection}>
-          <View style={styles.importRow}>
-            <SecondaryButton icon="cloud-upload-outline" label="导入 JSON" onPress={importConnections} />
-            <SecondaryButton icon="clipboard-outline" label="粘贴导入" onPress={handlePasteImport} disabled={!jsonPaste.trim()} />
-          </View>
-          <TextInput
-            style={[styles.input, styles.jsonPasteInput]}
-            multiline
-            value={jsonPaste}
-            onChangeText={setJsonPaste}
-            placeholder={`[\n  {\n    "name": "My Hermes",\n    "baseUrl": "http://...",\n    "apiKey": "...",\n    "profile": { "publicPersona": "公开人格摘要", "strengths": ["擅长领域"] }\n  }\n]`}
-            autoCapitalize="none"
-            textAlignVertical="top"
-          />
-        </View>
-
-        <Text style={styles.sectionTitle}>连接列表</Text>
-        <View style={styles.healthPanel}>
-          <View style={styles.healthPanelHeader}>
-            <View>
-              <Text style={styles.healthTitle}>连接健康</Text>
-              <Text style={styles.help}>延迟、模型列表和最近错误会记录在这里。</Text>
-            </View>
-            <SecondaryButton
-              icon="pulse-outline"
-              label={healthSummary.checking > 0 ? '检查中...' : '刷新全部'}
-              onPress={() => refreshConnectionHealth(true)}
-              disabled={healthSummary.checking > 0}
-            />
-          </View>
-          <View style={styles.healthMetricRow}>
-            <HealthMetric label="可用" value={healthSummary.ok} tone="ok" />
-            <HealthMetric label="失败" value={healthSummary.error} tone="error" />
-            <HealthMetric label="检查中" value={healthSummary.checking} tone="checking" />
-            <HealthMetric label="未知" value={healthSummary.unknown} tone="unknown" />
-          </View>
-        </View>
-        {connections.length === 0 ? <Text style={styles.muted}>暂无连接。</Text> : null}
-        {connections.map((connection) => {
-          const editing = editingConnectionId === connection.id;
-          return (
-            <View key={connection.id} style={styles.card}>
-              {editing ? (
-                <View style={styles.editPanel}>
-                  <Text style={styles.cardTitle}>编辑连接</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={connectionEditForm.name}
-                    onChangeText={(name) => setConnectionEditForm((current) => ({ ...current, name }))}
-                    placeholder="连接名称"
-                  />
-                  <TextInput
-                    style={styles.input}
-                    value={connectionEditForm.baseUrl}
-                    onChangeText={(baseUrl) => setConnectionEditForm((current) => ({ ...current, baseUrl }))}
-                    placeholder="Hermes API 地址"
-                    autoCapitalize="none"
-                    keyboardType="url"
-                  />
-                  <TextInput
-                    style={styles.input}
-                    value={connectionEditForm.apiKey}
-                    onChangeText={(apiKey) => setConnectionEditForm((current) => ({ ...current, apiKey }))}
-                    placeholder="API Key，可留空"
-                    autoCapitalize="none"
-                    secureTextEntry
-                  />
-                  <TextInput
-                    style={styles.input}
-                    value={connectionEditForm.model}
-                    onChangeText={(model) => setConnectionEditForm((current) => ({ ...current, model }))}
-                    placeholder="模型名"
-                    autoCapitalize="none"
-                  />
-                  <View style={styles.buttonRow}>
-                    <PrimaryButton icon="save-outline" label="保存" onPress={() => saveConnectionEdit(connection)} />
-                    <SecondaryButton icon="close-outline" label="取消" onPress={cancelEditConnection} />
-                  </View>
-                </View>
-              ) : (
-                <>
-                  <View style={styles.connectionHeader}>
-                    <AgentAvatar alias={connection.name} size={42} imageUri={connection.avatarUri} />
-                    <View style={styles.rowMain}>
-                      <Text style={styles.cardTitle}>{connection.name}</Text>
-                      <Text style={styles.muted}>{connection.baseUrl}</Text>
-                      <Text style={styles.help}>模型：{connection.model}</Text>
-                    </View>
-                    <View style={styles.connectionBadges}>
-                      <Text style={[styles.badge, connection.enabled ? styles.badgeOn : styles.badgeOff]}>
-                        {connection.enabled ? '启用' : '停用'}
-                      </Text>
-                      <HealthBadge health={connectionHealth[connection.id]} />
-                    </View>
-                  </View>
-                  <ConnectionHealthDetails health={connectionHealth[connection.id]} />
-                  <ConnectionProfileCard profile={connection.profile} />
-                  <View style={styles.buttonRow}>
-                    <SecondaryButton icon={connection.enabled ? 'pause-circle-outline' : 'play-circle-outline'} label={connection.enabled ? '停用' : '启用'} onPress={() => toggleConnection(connection.id)} />
-                    <SecondaryButton icon="create-outline" label="编辑" onPress={() => beginEditConnection(connection)} />
-                    <SecondaryButton icon="image-outline" label="换头像" onPress={() => chooseConnectionAvatar(connection)} />
-                    {connection.avatarUri ? <SecondaryButton icon="close-circle-outline" label="清除头像" onPress={() => clearConnectionAvatar(connection)} /> : null}
-                    <SecondaryButton
-                      icon="pulse-outline"
-                      label={testingConnectionId === connection.id ? '测试中...' : '测试'}
-                      onPress={() => testConnection(connection)}
-                      disabled={testingConnectionId === connection.id}
-                    />
-                    <SecondaryButton
-                      icon="sparkles-outline"
-                      label={profilingConnectionId === connection.id ? '生成中...' : connection.profile ? '更新协作卡片' : '生成协作卡片'}
-                      onPress={() => refreshAgentProfile(connection)}
-                      disabled={profilingConnectionId === connection.id}
-                    />
-                    <SecondaryButton icon="chatbubble-outline" label="单聊" onPress={() => createDirectRoom(connection)} disabled={!connection.enabled} />
-                    <SecondaryButton icon="trash-outline" label="删除" onPress={() => deleteConnection(connection)} />
-                  </View>
-                </>
-              )}
-            </View>
-          );
-        })}
-      </ScrollView>
-    );
-  }
 }

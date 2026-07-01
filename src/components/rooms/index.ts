@@ -1,0 +1,1 @@
+export { RoomsTab } from './RoomsTab';
