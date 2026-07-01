@@ -102,7 +102,6 @@ import {
   mergeMessagesByRoom,
   mergeProfileVersions,
   mergeSquareEvents,
-  normalizeBackupSnapshot,
   requestConfirm,
   showNotice,
 } from './src/app/app_utils';
@@ -115,7 +114,6 @@ import {
 import type {
   ConnectionFormState,
   ConnectionHealth,
-  LaphinyBackup,
   MessageSearchResult,
   QuickCommand,
   PWAInstallPromptEvent,
@@ -140,10 +138,18 @@ Notifications.setNotificationHandler({
 const NOTIFICATION_CHANNEL_ID = 'laphiny-agent-replies';
 
 import { pickDocuments, pickImages } from './src/lib/attachments';
-import { buildAgentProfileInquiryMessages, normalizeImportedAgentProfile, parseAgentProfileResponse, summarizeAgentProfile } from './src/lib/agent_profile';
+import { summarizeAgentProfile } from './src/lib/agent_profile';
 import { buildAgentPermissionDecisionPrompt, getAgentPermissionKey } from './src/lib/agent_permissions';
 import { extractAgentReplyArtifacts, getAgentReplyFallback, getRenderableMessageArtifacts } from './src/lib/chat_rendering';
 import { COLLABORATION_RITUALS, buildRitualConsensusMessages, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
+import {
+  mergeImportedConnections,
+  normalizeConnectionForm,
+  parseImportedConnections,
+  removeConnectionFromRooms,
+  updateRoomsForConnectionRename,
+} from './src/lib/connection_management';
+import { checkHermesConnection, generateAgentProfile } from './src/lib/connection_runtime';
 import { appendDiagnosticLog as appendDiagnosticLogEntry, buildDiagnosticBundle, makeDiagnosticLog, sanitizeDiagnosticLogs } from './src/lib/diagnostics';
 import { HermesClient, normalizeHermesReplyText } from './src/lib/hermes_client';
 import { runHermesCompletion } from './src/lib/hermes_completion';
@@ -168,6 +174,12 @@ import { buildOnboardingSteps, buildRoleplayArchiveMessages, buildSoulRelations,
 import { getSlashCommandSuggestions, getUxCommandKindLabel, type UXCommandDefinition } from './src/lib/ux';
 import { LaphinySyncClient } from './src/lib/sync_client';
 import { buildSyncConflictReport, type SyncConflictReport } from './src/lib/sync_conflicts';
+import {
+  buildAppBackup as buildAppBackupData,
+  buildSyncSnapshot as buildSyncSnapshotData,
+  normalizeBackupSnapshot,
+  type SyncSnapshotCollections,
+} from './src/lib/sync_snapshot';
 import { LaphinyFeedbackClient } from './src/lib/feedback_client';
 import {
   loadAppPreferences,
@@ -862,39 +874,17 @@ export default function App() {
     };
   }, [hydrated, syncConfig.enabled, syncConfig.baseUrl, syncConfig.apiKey]);
 
-  function normalizeConnectionForm(form: ConnectionFormState): ConnectionFormState | null {
-    const name = form.name.trim();
-    const baseUrl = form.baseUrl.trim().replace(/\/+$/, '');
-    const apiKey = form.apiKey.trim();
-    const model = form.model.trim() || DEFAULT_MODEL;
-
-    if (!name || !baseUrl) {
-      showNotice('请填写连接名称和 Hermes API 地址');
-      return null;
-    }
-
-    try {
-      const url = new URL(baseUrl);
-      if (!['http:', 'https:'].includes(url.protocol)) {
-        showNotice('Hermes API 地址必须以 http:// 或 https:// 开头');
-        return null;
-      }
-    } catch {
-      showNotice('Hermes API 地址格式不正确');
-      return null;
-    }
-
-    return { name, baseUrl, apiKey, model };
-  }
-
   function addConnection() {
-    const normalized = normalizeConnectionForm(connectionForm);
-    if (!normalized) return;
+    const normalized = normalizeConnectionForm(connectionForm, DEFAULT_MODEL);
+    if (!normalized.ok) {
+      showNotice(normalized.title, normalized.message);
+      return;
+    }
 
     const now = new Date().toISOString();
     const connection: HermesConnection = {
       id: makeId('conn'),
-      ...normalized,
+      ...normalized.value,
       enabled: true,
       createdAt: now,
       updatedAt: now,
@@ -912,64 +902,25 @@ export default function App() {
   }
 
   function importConnectionsFromText(text: string) {
-    let data: unknown;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      showNotice('JSON 格式错误', '文本不是有效的 JSON');
-      return;
-    }
-
-    if (!Array.isArray(data)) {
-      showNotice('JSON 格式错误', 'JSON 必须是连接对象数组');
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const imported: HermesConnection[] = [];
-    for (let i = 0; i < data.length; i++) {
-      const item = data[i];
-      if (!item || typeof item !== 'object') continue;
-      const name = String((item as Record<string, unknown>).name ?? '').trim();
-      const baseUrl = String((item as Record<string, unknown>).baseUrl ?? '').trim();
-      if (!name || !baseUrl) continue;
-
-      const rawItem = item as Record<string, unknown>;
-      imported.push({
-        id: makeId('conn'),
-        name,
-        baseUrl,
-        apiKey: String(rawItem.apiKey ?? ''),
-        model: String(rawItem.model || DEFAULT_MODEL),
-        enabled: rawItem.enabled !== false,
-        avatarUri: typeof rawItem.avatarUri === 'string' ? rawItem.avatarUri : undefined,
-        profile: normalizeImportedAgentProfile(rawItem.profile),
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-
-    if (imported.length === 0) {
-      showNotice('没有可导入的连接', 'JSON 中没有有效的连接数据');
+    const imported = parseImportedConnections(text, DEFAULT_MODEL, makeId);
+    if (!imported.ok) {
+      showNotice(imported.title, imported.message);
       return;
     }
 
     setConnections((current) => {
-      const existingNames = new Set(current.map((c) => c.name));
-      const newOnes = imported.filter((c) => !existingNames.has(c.name));
-      if (newOnes.length === 0) {
+      const merged = mergeImportedConnections(current, imported.connections);
+      if (merged.added === 0) {
         showNotice('没有新连接', '全部连接已存在');
         return current;
       }
-      const skipped = imported.length - newOnes.length;
       showNotice(
         '导入完成',
-        `已导入 ${newOnes.length} 个连接${skipped > 0 ? `，跳过 ${skipped} 个已存在` : ''}`,
+        `已导入 ${merged.added} 个连接${merged.skipped > 0 ? `，跳过 ${merged.skipped} 个已存在` : ''}`,
       );
-      return [...current, ...newOnes];
+      return merged.connections;
     });
   }
-
   async function importConnections() {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -994,50 +945,50 @@ export default function App() {
       ...current,
       [connection.id]: { ...current[connection.id], status: 'checking' },
     }));
-    const startedAt = Date.now();
     try {
-      const client = new HermesClient(connection);
-      const [health, models] = await Promise.all([client.health({ timeoutMs: 8_000 }), client.models({ timeoutMs: 8_000 })]);
-      const latencyMs = Date.now() - startedAt;
-      setConnectionHealth((current) => ({
-        ...current,
-        [connection.id]: {
-          status: 'ok',
-          latencyMs,
-          modelsCount: models.length,
-          checkedAt: new Date().toISOString(),
-        },
-      }));
-      appendDiagnosticLog({
-        level: 'success',
-        category: 'connection',
-        title: '连接测试成功',
-        message: `${connection.name} 可用，模型数 ${models.length}。`,
-        connectionId: connection.id,
-        connectionName: connection.name,
-        durationMs: latencyMs,
-        meta: { models: models.length, status: health.status ?? 'ok' },
-      });
-      showNotice('连接成功', `状态：${health.status ?? 'ok'}\n模型数：${models.length}`);
-    } catch (error) {
+      const result = await checkHermesConnection(connection);
+      if (result.status === 'ok') {
+        setConnectionHealth((current) => ({
+          ...current,
+          [connection.id]: {
+            status: 'ok',
+            latencyMs: result.latencyMs,
+            modelsCount: result.modelsCount,
+            checkedAt: result.checkedAt,
+          },
+        }));
+        appendDiagnosticLog({
+          level: 'success',
+          category: 'connection',
+          title: '连接测试成功',
+          message: `${connection.name} 可用，模型数 ${result.modelsCount}。`,
+          connectionId: connection.id,
+          connectionName: connection.name,
+          durationMs: result.latencyMs,
+          meta: { models: result.modelsCount, status: result.rawStatus ?? 'ok' },
+        });
+        showNotice('连接成功', `状态：${result.rawStatus ?? 'ok'}\n模型数：${result.modelsCount}`);
+        return;
+      }
+
       setConnectionHealth((current) => ({
         ...current,
         [connection.id]: {
           status: 'error',
-          error: getErrorMessage(error),
-          checkedAt: new Date().toISOString(),
+          error: result.error,
+          checkedAt: result.checkedAt,
         },
       }));
       appendDiagnosticLog({
         level: 'error',
         category: 'connection',
         title: '连接测试失败',
-        message: getErrorMessage(error),
+        message: result.error,
         connectionId: connection.id,
         connectionName: connection.name,
-        durationMs: Date.now() - startedAt,
+        durationMs: result.latencyMs,
       });
-      showNotice('连接失败', getErrorMessage(error));
+      showNotice('连接失败', result.error);
     } finally {
       setTestingConnectionId(null);
     }
@@ -1046,18 +997,7 @@ export default function App() {
   async function refreshAgentProfile(connection: HermesConnection) {
     setProfilingConnectionId(connection.id);
     try {
-      const client = new HermesClient(connection);
-      const response = await client.chatCompletion({
-        model: connection.model,
-        messages: buildAgentProfileInquiryMessages(connection.name),
-      }, {
-        sessionId: `laphiny-profile-${connection.id}`,
-        sessionKey: `laphiny-profile-${connection.id}`,
-        timeoutMs: 60_000,
-      });
-
-      const text = response.choices?.[0]?.message?.content ?? '';
-      const profile = parseAgentProfileResponse(text, connection.name);
+      const profile = await generateAgentProfile(connection);
       setProfileVersions((current) => [
         ...current,
         {
@@ -1114,43 +1054,30 @@ export default function App() {
       return next;
     });
 
-    const results = await Promise.all(targets.map(async (connection) => {
-      const startedAt = Date.now();
-      try {
-        const client = new HermesClient(connection);
-        const [health, models] = await Promise.all([client.health({ timeoutMs: 8_000 }), client.models({ timeoutMs: 8_000 })]);
-        return {
-          id: connection.id,
-          health: {
-            status: 'ok' as const,
-            latencyMs: Date.now() - startedAt,
-            modelsCount: models.length,
-            checkedAt: new Date().toISOString(),
-            error: health.status && health.status !== 'ok' ? `状态：${health.status}` : undefined,
-          },
-        };
-      } catch (error) {
-        return {
-          id: connection.id,
-          health: {
-            status: 'error' as const,
-            error: getErrorMessage(error),
-            checkedAt: new Date().toISOString(),
-          },
-        };
-      }
-    }));
+    const results = await Promise.all(targets.map((connection) => checkHermesConnection(connection)));
 
     setConnectionHealth((current) => {
       const next = { ...current };
       for (const result of results) {
-        next[result.id] = result.health;
+        next[result.id] = result.status === 'ok'
+          ? {
+            status: 'ok',
+            latencyMs: result.latencyMs,
+            modelsCount: result.modelsCount,
+            checkedAt: result.checkedAt,
+            error: result.rawStatus && result.rawStatus !== 'ok' ? `状态：${result.rawStatus}` : undefined,
+          }
+          : {
+            status: 'error',
+            error: result.error,
+            checkedAt: result.checkedAt,
+          };
       }
       return next;
     });
 
     if (showResult) {
-      const okCount = results.filter((result) => result.health.status === 'ok').length;
+      const okCount = results.filter((result) => result.status === 'ok').length;
       appendDiagnosticLog({
         level: okCount === results.length ? 'success' : 'warning',
         category: 'connection',
@@ -1161,7 +1088,6 @@ export default function App() {
       showNotice('健康检查完成', `${okCount}/${results.length} 个连接可用。`);
     }
   }
-
   function toggleConnection(connectionId: string) {
     setConnections((current) => current.map((connection) => (
       connection.id === connectionId
@@ -1186,28 +1112,20 @@ export default function App() {
   }
 
   function saveConnectionEdit(connection: HermesConnection) {
-    const normalized = normalizeConnectionForm(connectionEditForm);
-    if (!normalized) return;
+    const normalized = normalizeConnectionForm(connectionEditForm, DEFAULT_MODEL);
+    if (!normalized.ok) {
+      showNotice(normalized.title, normalized.message);
+      return;
+    }
 
     const now = new Date().toISOString();
     setConnections((current) => current.map((item) => (
-      item.id === connection.id ? { ...item, ...normalized, updatedAt: now } : item
+      item.id === connection.id ? { ...item, ...normalized.value, updatedAt: now } : item
     )));
-    setRooms((current) => current.map((room) => {
-      const members = room.members.map((member) => (
-        member.connectionId === connection.id && member.alias === connection.name
-          ? { ...member, alias: normalized.name }
-          : member
-      ));
-      const name = room.kind === 'direct' && room.members[0]?.connectionId === connection.id && room.name === connection.name
-        ? normalized.name
-        : room.name;
-      return { ...room, name, members, updatedAt: now };
-    }));
+    setRooms((current) => updateRoomsForConnectionRename(current, connection, normalized.value.name, now));
     cancelEditConnection();
-    showNotice('连接已更新', `${connection.name} 已保存为 ${normalized.name}。`);
+    showNotice('连接已更新', `${connection.name} 已保存为 ${normalized.value.name}。`);
   }
-
   async function chooseConnectionAvatar(connection: HermesConnection) {
     try {
       const images = await pickImages();
@@ -1248,19 +1166,7 @@ export default function App() {
         });
         setSelectedTargetIds((current) => current.filter((id) => id !== connection.id));
         setRooms((current) => {
-          const next = current
-            .map((room) => {
-              if (room.kind !== 'group') return room;
-              const members = room.members.filter((member) => member.connectionId !== connection.id);
-              if (members.length === room.members.length) return room;
-              const sessionIds = { ...room.sessionIds };
-              const memberSessionKeys = { ...(room.memberSessionKeys ?? {}) };
-              delete sessionIds[connection.id];
-              delete memberSessionKeys[connection.id];
-              return { ...room, members, sessionIds, memberSessionKeys, updatedAt: now };
-            })
-            .filter((room) => !(room.kind === 'direct' && room.members.some((member) => member.connectionId === connection.id)))
-            .filter((room) => room.members.length > 0);
+          const next = removeConnectionFromRooms(current, connection.id, now).filter((room) => room.members.length > 0);
           if (selectedRoomId && !next.some((room) => room.id === selectedRoomId)) {
             setSelectedRoomId(next[0]?.id ?? null);
           }
@@ -1277,7 +1183,6 @@ export default function App() {
       },
     );
   }
-
   function createDirectRoom(connection: HermesConnection) {
     const existing = rooms.find((room) => room.kind === 'direct' && room.members[0]?.connectionId === connection.id);
     if (existing) {
@@ -3730,7 +3635,7 @@ ${content}`)]);
     return new LaphinySyncClient(syncConfig);
   }
 
-  function buildSyncSnapshot(): SyncSnapshot {
+  function collectSyncSnapshotCollections(): SyncSnapshotCollections {
     return {
       connections,
       rooms,
@@ -3740,8 +3645,11 @@ ${content}`)]);
       delegationTasks,
       teamTemplates,
       profileVersions,
-      updatedAt: new Date().toISOString(),
     };
+  }
+
+  function buildSyncSnapshot(): SyncSnapshot {
+    return buildSyncSnapshotData(collectSyncSnapshotCollections());
   }
 
   function applySyncSnapshot(snapshot: SyncSnapshot) {
@@ -3793,14 +3701,8 @@ ${content}`)]);
     }
   }
 
-  function buildAppBackup(): LaphinyBackup {
-    return {
-      version: 5,
-      exportedAt: new Date().toISOString(),
-      ...buildSyncSnapshot(),
-      syncConfig,
-      diagnosticLogs,
-    };
+  function buildAppBackup() {
+    return buildAppBackupData(collectSyncSnapshotCollections(), syncConfig, diagnosticLogs);
   }
 
   async function exportAppBackup() {

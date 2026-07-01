@@ -4,12 +4,9 @@ import type {
   ChatMessage,
   CollaborationEvent,
   DelegationTask,
-  DiagnosticLogEntry,
   Room,
   RoomMember,
   SquareEvent,
-  SyncConfig,
-  SyncSnapshot,
   TeamTemplate,
 } from '../types';
 import type { GoalModeCommand } from '../lib/goal_mode';
@@ -49,18 +46,6 @@ export type MessageSearchResult = {
   room: Room;
   message: ChatMessage;
   snippet: string;
-};
-
-export type LaphinyBackup = SyncSnapshot & {
-  version: 5;
-  exportedAt: string;
-  syncConfig: SyncConfig;
-  diagnosticLogs: DiagnosticLogEntry[];
-};
-
-export type RestoredBackup = SyncSnapshot & {
-  syncConfig?: SyncConfig;
-  diagnosticLogs?: DiagnosticLogEntry[];
 };
 
 export type StorageBackendInfo = {
