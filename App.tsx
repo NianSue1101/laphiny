@@ -76,7 +76,6 @@ import {
   buildChatHistory,
   buildChatHistoryForDelegation,
   buildChatHistoryForSequentialTurn,
-  buildSummaryMessages,
 } from './src/app/chat_history';
 import { getDelegationTaskStatusStyle, getGoalPlanItemStatusStyle, styles } from './src/app/app_styles';
 import {
@@ -140,8 +139,9 @@ const NOTIFICATION_CHANNEL_ID = 'laphiny-agent-replies';
 import { pickDocuments, pickImages } from './src/lib/attachments';
 import { summarizeAgentProfile } from './src/lib/agent_profile';
 import { buildAgentPermissionDecisionPrompt, getAgentPermissionKey } from './src/lib/agent_permissions';
-import { extractAgentReplyArtifacts, getAgentReplyFallback, getRenderableMessageArtifacts } from './src/lib/chat_rendering';
-import { COLLABORATION_RITUALS, buildRitualConsensusMessages, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
+import { getRenderableMessageArtifacts } from './src/lib/chat_rendering';
+import { runHermesMemberCompletion } from './src/lib/chat_runtime';
+import { COLLABORATION_RITUALS, type CollaborationRitualId, type ParsedCollaborationRitual } from './src/lib/collaboration_rituals';
 import {
   mergeImportedConnections,
   normalizeConnectionForm,
@@ -166,11 +166,18 @@ import {
 import { getSendTargets, type SendTargetSelection } from './src/lib/chat_targets';
 import { resolveAssistantDelegations } from './src/lib/mentions';
 import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText, stripRoomStatePatchBlocks, summarizeRoomGrowth } from './src/lib/room_growth';
-import { buildRoomMemoryMessages, parseRoomMemoryResponse, summarizeRoomMemory } from './src/lib/room_memory';
+import { summarizeRoomMemory } from './src/lib/room_memory';
+import {
+  generateRitualConsensusContent,
+  generateRoleplayArchiveDraft,
+  generateRoomMemoryCapsuleDraft,
+  generateRoomSummaryContent,
+  makeRoomSummary,
+} from './src/lib/room_ai_runtime';
 import { getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand, summarizeRoleplayConfig } from './src/lib/roleplay';
 import { buildRoomReplyNotification, type RoomReplyNotification } from './src/lib/room_reply_notifications';
 import { buildSoulDailyDigest } from './src/lib/square_insights';
-import { buildOnboardingSteps, buildRoleplayArchiveMessages, buildSoulRelations, buildTaskBoard, getRoomModeDefinition, makeDefaultRoleplayArchive, parseRoleplayArchiveResponse, summarizeRoleplayArchive, type StarterRoomTemplate } from './src/lib/stage4_plus';
+import { buildOnboardingSteps, buildSoulRelations, buildTaskBoard, getRoomModeDefinition, makeDefaultRoleplayArchive, summarizeRoleplayArchive, type StarterRoomTemplate } from './src/lib/stage4_plus';
 import { getSlashCommandSuggestions, getUxCommandKindLabel, type UXCommandDefinition } from './src/lib/ux';
 import { LaphinySyncClient } from './src/lib/sync_client';
 import { buildSyncConflictReport, type SyncConflictReport } from './src/lib/sync_conflicts';
@@ -181,6 +188,7 @@ import {
   type SyncSnapshotCollections,
 } from './src/lib/sync_snapshot';
 import { LaphinyFeedbackClient } from './src/lib/feedback_client';
+import { useStreamRegistry } from './src/hooks/useStreamRegistry';
 import {
   loadAppPreferences,
   loadConnections,
@@ -247,8 +255,6 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('chat');
   const [draft, setDraft] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
-  const [activeStreamIds, setActiveStreamIds] = useState<Record<string, true>>({});
-  const [stoppingStreamIds, setStoppingStreamIds] = useState<Record<string, true>>({});
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
   const [groupMemberDraftIds, setGroupMemberDraftIds] = useState<string[]>([]);
   const [quickCommandsOpen, setQuickCommandsOpen] = useState(false);
@@ -299,9 +305,6 @@ export default function App() {
   const messageListSignatureRef = useRef<MessageListSignature>({ roomId: null, messageCount: 0, lastMessageId: null });
   const autoPullingSyncRef = useRef(false);
   const lastAutoPullSyncAtRef = useRef(0);
-  const streamControllersRef = useRef<Record<string, AbortController>>({});
-  const streamFlushTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const streamBuffersRef = useRef<Record<string, string>>({});
   const saveMessagesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const replyNotificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const delayedGoalMessageIdsRef = useRef<Set<string>>(new Set());
@@ -314,6 +317,17 @@ export default function App() {
   const mobileDetailsTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const pollingSquareEventsRef = useRef(false);
   const { width, height } = useWindowDimensions();
+  const {
+    activeStreamIds,
+    stoppingStreamIds,
+    cleanupAllStreams,
+    cleanupStream,
+    flushStreamMessage,
+    queueStreamMessageUpdate,
+    registerStreamController,
+    setStreamActive,
+    stopMessage,
+  } = useStreamRegistry(updateMessageInRoom);
   const maxWindowHeightRef = useRef(height);
   const isDarkMode = appPreferences.themeMode === 'dark';
   const selectedFontFamily = appPreferences.fontFamily === 'lxgw-wenkai' && fontsLoaded ? 'LXGWWenKai' : undefined;
@@ -483,11 +497,7 @@ export default function App() {
       if (replyNotificationTimerRef.current) {
         clearTimeout(replyNotificationTimerRef.current);
       }
-      for (const timer of Object.values(streamFlushTimersRef.current)) {
-        clearTimeout(timer);
-      }
-      streamFlushTimersRef.current = {};
-      streamBuffersRef.current = {};
+      cleanupAllStreams();
     };
   }, []);
 
@@ -1551,35 +1561,6 @@ export default function App() {
     void continueAgentAfterPermission(room, member, { ...message, permissionRequest: nextRequest }, decision);
   }
 
-  function setStreamActive(messageId: string, active: boolean) {
-    setActiveStreamIds((current) => {
-      if (active) return { ...current, [messageId]: true };
-      const next = { ...current };
-      delete next[messageId];
-      return next;
-    });
-  }
-
-  function flushStreamMessage(roomId: string, messageId: string) {
-    const content = streamBuffersRef.current[messageId];
-    if (content === undefined) return;
-    delete streamBuffersRef.current[messageId];
-    const timer = streamFlushTimersRef.current[messageId];
-    if (timer) {
-      clearTimeout(timer);
-      delete streamFlushTimersRef.current[messageId];
-    }
-    updateMessageInRoom(roomId, messageId, { content });
-  }
-
-  function queueStreamMessageUpdate(roomId: string, messageId: string, content: string) {
-    streamBuffersRef.current[messageId] = content;
-    if (streamFlushTimersRef.current[messageId]) return;
-    streamFlushTimersRef.current[messageId] = setTimeout(() => {
-      flushStreamMessage(roomId, messageId);
-    }, 80);
-  }
-
   function toggleTargetSelection(connectionId: string) {
     setSelectedTargetIds((current) => (
       current.includes(connectionId)
@@ -1592,12 +1573,6 @@ export default function App() {
     if (!selectedRoom) return;
     const enabledMemberIds = selectedRoom.members.filter((member) => member.enabled).map((member) => member.connectionId);
     setSelectedTargetIds((current) => (current.length === enabledMemberIds.length ? [] : enabledMemberIds));
-  }
-
-  function stopMessage(messageId: string) {
-    if (!streamControllersRef.current[messageId]) return;
-    setStoppingStreamIds((current) => ({ ...current, [messageId]: true }));
-    streamControllersRef.current[messageId]?.abort();
   }
 
   function resolveSendTargets(room: Room, rawText: string, explicitTargetIds = selectedTargetIds): SendTargetSelection {
@@ -1625,7 +1600,7 @@ export default function App() {
     }
 
     const controller = new AbortController();
-    streamControllersRef.current[placeholderId] = controller;
+    registerStreamController(placeholderId, controller);
     setStreamActive(placeholderId, true);
     const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
 
@@ -1633,25 +1608,20 @@ export default function App() {
     updateMessageInRoom(room.id, placeholderId, { content: '', status: 'running', error: undefined });
 
     try {
-      const client = new HermesClient(connection);
-      const shouldStream = shouldStreamHermesReplies();
-      streamedText = await runHermesCompletion(client, {
-        request: {
-          model: connection.model,
-          messages: buildChatHistory(previousMessages, room, member, text, attachments, connections, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT),
-        },
+      const reply = await runHermesMemberCompletion({
+        connection,
+        messages: buildChatHistory(previousMessages, room, member, text, attachments, connections, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT),
         sessionId: room.sessionIds[connection.id],
         sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
         timeoutMs: 120_000,
         signal: controller.signal,
-        stream: shouldStream,
         onChunk: (content) => queueStreamMessageUpdate(room.id, placeholderId, content),
       });
+      streamedText = reply.rawText;
 
       flushStreamMessage(room.id, placeholderId);
-      const parsedReply = extractAgentReplyArtifacts(streamedText.trim());
-      const permissionRequest = applyAlwaysPermissionIfNeeded(parsedReply.permissionRequest);
-      const answer = getAgentReplyFallback({ ...parsedReply, permissionRequest });
+      const permissionRequest = applyAlwaysPermissionIfNeeded(reply.permissionRequest);
+      const answer = permissionRequest ? reply.content || permissionRequest.body : reply.content;
       const completedMessage: ChatMessage = {
         id: placeholderId,
         roomId: room.id,
@@ -1659,14 +1629,14 @@ export default function App() {
         authorId: member.connectionId,
         authorName: member.alias,
         content: answer,
-        attachments: parsedReply.attachments.length ? parsedReply.attachments : undefined,
+        attachments: reply.attachments.length ? reply.attachments : undefined,
         permissionRequest,
         status: 'sent',
         createdAt: new Date().toISOString(),
       };
       updateMessageInRoom(room.id, placeholderId, {
         content: answer,
-        attachments: parsedReply.attachments.length ? parsedReply.attachments : undefined,
+        attachments: reply.attachments.length ? reply.attachments : undefined,
         permissionRequest,
         status: 'sent',
       });
@@ -1689,19 +1659,7 @@ export default function App() {
         content: streamedText.trim() || '发送失败',
       });
     } finally {
-      delete streamControllersRef.current[placeholderId];
-      delete streamBuffersRef.current[placeholderId];
-      const timer = streamFlushTimersRef.current[placeholderId];
-      if (timer) {
-        clearTimeout(timer);
-        delete streamFlushTimersRef.current[placeholderId];
-      }
-      setStreamActive(placeholderId, false);
-      setStoppingStreamIds((current) => {
-        const next = { ...current };
-        delete next[placeholderId];
-        return next;
-      });
+      cleanupStream(placeholderId);
       await releaseBackgroundAgentTask();
     }
   }
@@ -1920,7 +1878,7 @@ export default function App() {
       }
 
       const controller = new AbortController();
-      streamControllersRef.current[placeholder.id] = controller;
+      registerStreamController(placeholder.id, controller);
       setStreamActive(placeholder.id, true);
       const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
       updateMessageInRoom(room.id, placeholder.id, { status: 'running', content: '', error: undefined });
@@ -2003,30 +1961,25 @@ export default function App() {
           meta: { mode, depth: reply.depth, attachments: reply.attachments.length, promptMessages: promptMessagesCount },
         });
 
-        const client = new HermesClient(connection);
-        const shouldStream = shouldStreamHermesReplies();
-        accumulated = await runHermesCompletion(client, {
-          request: {
-            model: connection.model,
-            messages: historyMessages,
-          },
+        const replyResult = await runHermesMemberCompletion({
+          connection,
+          messages: historyMessages,
           sessionId: room.sessionIds[connection.id],
           sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
-          stream: shouldStream,
           onChunk: (content) => queueStreamMessageUpdate(room.id, placeholder.id, content),
         });
+        accumulated = replyResult.rawText;
 
         flushStreamMessage(room.id, placeholder.id);
-        const parsedReply = extractAgentReplyArtifacts(accumulated.trim());
-        const permissionRequest = applyAlwaysPermissionIfNeeded(parsedReply.permissionRequest);
-        const rawAnswer = getAgentReplyFallback({ ...parsedReply, permissionRequest });
+        const permissionRequest = applyAlwaysPermissionIfNeeded(replyResult.permissionRequest);
+        const rawAnswer = permissionRequest ? replyResult.content || permissionRequest.body : replyResult.content;
         const answer = stripRoomStatePatchBlocks(rawAnswer) || rawAnswer;
         const completedMessage: ChatMessage = {
           ...placeholder,
           content: answer,
-          attachments: parsedReply.attachments.length ? parsedReply.attachments : undefined,
+          attachments: replyResult.attachments.length ? replyResult.attachments : undefined,
           permissionRequest,
           status: 'sent',
         };
@@ -2187,19 +2140,7 @@ export default function App() {
           meta: { mode, depth: reply.depth, promptMessages: promptMessagesCount },
         });
       } finally {
-        delete streamControllersRef.current[placeholder.id];
-        delete streamBuffersRef.current[placeholder.id];
-        const timer = streamFlushTimersRef.current[placeholder.id];
-        if (timer) {
-          clearTimeout(timer);
-          delete streamFlushTimersRef.current[placeholder.id];
-        }
-        setStreamActive(placeholder.id, false);
-        setStoppingStreamIds((current) => {
-          const next = { ...current };
-          delete next[placeholder.id];
-          return next;
-        });
+        cleanupStream(placeholder.id);
         await releaseBackgroundAgentTask();
       }
     };
@@ -2665,18 +2606,12 @@ export default function App() {
     const requestId = makeId('rpArchive');
     const startedAt = Date.now();
     try {
-      const client = new HermesClient(connection);
-      const response = await client.chatCompletion({
-        model: connection.model,
-        messages: buildRoleplayArchiveMessages(selectedRoom, messages),
-        stream: false,
-      }, {
-        sessionId: `laphiny-rp-archive-${selectedRoom.id}`,
-        sessionKey: selectedRoom.memberSessionKeys?.[connection.id] ?? selectedRoom.sessionKey,
-        timeoutMs: 90_000,
+      const archive = await generateRoleplayArchiveDraft({
+        room: selectedRoom,
+        connection,
+        messages,
+        fallback,
       });
-      const text = response.choices?.[0]?.message?.content ?? '';
-      const archive = parseRoleplayArchiveResponse(text, fallback);
       updateSelectedRoomRoleplay({ archive });
       appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, `RP 剧本档案已更新（v${archive.version}）：${summarizeRoleplayArchive(archive)}`)]);
       appendCollaborationEvent({
@@ -2909,28 +2844,21 @@ export default function App() {
     const requestId = makeId('summary');
     const startedAt = Date.now();
     try {
-      const client = new HermesClient(connection);
-      const history = buildSummaryMessages(selectedRoom, summaryMember, messages, connections, selectedRoom.contextLimit ?? DEFAULT_CONTEXT_LIMIT);
-      const response = await client.chatCompletion({
-        model: connection.model,
-        messages: history,
-        stream: false,
-      }, {
-        sessionId: `laphiny-summary-${selectedRoom.id}`,
-        sessionKey: selectedRoom.memberSessionKeys?.[connection.id] ?? selectedRoom.sessionKey,
-        timeoutMs: 90_000,
+      const content = await generateRoomSummaryContent({
+        room: selectedRoom,
+        member: summaryMember,
+        connection,
+        messages,
+        connections,
+        contextLimit: selectedRoom.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
       });
-      const content = response.choices?.[0]?.message?.content?.trim() || '没有生成总结。';
-      const summary = {
+      const summary = makeRoomSummary({
         id: makeId('summary'),
-        roomId: selectedRoom.id,
-        authorConnectionId: summaryMember.connectionId,
-        authorName: summaryMember.alias,
+        room: selectedRoom,
+        member: summaryMember,
         content,
         sourceMessageCount: messages.length,
-        createdAt: new Date().toISOString(),
-      };
-      updateSelectedRoom({ lastSummary: summary });
+      });      updateSelectedRoom({ lastSummary: summary });
       appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, `本轮共识总结（${summaryMember.alias}）：
 ${content}`)]);
       appendCollaborationEvent({
@@ -2991,27 +2919,20 @@ ${content}`)]);
     const requestId = makeId('ritual');
     const startedAt = Date.now();
     try {
-      const client = new HermesClient(connection);
-      const response = await client.chatCompletion({
-        model: connection.model,
-        messages: buildRitualConsensusMessages({ ritual, room, transcript, summaryMember }),
-        stream: false,
-      }, {
-        sessionId: `laphiny-ritual-${room.id}`,
-        sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
-        timeoutMs: 90_000,
+      const content = await generateRitualConsensusContent({
+        room,
+        ritual,
+        member: summaryMember,
+        connection,
+        transcript,
       });
-      const content = response.choices?.[0]?.message?.content?.trim() || '没有生成仪式共识。';
-      const summary = {
+      const summary = makeRoomSummary({
         id: makeId('summary'),
-        roomId: room.id,
-        authorConnectionId: summaryMember.connectionId,
-        authorName: summaryMember.alias,
+        room,
+        member: summaryMember,
         content,
         sourceMessageCount: agentMessages.length,
-        createdAt: new Date().toISOString(),
-      };
-      updateRoomById(room.id, { lastSummary: summary });
+      });      updateRoomById(room.id, { lastSummary: summary });
       appendMessagesToRoom(room.id, [makeLocalNotice(room.id, `${ritual.definition.label}最终共识（${summaryMember.alias}）：\n${content}`)]);
       appendCollaborationEvent({
         kind: 'ritual_completed',
@@ -3074,23 +2995,13 @@ ${content}`)]);
     const requestId = makeId('memory');
     const startedAt = Date.now();
     try {
-      const client = new HermesClient(connection);
-      const response = await client.chatCompletion({
-        model: connection.model,
-        messages: buildRoomMemoryMessages(selectedRoom, memoryMember, messages),
-        stream: false,
-      }, {
-        sessionId: `laphiny-memory-${selectedRoom.id}`,
-        sessionKey: selectedRoom.memberSessionKeys?.[connection.id] ?? selectedRoom.sessionKey,
-        timeoutMs: 90_000,
-      });
-      const text = response.choices?.[0]?.message?.content ?? '';
-      const previousVersion = selectedRoom.memoryCapsule?.version ?? 0;
-      const capsule: RoomMemoryCapsule = {
-        ...parseRoomMemoryResponse(text, selectedRoom.id, memoryMember.alias),
-        version: previousVersion + 1,
-      };
-      updateSelectedRoom({ pendingMemoryCapsule: capsule });
+      const capsule = await generateRoomMemoryCapsuleDraft({
+        room: selectedRoom,
+        member: memoryMember,
+        connection,
+        messages,
+        previousVersion: selectedRoom.memoryCapsule?.version ?? 0,
+      });      updateSelectedRoom({ pendingMemoryCapsule: capsule });
       appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, `房间记忆草案已生成（v${capsule.version}），请在房间工具里确认后再沉淀：\n${summarizeRoomMemory(capsule)}`)]);
       appendCollaborationEvent({
         kind: 'memory_updated',
@@ -3433,7 +3344,7 @@ ${content}`)]);
 
     for (const message of roomMessages.slice(messageIndex + 1)) {
       if (message.status === 'running') {
-        streamControllersRef.current[message.id]?.abort();
+        stopMessage(message.id);
       }
     }
 
