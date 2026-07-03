@@ -1,6 +1,5 @@
 import { Alert, Platform } from 'react-native';
 
-import { sanitizeDiagnosticLogs } from '../lib/diagnostics';
 import type { SyncConflictItem } from '../lib/sync_conflicts';
 import type {
   AgentProfileVersion,
@@ -12,12 +11,10 @@ import type {
   Room,
   RoomMember,
   SquareEvent,
-  SyncConfig,
-  SyncSnapshot,
   TeamTemplate,
 } from '../types';
 import { DEFAULT_CONTEXT_LIMIT, MAX_DELEGATION_DEPTH, STATUS_LABELS } from '../config/app_config';
-import type { IconName, RestoredBackup, ServiceWorkerStatus } from './app_types';
+import type { IconName, ServiceWorkerStatus } from './app_types';
 
 export function makeId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -231,31 +228,6 @@ export function requestConfirm(title: string, message: string, onConfirm: () => 
     { text: '取消', style: 'cancel' },
     { text: '确认', style: 'destructive', onPress: onConfirm },
   ]);
-}
-
-export function normalizeBackupSnapshot(value: unknown): RestoredBackup | null {
-  if (!value || typeof value !== 'object') return null;
-  const raw = value as Partial<SyncSnapshot>;
-  if (!Array.isArray(raw.connections) || !Array.isArray(raw.rooms) || !raw.messagesByRoom || typeof raw.messagesByRoom !== 'object') {
-    return null;
-  }
-  const rawRecord = value as Record<string, unknown>;
-  const syncConfig = rawRecord.syncConfig && typeof rawRecord.syncConfig === 'object'
-    ? rawRecord.syncConfig as SyncConfig
-    : undefined;
-  return {
-    connections: raw.connections,
-    rooms: raw.rooms,
-    messagesByRoom: raw.messagesByRoom as Record<string, ChatMessage[]>,
-    squareEvents: Array.isArray(raw.squareEvents) ? raw.squareEvents : [],
-    collaborationEvents: Array.isArray(rawRecord.collaborationEvents) ? rawRecord.collaborationEvents as CollaborationEvent[] : [],
-    delegationTasks: Array.isArray(rawRecord.delegationTasks) ? rawRecord.delegationTasks as DelegationTask[] : [],
-    teamTemplates: Array.isArray(rawRecord.teamTemplates) ? rawRecord.teamTemplates as TeamTemplate[] : [],
-    profileVersions: Array.isArray(rawRecord.profileVersions) ? rawRecord.profileVersions as AgentProfileVersion[] : [],
-    diagnosticLogs: sanitizeDiagnosticLogs(rawRecord.diagnosticLogs),
-    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
-    syncConfig,
-  };
 }
 
 export function buildSearchSnippet(message: ChatMessage, query: string): string {

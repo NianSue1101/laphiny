@@ -4,17 +4,12 @@ import type {
   ChatMessage,
   CollaborationEvent,
   DelegationTask,
-  DiagnosticLogEntry,
   Room,
   RoomMember,
   SquareEvent,
-  SyncConfig,
-  SyncSnapshot,
   TeamTemplate,
 } from '../types';
-import type { ParsedCollaborationRitual } from '../lib/collaboration_rituals';
 import type { GoalModeCommand } from '../lib/goal_mode';
-import type { ParsedRoleplayCommand } from '../lib/roleplay';
 
 export type Tab = 'chat' | 'connections' | 'rooms' | 'square' | 'settings';
 export type IconName = string;
@@ -25,17 +20,6 @@ export type QuickCommand = {
   icon: IconName;
   targetAlias: string;
   prompt: string;
-};
-
-export type CollaborationMode = 'parallel' | 'sequential';
-
-export type SendTargetSelection = {
-  targets: RoomMember[];
-  textForHermes: string;
-  mode: CollaborationMode;
-  ritual?: ParsedCollaborationRitual;
-  goalMode?: GoalModeCommand;
-  roleplayCommand?: ParsedRoleplayCommand;
 };
 
 export type ScheduledReply = {
@@ -62,18 +46,6 @@ export type MessageSearchResult = {
   room: Room;
   message: ChatMessage;
   snippet: string;
-};
-
-export type LaphinyBackup = SyncSnapshot & {
-  version: 5;
-  exportedAt: string;
-  syncConfig: SyncConfig;
-  diagnosticLogs: DiagnosticLogEntry[];
-};
-
-export type RestoredBackup = SyncSnapshot & {
-  syncConfig?: SyncConfig;
-  diagnosticLogs?: DiagnosticLogEntry[];
 };
 
 export type StorageBackendInfo = {

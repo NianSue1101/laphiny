@@ -44,3 +44,13 @@ Windows 和 Unix 都通过 `scripts/run-gradle.mjs` 调用 Gradle wrapper。
 ## 协作提示
 
 群聊中每个成员收到的 system prompt 由 `src/app/chat_history.ts` 构造。修改群聊、委托或协作行为时，优先调整那里和对应的 `src/lib/*` 纯逻辑模块，并补充测试。
+
+## App.tsx 模块划分
+
+`App.tsx` 只作为应用壳、全局状态编排和顶层导航入口。后续新增或大改功能时，不要把整块 UI、业务流程或纯逻辑继续塞进 `App.tsx`。
+
+- 页面级 UI 放到 `src/components/<feature>/`，例如 `connections/`、`rooms/`、`settings/`、`square/`。
+- 可复用业务逻辑放到 `src/lib/*`，并优先补充 `tests/*.test.ts`。
+- App 状态派生、常量、样式和类型分别放到 `src/app/*`、`src/config/*`、`src/app/app_styles.ts`、`src/app/app_types.ts`。
+- 单个功能如果需要多个回调，先用 feature 组件接住 props；当 props 继续膨胀时，再抽 feature hook，而不是回退到 `App.tsx` 内联实现。
+- 修改聊天、房间、连接、同步、灵庭等功能时，优先寻找已有 feature 目录；没有目录时先创建目录，再接入 `App.tsx`。
