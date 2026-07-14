@@ -63,6 +63,7 @@ import { useConnectionRuntime } from './src/hooks/useConnectionRuntime';
 import { useChatDispatchRuntime } from './src/hooks/useChatDispatchRuntime';
 import { useDownloadRuntime } from './src/hooks/useDownloadRuntime';
 import { useAppPersistence } from './src/hooks/useAppPersistence';
+import { useMessageHistoryRuntime } from './src/hooks/useMessageHistoryRuntime';
 import { useAppUiEffects } from './src/hooks/useAppUiEffects';
 import { usePwaRuntime } from './src/hooks/usePwaRuntime';
 import { useRoomAiRuntime } from './src/hooks/useRoomAiRuntime';
@@ -352,6 +353,20 @@ export default function App() {
   const lastEditableUserMessage = [...selectedMessages].reverse().find((message) => message.authorId === 'user') ?? null;
   const normalizedSearchQuery = messageSearchQuery.trim().toLowerCase();
   const {
+    historyByRoom,
+    historySearchError,
+    loadEarlierMessages,
+    searchingFullHistory,
+    searchMessagesByRoom,
+  } = useMessageHistoryRuntime({
+    hydrated,
+    normalizedSearchQuery,
+    setMessagesByRoom,
+  });
+  const messageSearchSourceByRoom = useMemo(() => (
+    searchMessagesByRoom ? mergeMessagesByRoom(searchMessagesByRoom, messagesByRoom) : messagesByRoom
+  ), [messagesByRoom, searchMessagesByRoom]);
+  const {
     groupMemberDraftIds,
     groupName,
     attachDocuments,
@@ -497,7 +512,7 @@ export default function App() {
     if (!normalizedSearchQuery) return [] as MessageSearchResult[];
     const results: MessageSearchResult[] = [];
     for (const room of rooms) {
-      for (const message of messagesByRoom[room.id] ?? []) {
+      for (const message of messageSearchSourceByRoom[room.id] ?? []) {
         const haystack = [room.name, message.authorName, message.content, ...(message.attachments?.map((attachment) => attachment.name) ?? [])]
           .join('\n')
           .toLowerCase();
@@ -511,14 +526,14 @@ export default function App() {
       }
     }
     return results.sort((a, b) => b.message.createdAt.localeCompare(a.message.createdAt)).slice(0, 50);
-  }, [messagesByRoom, rooms, normalizedSearchQuery, messageSearchQuery]);
+  }, [messageSearchSourceByRoom, rooms, normalizedSearchQuery, messageSearchQuery]);
   const selectedSearchMessageIds = useMemo(() => new Set(
     messageSearchResults
       .filter((result) => result.room.id === selectedRoomId)
       .map((result) => result.message.id),
   ), [messageSearchResults, selectedRoomId]);
   const visibleSelectedMessages = normalizedSearchQuery
-    ? selectedMessages.filter((message) => selectedSearchMessageIds.has(message.id))
+    ? (messageSearchSourceByRoom[selectedRoomId ?? ''] ?? selectedMessages).filter((message) => selectedSearchMessageIds.has(message.id))
     : selectedMessages;
   const latestVisibleMessage = visibleSelectedMessages.length > 0
     ? visibleSelectedMessages[visibleSelectedMessages.length - 1] ?? null
@@ -1291,6 +1306,8 @@ export default function App() {
             getGoalPlanItemStatusStyle,
             handleMessagesContentSizeChange,
             handleMessagesScroll,
+            historyByRoom,
+            historySearchError,
             insertMention,
             insertUxCommand,
             isDarkMode,
@@ -1311,6 +1328,7 @@ export default function App() {
             mobileFocusedRoomId,
             mobileRoomDetailsOpen,
             normalizedSearchQuery,
+            loadEarlierMessages,
             openFocusedChatRoom,
             openRoomManagement,
             pendingAttachments,
@@ -1345,6 +1363,7 @@ export default function App() {
             selectedTaskBoard,
             selectAllTargets,
             sending,
+            searchingFullHistory,
             sendMessage,
             saveSelectedRoomAsTeamTemplate,
             setBlackboardDraft,

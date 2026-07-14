@@ -1131,6 +1131,24 @@ export const styles = StyleSheet.create({
   messageBubbleWide: {
     maxWidth: 760,
   },
+  historyLoader: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#ddd6fe',
+    backgroundColor: '#f5f3ff',
+  },
+  historyLoaderText: {
+    color: '#6d28d9',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   reasoningPanel: {
     marginTop: 10,
     paddingTop: 8,
