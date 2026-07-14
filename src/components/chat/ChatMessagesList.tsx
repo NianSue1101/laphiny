@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 
 import type { ChatMessage, Room } from '../../types';
+import { shouldAutoLoadOlderMessages } from '../../lib/message_search';
 import { EmptyState } from '../Primitives';
 
 type Styles = Record<string, any>;
@@ -22,11 +23,13 @@ interface ChatMessagesListProps {
   TextComponent: ComponentType<TextProps>;
   hasOlderMessages: boolean;
   loadingOlderMessages: boolean;
+  historyError?: string | null;
   renderMessageBubble: (message: ChatMessage) => ReactElement;
   onContentSizeChange: () => void;
   onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onOpenRoomsTab: () => void;
   onLoadOlderMessages: () => void;
+  onRetryHistory: () => void;
 }
 
 export function ChatMessagesList({
@@ -38,11 +41,13 @@ export function ChatMessagesList({
   TextComponent: Text,
   hasOlderMessages,
   loadingOlderMessages,
+  historyError,
   renderMessageBubble,
   onContentSizeChange,
   onScroll,
   onOpenRoomsTab,
   onLoadOlderMessages,
+  onRetryHistory,
 }: ChatMessagesListProps) {
   return (
     <FlatList
@@ -52,22 +57,36 @@ export function ChatMessagesList({
       style={styles.messages}
       contentContainerStyle={styles.messagesContent}
       onContentSizeChange={onContentSizeChange}
-      onScroll={onScroll}
+      onScroll={(event) => {
+        onScroll(event);
+        if (shouldAutoLoadOlderMessages({
+          offsetY: event.nativeEvent.contentOffset.y,
+          hasOlderMessages,
+          loading: loadingOlderMessages,
+          searching: Boolean(normalizedSearchQuery || historyError),
+        })) {
+          onLoadOlderMessages();
+        }
+      }}
       scrollEventThrottle={80}
       initialNumToRender={18}
       maxToRenderPerBatch={10}
       updateCellsBatchingPeriod={50}
       windowSize={7}
       maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-      ListHeaderComponent={room && !normalizedSearchQuery && hasOlderMessages ? (
+      ListHeaderComponent={room && !normalizedSearchQuery && (hasOlderMessages || historyError) ? (
         <TouchableOpacity
           style={styles.historyLoader}
-          onPress={onLoadOlderMessages}
+          onPress={historyError ? onRetryHistory : onLoadOlderMessages}
           disabled={loadingOlderMessages}
         >
           {loadingOlderMessages ? <ActivityIndicator size="small" color="#6d28d9" /> : null}
           <Text style={styles.historyLoaderText}>
-            {loadingOlderMessages ? '正在加载更早消息…' : '加载更早消息'}
+            {loadingOlderMessages
+              ? '正在加载更早消息…'
+              : historyError
+                ? `历史读取失败，点此重试：${historyError}`
+                : '加载更早消息（接近顶部也会自动加载）'}
           </Text>
         </TouchableOpacity>
       ) : null}

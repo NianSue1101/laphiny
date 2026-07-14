@@ -21,7 +21,6 @@ import { Ionicons } from './src/components/SafeIcon';
 import { getDelegationTaskStatusStyle, getGoalPlanItemStatusStyle, styles } from './src/app/app_styles';
 import {
   buildSearchSnippet,
-  findPreviousUserMessageIndex,
   formatBytes,
   getErrorMessage,
   makeAssistantPlaceholder,
@@ -50,10 +49,13 @@ Notifications.setNotificationHandler({
 });
 
 import { buildAgentPermissionDecisionPrompt, getAgentPermissionKey } from './src/lib/agent_permissions';
+import { resolveChatRetryRequest } from './src/lib/chat_retry';
 import { COLLABORATION_RITUALS, type CollaborationRitualId } from './src/lib/collaboration_rituals';
 import { parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
-import { buildGoalMemoryCapsule, getGoalStatusFromSignal, mergeGoalPlanItems } from './src/lib/goal_session';
+import { buildGoalMemoryCapsule } from './src/lib/goal_session';
+import { applyGoalAssistantReview, collectGoalDelegationEvidence } from './src/lib/goal_state_machine';
 import { summarizeRoomGrowth } from './src/lib/room_growth';
+import { summarizeActiveAgentStreams } from './src/lib/stream_events';
 import { makeDefaultRoleplayConfig } from './src/lib/roleplay';
 import { buildOnboardingSteps, buildSoulRelations, buildTaskBoard, getRoomModeDefinition } from './src/lib/stage4_plus';
 import { getSlashCommandSuggestions, type UXCommandDefinition } from './src/lib/ux';
@@ -131,18 +133,23 @@ export default function App() {
   const selectedRoomIdRef = useRef<string | null>(selectedRoomId);
   const tabRef = useRef<Tab>(tab);
   const roomsRef = useRef<Room[]>(rooms);
+  const delegationTasksRef = useRef<DelegationTask[]>(delegationTasks);
   const mobileDetailsTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const pollingSquareEventsRef = useRef(false);
   const { width, height } = useWindowDimensions();
   const {
     activeStreamIds,
+    recentStreamEvents,
     stoppingStreamIds,
+    streamStates,
     cleanupAllStreams,
     cleanupStream,
     flushStreamMessage,
     queueStreamMessageUpdate,
     registerStreamController,
+    markStreamPhase,
     setStreamActive,
+    startStream,
     stopMessage,
   } = useStreamRegistry(updateMessageInRoom);
   const {
@@ -279,6 +286,7 @@ export default function App() {
   selectedRoomIdRef.current = selectedRoomId;
   tabRef.current = tab;
   roomsRef.current = rooms;
+  delegationTasksRef.current = delegationTasks;
   if (height > maxWindowHeightRef.current) {
     maxWindowHeightRef.current = height;
   }
@@ -352,17 +360,20 @@ export default function App() {
   const selectedMessages = selectedRoom ? messagesByRoom[selectedRoom.id] ?? [] : [];
   const lastEditableUserMessage = [...selectedMessages].reverse().find((message) => message.authorId === 'user') ?? null;
   const normalizedSearchQuery = messageSearchQuery.trim().toLowerCase();
-  const {
-    historyByRoom,
-    historySearchError,
-    loadEarlierMessages,
-    searchingFullHistory,
-    searchMessagesByRoom,
-  } = useMessageHistoryRuntime({
+  const messageHistoryRuntime = useMessageHistoryRuntime({
     hydrated,
     normalizedSearchQuery,
+    onStorageIssue: (title, message, roomId) => appendDiagnosticLog({
+      level: 'error',
+      category: 'storage',
+      title,
+      message,
+      roomId,
+      roomName: roomId ? rooms.find((room) => room.id === roomId)?.name : undefined,
+    }),
     setMessagesByRoom,
   });
+  const { searchMessagesByRoom } = messageHistoryRuntime;
   const messageSearchSourceByRoom = useMemo(() => (
     searchMessagesByRoom ? mergeMessagesByRoom(searchMessagesByRoom, messagesByRoom) : messagesByRoom
   ), [messagesByRoom, searchMessagesByRoom]);
@@ -491,13 +502,16 @@ export default function App() {
     generateRitualConsensus,
     messagesByRoom,
     notifyAgentReplyFinished,
+    pauseActiveGoal,
     queueStreamMessageUpdate,
     registerStreamController,
+    markStreamPhase,
     selectedTargetIds,
     setDraft,
     setPendingAttachments,
     setSelectedTargetIds,
     setStreamActive,
+    startStream,
     showRoomReplyNotification,
     updateDelegationTask,
     updateMessageInRoom,
@@ -642,6 +656,7 @@ export default function App() {
   // The dispatch runtime serializes each individual member where necessary.
   const sending = selectedMessages.some((message) => message.status === 'running');
   const totalUnread = Object.values(unreadByRoom).reduce<number>((total, count) => total + Number(count ?? 0), 0);
+  const roomStreamSummaries = useMemo(() => summarizeActiveAgentStreams(streamStates), [streamStates]);
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
   const slashCommandSuggestions = useMemo(() => getSlashCommandSuggestions(draft), [draft]);
   useAppUiEffects({
@@ -897,31 +912,19 @@ export default function App() {
   async function retryMessage(message: ChatMessage) {
     if (!selectedRoom || message.authorId === 'user' || message.authorId === 'system') return;
     if (activeStreamIds[message.id]) return;
-
-    const member = selectedRoom.members.find((item) => item.connectionId === message.authorId);
-    if (!member) {
-      showNotice('无法重试', '这个 Hermes 成员不在当前房间中。');
+    const resolution = resolveChatRetryRequest(selectedRoom, selectedMessages, message);
+    if (!resolution.ok) {
+      showNotice('无法重试', resolution.error);
       return;
     }
-
-    const messageIndex = selectedMessages.findIndex((item) => item.id === message.id);
-    const userMessageIndex = findPreviousUserMessageIndex(selectedMessages, messageIndex);
-    if (userMessageIndex < 0) {
-      showNotice('无法重试', '没有找到这条回复对应的用户消息。');
-      return;
-    }
-
-    const userMessage = selectedMessages[userMessageIndex];
-    if (!userMessage) {
-      showNotice('无法重试', '这条回复对应的用户消息已不存在。');
-      return;
-    }
-
-    // Re-dispatch the original message content through dispatchMessage
-    // which handles streaming, auto-forward, and all edge cases properly.
-    const originalText = userMessage.content.replace(/^\[附件\]$/, '');
-    const originalAttachments = userMessage.attachments ?? [];
-    await dispatchMessage(selectedRoom, originalText, originalAttachments);
+    const request = resolution.request;
+    await dispatchMessage(
+      selectedRoom,
+      request.text,
+      request.attachments,
+      request.targetConnectionIds,
+      request.retryOfMessageId,
+    );
   }
 
   function insertMention(token: string) {
@@ -986,25 +989,33 @@ export default function App() {
     }));
   }
 
+  function pauseActiveGoal(roomId: string, reason: string, messageId?: string) {
+    const now = new Date().toISOString();
+    updateActiveGoal(roomId, (goal) => ({
+      ...goal,
+      status: 'awaiting_user',
+      blockedReason: reason,
+      nextAction: '检查失败原因后重试、调整目标，或明确结束当前目标。',
+      lastMessageId: messageId ?? goal.lastMessageId,
+      updatedAt: now,
+    }));
+  }
+
   function applyGoalAssistantResult(room: Room, reply: ScheduledReply, message: ChatMessage, answer: string) {
     if (!reply.goalMode || !room.activeGoal || reply.member.connectionId !== room.activeGoal.leadConnectionId) return;
 
     const now = new Date().toISOString();
     const signal = parseGoalStatusSignal(answer);
     const parsedItems = parseGoalPlanItems(answer, room, now);
-    updateActiveGoal(room.id, (goal) => {
-      const nextStatus = getGoalStatusFromSignal(signal);
-      return {
-        ...goal,
-        round: Math.max(goal.round, reply.goalReviewRound ?? goal.round),
-        status: nextStatus,
-        statusSignal: signal ?? goal.statusSignal,
-        planItems: parsedItems.length ? mergeGoalPlanItems(goal.planItems, parsedItems) : goal.planItems,
-        lastReview: answer,
-        lastMessageId: message.id,
-        updatedAt: now,
-      };
-    });
+    updateActiveGoal(room.id, (goal) => applyGoalAssistantReview(goal, {
+      signal,
+      planItems: parsedItems,
+      evidence: collectGoalDelegationEvidence(goal.id, delegationTasksRef.current),
+      messageId: message.id,
+      conclusion: answer,
+      round: reply.goalReviewRound ?? goal.round,
+      now,
+    }));
   }
 
   function finishActiveGoal(room: Room, decision: 'finish') {
@@ -1092,10 +1103,16 @@ export default function App() {
       ...input,
       id: makeId('task'),
       status: 'pending',
+      attempts: input.attempts ?? 0,
+      evidence: input.evidence ?? [],
       createdAt: now,
       updatedAt: now,
     };
-    setDelegationTasks((current) => mergeDelegationTasks([...current, task]).slice(-200));
+    setDelegationTasks((current) => {
+      const next = mergeDelegationTasks([...current, task]).slice(-200);
+      delegationTasksRef.current = next;
+      return next;
+    });
     appendCollaborationEvent({
       kind: 'delegation_created',
       roomId: input.roomId,
@@ -1112,11 +1129,15 @@ export default function App() {
   function updateDelegationTask(taskId: string | undefined, patch: Partial<DelegationTask>) {
     if (!taskId) return;
     const now = new Date().toISOString();
-    setDelegationTasks((current) => current.map((task) => (
-      task.id === taskId
-        ? { ...task, ...patch, updatedAt: now, completedAt: patch.status === 'done' || patch.status === 'error' || patch.status === 'cancelled' ? now : task.completedAt }
-        : task
-    )));
+    setDelegationTasks((current) => {
+      const next = current.map((task) => (
+        task.id === taskId
+          ? { ...task, ...patch, updatedAt: now, completedAt: patch.status === 'done' || patch.status === 'error' || patch.status === 'cancelled' ? now : task.completedAt }
+          : task
+      ));
+      delegationTasksRef.current = next;
+      return next;
+    });
   }
 
   function makeSquareEventFromMessage(roomId: string, message: ChatMessage): SquareEvent {
@@ -1306,8 +1327,7 @@ export default function App() {
             getGoalPlanItemStatusStyle,
             handleMessagesContentSizeChange,
             handleMessagesScroll,
-            historyByRoom,
-            historySearchError,
+            messageHistoryRuntime,
             insertMention,
             insertUxCommand,
             isDarkMode,
@@ -1328,7 +1348,6 @@ export default function App() {
             mobileFocusedRoomId,
             mobileRoomDetailsOpen,
             normalizedSearchQuery,
-            loadEarlierMessages,
             openFocusedChatRoom,
             openRoomManagement,
             pendingAttachments,
@@ -1343,6 +1362,7 @@ export default function App() {
             retryMessage,
             roomDetailsCollapsed,
             roomDetailsMaxHeight,
+            roomStreamSummaries,
             roomToolsOpen,
             rooms,
             rpArchiveGenerating,
@@ -1363,7 +1383,6 @@ export default function App() {
             selectedTaskBoard,
             selectAllTargets,
             sending,
-            searchingFullHistory,
             sendMessage,
             saveSelectedRoomAsTeamTemplate,
             setBlackboardDraft,

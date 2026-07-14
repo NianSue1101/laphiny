@@ -3,6 +3,7 @@ import { TouchableOpacity, View, type TextProps } from 'react-native';
 
 import { formatTime, getStatusLabel } from '../../app/app_utils';
 import { normalizeHermesReplyText } from '../../lib/hermes_client';
+import { getAgentStreamPhaseLabel, shouldDisplayServiceReasoning } from '../../lib/stream_events';
 import type { AgentPermissionDecision, Attachment, ChatMessage } from '../../types';
 import { MarkdownText } from '../MarkdownText';
 import { AttachmentPreview, AgentAvatar, MiniButton } from '../Primitives';
@@ -90,15 +91,17 @@ export function MessageBubble({
           {isAgentMessage ? <Text style={styles.messageRoleBadge}>{getMessageRoleBadge(message)}</Text> : null}
         </View>
         <Text style={[styles.status, message.status === 'error' && styles.statusError]}>
-          {getStatusLabel(message.status)} · {formatTime(message.createdAt)}
+          {message.status === 'running' && message.streamPhase
+            ? getAgentStreamPhaseLabel(message.streamPhase)
+            : getStatusLabel(message.status)} · {formatTime(message.createdAt)}
           {message.error ? ` · ${message.error}` : ''}
         </Text>
       </View>
       <MarkdownText content={displayContent} fontFamily={selectedFontFamily} />
-      {showReasoning && message.reasoning?.trim() ? (
+      {shouldDisplayServiceReasoning(showReasoning, message.reasoning) ? (
         <View style={styles.reasoningPanel}>
           <Text style={styles.reasoningLabel}>服务端 reasoning（可选显示）</Text>
-          <MarkdownText content={message.reasoning} fontFamily={selectedFontFamily} />
+          <MarkdownText content={message.reasoning ?? ''} fontFamily={selectedFontFamily} />
         </View>
       ) : null}
       {renderable.attachments.length ? (

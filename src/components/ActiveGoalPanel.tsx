@@ -31,6 +31,7 @@ export function ActiveGoalPanel({
   const waiting = activeGoal.status === 'awaiting_user';
   const statusLabel = getGoalStatusLabel(activeGoal.status, activeGoal.statusSignal);
   const planItems = activeGoal.planItems.slice(0, 8);
+  const acceptanceCriteria = (activeGoal.acceptanceCriteria ?? []).slice(0, 6);
 
   return (
     <View style={styles.goalPanel}>
@@ -70,7 +71,21 @@ export function ActiveGoalPanel({
         </View>
       ) : <Text style={styles.help}>等待主 AI 输出结构化计划卡。</Text>}
 
+      {acceptanceCriteria.length ? (
+        <View style={styles.goalPlanList}>
+          <Text style={styles.goalMeta}>验收进度</Text>
+          {acceptanceCriteria.map((criterion) => (
+            <Text key={criterion.id} style={styles.goalAcceptance} numberOfLines={2}>
+              {criterion.status === 'passed' ? '✓' : criterion.status === 'failed' ? '!' : '○'} {criterion.text}
+              {criterion.evidenceIds.length ? ` · ${criterion.evidenceIds.length} 条证据` : ''}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
       {activeGoal.lastReview ? <Text style={styles.goalReview} numberOfLines={4}>{activeGoal.lastReview}</Text> : null}
+      {activeGoal.nextAction ? <Text style={styles.goalAcceptance} numberOfLines={3}>下一步：{activeGoal.nextAction}</Text> : null}
+      {activeGoal.blockedReason ? <Text style={styles.goalReview} numberOfLines={3}>暂停原因：{activeGoal.blockedReason}</Text> : null}
     </View>
   );
 }

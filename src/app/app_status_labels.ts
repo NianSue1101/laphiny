@@ -5,6 +5,7 @@ export function getGoalStatusLabel(status: GoalSession['status'], signal?: GoalS
   if (status === 'done') return '已结束';
   if (status === 'blocked') return '已受阻';
   if (status === 'reviewing') return '复盘中';
+  if (status === 'adjusting') return '调整中';
   if (status === 'running') return '推进中';
   if (status === 'planning') return '规划中';
   return '已取消';

@@ -93,7 +93,8 @@ export function useReplyNotifications({
 
   async function notifyAgentReplyFinished(roomId: string, message: ChatMessage, mode: 'reply' | 'goal' | 'permission' = 'reply') {
     if (Platform.OS === 'web') return;
-    if (message.authorId === 'user' || message.authorId === 'system' || message.status === 'running' || message.status === 'error') return;
+    if (message.authorId === 'user' || message.authorId === 'system' || message.status === 'running') return;
+    if (message.status === 'error' && mode !== 'goal') return;
     if (appStateRef.current === 'active') return;
     const pendingPermission = message.permissionRequest?.status === 'pending';
     if (message.permissionRequest && !pendingPermission) return;

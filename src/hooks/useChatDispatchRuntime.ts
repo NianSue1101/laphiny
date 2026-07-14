@@ -15,8 +15,10 @@ import {
 } from '../app/app_utils';
 import type { ScheduledReply } from '../app/app_types';
 import { beginBackgroundAgentTask } from '../lib/background_agent';
-import { buildGoalReviewPrompt, parseGoalCommand } from '../lib/goal_mode';
-import { getActiveGoalLeadMember, getGoalControlCommand, makeGoalSession } from '../lib/goal_session';
+import { AgentTaskScheduler } from '../lib/agent_scheduler';
+import { buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalStatusSignal } from '../lib/goal_mode';
+import { getActiveGoalLeadMember, getGoalControlCommand, makeGoalSession, mergeGoalPlanItems } from '../lib/goal_session';
+import { isGoalCompletionSupported, makeGoalProgressFingerprint } from '../lib/goal_state_machine';
 import { getSendTargets, type SendTargetSelection } from '../lib/chat_targets';
 import { resolveAssistantDelegations } from '../lib/mentions';
 import { stripRoomStatePatchBlocks } from '../lib/room_growth';
@@ -25,12 +27,12 @@ import { makeDefaultRoleplayArchive } from '../lib/stage4_plus';
 import { runHermesMemberCompletion } from '../lib/chat_runtime';
 import type { Attachment, ChatMessage, RoleplayConfig, Room, RoomMember } from '../types';
 
-const MAX_GOAL_REVIEW_ROUNDS = 3;
+const MAX_GOAL_REVIEW_ROUNDS = 5;
 const MAX_GOAL_DELEGATIONS_PER_ROUND = 3;
 
 export function useChatDispatchRuntime(options: any) {
   // Requests to the same Soul preserve order; different members remain concurrent.
-  const memberQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const schedulerRef = useRef(new AgentTaskScheduler());
   const {
     appendCollaborationEvent,
     appendDiagnosticLog,
@@ -47,8 +49,10 @@ export function useChatDispatchRuntime(options: any) {
     finishActiveGoal,
     flushStreamMessage,
     generateRitualConsensus,
+    markStreamPhase,
     messagesByRoom,
     notifyAgentReplyFinished,
+    pauseActiveGoal,
     queueStreamMessageUpdate,
     registerStreamController,
     selectedTargetIds,
@@ -56,6 +60,7 @@ export function useChatDispatchRuntime(options: any) {
     setPendingAttachments,
     setSelectedTargetIds,
     setStreamActive,
+    startStream,
     showRoomReplyNotification,
     updateDelegationTask,
     updateMessageInRoom,
@@ -79,15 +84,19 @@ export function useChatDispatchRuntime(options: any) {
     attachments: Attachment[];
     previousMessages: ChatMessage[];
   }) {
+    startStream(placeholderId, room.id, member.connectionId);
     const connection = connectionById.get(member.connectionId);
     if (!connection) {
+      markStreamPhase(placeholderId, 'failed', 'Hermes 连接不存在');
       updateMessageInRoom(room.id, placeholderId, { status: 'error', error: 'Hermes 连接不存在', content: '发送失败' });
+      cleanupStream(placeholderId);
       return;
     }
 
     const controller = new AbortController();
     registerStreamController(placeholderId, controller);
     setStreamActive(placeholderId, true);
+    markStreamPhase(placeholderId, 'connecting');
     const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
 
     let streamedText = '';
@@ -128,12 +137,14 @@ export function useChatDispatchRuntime(options: any) {
         permissionRequest,
         status: 'sent',
       });
+      markStreamPhase(placeholderId, 'completed');
       if (permissionRequest?.status === 'always') {
         void continueAgentAfterPermission(room, member, completedMessage, 'always');
       }
     } catch (error) {
       flushStreamMessage(room.id, placeholderId);
       if (isAbortError(error)) {
+        markStreamPhase(placeholderId, 'cancelled');
         updateMessageInRoom(room.id, placeholderId, {
           content: streamedText.trim() || '已停止生成',
           status: 'stopped',
@@ -141,9 +152,11 @@ export function useChatDispatchRuntime(options: any) {
         return;
       }
 
+      const errorMessage = getErrorMessage(error);
+      markStreamPhase(placeholderId, 'failed', errorMessage);
       updateMessageInRoom(room.id, placeholderId, {
         status: 'error',
-        error: getErrorMessage(error),
+        error: errorMessage,
         content: streamedText.trim() || '发送失败',
       });
     } finally {
@@ -152,7 +165,13 @@ export function useChatDispatchRuntime(options: any) {
     }
   }
 
-  async function dispatchMessage(room: Room, rawText: string, attachments: Attachment[], explicitTargetIds = selectedTargetIds) {
+  async function dispatchMessage(
+    room: Room,
+    rawText: string,
+    attachments: Attachment[],
+    explicitTargetIds = selectedTargetIds,
+    retryOfMessageId?: string,
+  ) {
     if (!rawText && attachments.length === 0) {
       return;
     }
@@ -257,7 +276,7 @@ export function useChatDispatchRuntime(options: any) {
       }
     }
 
-    const { targets, textForHermes, mode, ritual, goalMode } = sendSelection;
+    const { targets, textForHermes, mode, ritual, goalMode, ambiguity } = sendSelection;
     const goalLeadMember = goalMode ? targets[0] : undefined;
     const userMessage: ChatMessage = {
       id: makeId('msg'),
@@ -268,6 +287,7 @@ export function useChatDispatchRuntime(options: any) {
       content: rawText || '[附件]',
       attachments,
       status: 'sent',
+      retryOfMessageId,
       createdAt: now,
     };
 
@@ -293,7 +313,9 @@ export function useChatDispatchRuntime(options: any) {
     });
 
     if (targets.length === 0) {
-      const errorText = room.kind === 'group'
+      const errorText = ambiguity
+        ? `@${ambiguity.mention} 对应多个成员（${ambiguity.candidateConnectionIds.join('、')}），请改用唯一 connection id。`
+        : room.kind === 'group'
         ? '请选择本次回复成员，或使用 @成员名 / @all / @all-seq / 协作仪式命令，或开启 RP 模式后输入角色行动。'
         : '这个房间没有可用的 Hermes 成员。';
       appendMessagesToRoom(room.id, [makeLocalNotice(room.id, errorText)]);
@@ -317,8 +339,14 @@ export function useChatDispatchRuntime(options: any) {
     const scheduledPromises: Promise<void>[] = [];
     let goalDelegationCount = 0;
     let reviewedGoalDelegationCount = 0;
-    let goalReviewRound = 0;
+    let goalReviewRound = activeGoalForTurn?.round ?? 1;
     let lastGoalTerminalMessage: ChatMessage | null = null;
+    let lastGoalSignal: 'done' | 'continue' | 'blocked' | null = null;
+    let goalShouldContinue = false;
+    let goalPausedBySafety = false;
+    let goalPlanItems = activeGoalForTurn?.planItems ?? [];
+    let goalProgressFingerprint = '';
+    let goalNoProgressRounds = 0;
 
     const scheduleReply = (reply: ScheduledReply): Promise<void> | null => {
       const normalizedTask = reply.text.trim().replace(/\s+/g, ' ').slice(0, 160);
@@ -331,22 +359,17 @@ export function useChatDispatchRuntime(options: any) {
       if (scheduledKeys.has(key)) return null;
       scheduledKeys.add(key);
 
-      const memberQueueKey = `${room.id}:${reply.member.connectionId}`;
-      const previousForMember = memberQueuesRef.current.get(memberQueueKey) ?? Promise.resolve();
-      const taskPromise = previousForMember.then(() => runReply(reply));
-      const queued = taskPromise.catch(() => {});
-      memberQueuesRef.current.set(memberQueueKey, queued);
-      void queued.finally(() => {
-        if (memberQueuesRef.current.get(memberQueueKey) === queued) {
-          memberQueuesRef.current.delete(memberQueueKey);
-        }
-      });
+      const taskPromise = schedulerRef.current.schedule({
+        roomId: room.id,
+        connectionId: reply.member.connectionId,
+      }, () => runReply(reply));
       scheduledPromises.push(taskPromise);
       return taskPromise;
     };
 
     const runReply = async (reply: ScheduledReply) => {
       const placeholder = makeAssistantPlaceholder(dispatchRoom.id, reply.member);
+      placeholder.retryOfMessageId = reply.retryOfMessageId;
       if (reply.delegatedFrom) {
         placeholder.delegatedFrom = reply.delegatedFrom;
       }
@@ -354,9 +377,11 @@ export function useChatDispatchRuntime(options: any) {
         delayedGoalMessageIdsRef.current.add(placeholder.id);
       }
       appendMessagesToRoom(room.id, [placeholder]);
+      startStream(placeholder.id, room.id, reply.member.connectionId);
 
       const connection = connectionById.get(reply.member.connectionId);
       if (!connection) {
+        markStreamPhase(placeholder.id, 'failed', 'Hermes 连接不存在');
         updateMessageInRoom(room.id, placeholder.id, { status: 'error', error: 'Hermes 连接不存在', content: '发送失败' });
         appendDiagnosticLog({
           level: 'error',
@@ -368,12 +393,14 @@ export function useChatDispatchRuntime(options: any) {
           connectionId: reply.member.connectionId,
           connectionName: reply.member.alias,
         });
+        cleanupStream(placeholder.id);
         return;
       }
 
       const controller = new AbortController();
       registerStreamController(placeholder.id, controller);
       setStreamActive(placeholder.id, true);
+      markStreamPhase(placeholder.id, 'connecting');
       const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
       updateMessageInRoom(room.id, placeholder.id, { status: 'running', content: '', error: undefined });
       const requestId = makeId('req');
@@ -382,7 +409,7 @@ export function useChatDispatchRuntime(options: any) {
       let accumulated = '';
 
       if (reply.taskId) {
-        updateDelegationTask(reply.taskId, { status: 'running' });
+        updateDelegationTask(reply.taskId, { status: 'running', attempts: 1 });
         appendCollaborationEvent({
           kind: 'delegation_started',
           roomId: room.id,
@@ -478,8 +505,18 @@ export function useChatDispatchRuntime(options: any) {
           permissionRequest,
           status: 'sent',
         };
-        if (reply.goalMode) {
+        if (reply.goalMode && reply.member.connectionId === goalLeadMember?.connectionId) {
           lastGoalTerminalMessage = completedMessage;
+          const reportedSignal = parseGoalStatusSignal(answer);
+          const parsedPlanItems = parseGoalPlanItems(answer, dispatchRoom, new Date().toISOString());
+          if (parsedPlanItems.length) goalPlanItems = mergeGoalPlanItems(goalPlanItems, parsedPlanItems);
+          const completionSupported = reportedSignal === 'done' && isGoalCompletionSupported(goalPlanItems);
+          lastGoalSignal = reportedSignal === 'done' && !completionSupported ? 'continue' : reportedSignal;
+          goalShouldContinue = lastGoalSignal === 'continue' || lastGoalSignal === null;
+          const nextFingerprint = makeGoalProgressFingerprint(goalPlanItems, []);
+          goalNoProgressRounds = nextFingerprint === goalProgressFingerprint ? goalNoProgressRounds + 1 : 0;
+          goalProgressFingerprint = nextFingerprint;
+          goalPausedBySafety = goalNoProgressRounds >= 2;
         }
         turnMessages.push(completedMessage);
         updateMessageInRoom(room.id, placeholder.id, {
@@ -490,6 +527,9 @@ export function useChatDispatchRuntime(options: any) {
           status: 'sent',
         });
         if (permissionRequest?.status !== 'pending') {
+          if (reply.goalMode && reply.member.connectionId === goalLeadMember?.connectionId) {
+            markStreamPhase(placeholder.id, 'reviewing');
+          }
           applyAgentRoomStatePatch(room.id, reply.member.alias, rawAnswer, completedMessage.id);
           applyGoalAssistantResult(dispatchRoom, reply, completedMessage, answer);
         }
@@ -510,7 +550,11 @@ export function useChatDispatchRuntime(options: any) {
           meta: { mode, depth: reply.depth, chars: answer.length, promptMessages: promptMessagesCount },
         });
         if (reply.taskId) {
-          updateDelegationTask(reply.taskId, { status: 'done', resultMessageId: completedMessage.id });
+          updateDelegationTask(reply.taskId, {
+            status: 'done',
+            resultMessageId: completedMessage.id,
+            evidence: [answer.replace(/\s+/gu, ' ').trim().slice(0, 500)],
+          });
           appendCollaborationEvent({
             kind: 'delegation_completed',
             roomId: room.id,
@@ -543,6 +587,7 @@ export function useChatDispatchRuntime(options: any) {
             ]);
           }
           for (const delegation of acceptedDelegations) {
+            markStreamPhase(placeholder.id, 'delegating');
             const taskText = delegation.taskText || '请根据上一条回复和群聊上下文继续处理这个委托任务。';
             appendDiagnosticLog({
               level: 'info',
@@ -566,6 +611,16 @@ export function useChatDispatchRuntime(options: any) {
               taskText,
               depth: reply.depth + 1,
               sourceMessageId: completedMessage.id,
+              goalId: activeGoalForTurn?.id,
+              planItemId: goalPlanItems.find((item) => (
+                item.ownerConnectionId === delegation.target.connectionId
+                && item.status !== 'done'
+              ))?.id,
+              input: taskText,
+              deliverable: goalPlanItems.find((item) => item.ownerConnectionId === delegation.target.connectionId)?.deliverable,
+              acceptance: goalPlanItems.find((item) => item.ownerConnectionId === delegation.target.connectionId)?.acceptance,
+              attempts: 0,
+              evidence: [],
             });
             if (goalMode) {
               goalDelegationCount += 1;
@@ -583,17 +638,21 @@ export function useChatDispatchRuntime(options: any) {
             });
           }
         }
+        markStreamPhase(placeholder.id, 'completed');
       } catch (error) {
         flushStreamMessage(room.id, placeholder.id);
         if (isAbortError(error)) {
+          markStreamPhase(placeholder.id, 'cancelled');
           const stoppedContent = accumulated.trim() || '已停止生成';
           const stoppedMessage: ChatMessage = {
             ...placeholder,
             content: stoppedContent,
             status: 'stopped',
           };
-          if (reply.goalMode) {
+          if (reply.goalMode && reply.member.connectionId === goalLeadMember?.connectionId) {
             lastGoalTerminalMessage = stoppedMessage;
+            goalPausedBySafety = true;
+            pauseActiveGoal(room.id, '主 Agent 的生成被取消。', stoppedMessage.id);
           }
           turnMessages.push(stoppedMessage);
           updateMessageInRoom(room.id, placeholder.id, {
@@ -616,17 +675,29 @@ export function useChatDispatchRuntime(options: any) {
           return;
         }
 
-        updateDelegationTask(reply.taskId, { status: 'error', error: getErrorMessage(error), resultMessageId: placeholder.id });
+        const errorMessage = getErrorMessage(error);
+        markStreamPhase(placeholder.id, 'failed', errorMessage);
+        if (reply.goalMode && reply.member.connectionId === goalLeadMember?.connectionId) {
+          lastGoalTerminalMessage = {
+            ...placeholder,
+            status: 'error',
+            error: errorMessage,
+            content: reply.delegatedFrom ? '转发失败' : '发送失败',
+          };
+          goalPausedBySafety = true;
+          pauseActiveGoal(room.id, `主 Agent 执行失败：${errorMessage}`, placeholder.id);
+        }
+        updateDelegationTask(reply.taskId, { status: 'error', error: errorMessage, resultMessageId: placeholder.id });
         updateMessageInRoom(room.id, placeholder.id, {
           status: 'error',
-          error: getErrorMessage(error),
+          error: errorMessage,
           content: reply.delegatedFrom ? '转发失败' : '发送失败',
         });
         appendDiagnosticLog({
           level: 'error',
           category: 'chat',
           title: reply.delegatedFrom ? '委托请求失败' : 'Hermes 请求失败',
-          message: getErrorMessage(error),
+          message: errorMessage,
           roomId: room.id,
           roomName: room.name,
           connectionId: connection.id,
@@ -643,12 +714,12 @@ export function useChatDispatchRuntime(options: any) {
 
     if (mode === 'sequential') {
       for (const member of targets) {
-        const task = scheduleReply({ member, text: textForHermes, attachments, depth: 0, goalMode });
+        const task = scheduleReply({ member, text: textForHermes, attachments, depth: 0, goalMode, retryOfMessageId });
         if (task) await task;
       }
     } else {
       for (const member of targets) {
-        scheduleReply({ member, text: textForHermes, attachments, depth: 0, goalMode });
+        scheduleReply({ member, text: textForHermes, attachments, depth: 0, goalMode, retryOfMessageId });
       }
     }
 
@@ -661,11 +732,15 @@ export function useChatDispatchRuntime(options: any) {
         goalMode
         && goalLeadMember
         && cursor >= scheduledPromises.length
-        && goalDelegationCount > reviewedGoalDelegationCount
+        && (goalDelegationCount > reviewedGoalDelegationCount || goalShouldContinue)
+        && lastGoalSignal !== 'done'
+        && lastGoalSignal !== 'blocked'
+        && !goalPausedBySafety
         && goalReviewRound < MAX_GOAL_REVIEW_ROUNDS
       ) {
         reviewedGoalDelegationCount = goalDelegationCount;
         goalReviewRound += 1;
+        goalShouldContinue = false;
         scheduleReply({
           member: goalLeadMember,
           text: buildGoalReviewPrompt({ goal: goalMode.goal, room: dispatchRoom, leadMember: goalLeadMember, connections, round: goalReviewRound }),
@@ -677,11 +752,22 @@ export function useChatDispatchRuntime(options: any) {
       }
     }
 
+    if (goalMode && goalShouldContinue && goalReviewRound >= MAX_GOAL_REVIEW_ROUNDS) {
+      goalPausedBySafety = true;
+      appendMessagesToRoom(room.id, [makeLocalNotice(room.id, `目标已达到 ${MAX_GOAL_REVIEW_ROUNDS} 轮安全上限，等待用户确认是否继续。`)]);
+    } else if (goalMode && goalPausedBySafety && lastGoalSignal !== 'done' && lastGoalSignal !== 'blocked') {
+      appendMessagesToRoom(room.id, [makeLocalNotice(room.id, '目标连续两轮没有结构化进展，已暂停并等待用户调整。')]);
+    }
+
     if (ritual?.definition.autoConsensus) {
       await generateRitualConsensus(dispatchRoom, ritual, turnMessages);
     }
     const terminalGoalMessage = lastGoalTerminalMessage as ChatMessage | null;
-    if (goalMode && terminalGoalMessage && !terminalGoalMessage.permissionRequest) {
+    if (
+      goalMode
+      && terminalGoalMessage
+      && (lastGoalSignal === 'done' || lastGoalSignal === 'blocked' || goalPausedBySafety || terminalGoalMessage.permissionRequest)
+    ) {
       showRoomReplyNotification(room.id, terminalGoalMessage);
       void notifyAgentReplyFinished(room.id, terminalGoalMessage, 'goal');
       for (const message of turnMessages) {
