@@ -17,6 +17,7 @@ export type SendTargetSelection = {
   mode: CollaborationMode;
   ritual?: ParsedCollaborationRitual;
   goalMode?: GoalModeCommand;
+  ambiguity?: { mention: string; candidateConnectionIds: string[] };
 };
 
 export function getSendTargets({
@@ -40,13 +41,12 @@ export function getSendTargets({
     const summaryTarget = room.members.find((member) => member.enabled && member.connectionId === room.summaryConnectionId);
     const strippedGoal = parseGoalCommand(resolution.strippedText)?.goal.trim();
     const promptGoal = strippedGoal || goalMode.goal;
-    const commandLead = goalMode.leadMention
-      ? room.members.find((member) => member.enabled && (
-        member.alias.toLowerCase() === goalMode.leadMention?.toLowerCase()
-        || member.connectionId.toLowerCase() === goalMode.leadMention?.toLowerCase()
-      ))
-      : undefined;
-    const leadMember = commandLead
+    const commandLeadResolution = goalMode.leadMention
+      ? resolveMentionTargets(room, `@${goalMode.leadMention} `)
+      : null;
+    const ambiguousLead = commandLeadResolution?.ambiguousMentions?.[0];
+    const commandLead = commandLeadResolution?.targets[0];
+    const leadMember = ambiguousLead ? undefined : commandLead
       ?? manuallySelectedTargets[0]
       ?? resolution.targets[0]
       ?? summaryTarget
@@ -60,6 +60,7 @@ export function getSendTargets({
         : promptGoal,
       mode: 'sequential',
       goalMode: normalizedGoalMode,
+      ambiguity: ambiguousLead,
     };
   }
 
@@ -79,6 +80,15 @@ export function getSendTargets({
     member.enabled && explicitTargetSet.has(member.connectionId)
   ));
   const textForHermes = resolution.strippedText || rawText;
+
+  if (resolution.reason === 'ambiguous') {
+    return {
+      targets: [],
+      textForHermes,
+      mode: 'parallel',
+      ambiguity: resolution.ambiguousMentions?.[0],
+    };
+  }
 
   if (
     room.kind === 'group'

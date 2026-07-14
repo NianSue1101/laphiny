@@ -24,8 +24,14 @@ export function makeGoalSession(
     leadConnectionId: leadMember.connectionId,
     leadAlias: leadMember.alias,
     round: 1,
-    status: 'running',
+    status: 'planning',
     planItems: [],
+    acceptanceCriteria: [],
+    evidence: [],
+    reviewHistory: [],
+    nextAction: '由主 Agent 制定包含负责人、产物和验收条件的计划。',
+    maxRounds: 5,
+    noProgressRounds: 0,
     lastMessageId: sourceMessageId,
     createdAt: now,
     updatedAt: now,
@@ -52,7 +58,8 @@ export function getActiveGoalLeadMember(room: Room): RoomMember | undefined {
 }
 
 export function getGoalStatusFromSignal(signal: GoalStatusSignal | null): GoalSession['status'] {
-  if (signal === 'done' || signal === 'blocked') return 'awaiting_user';
+  if (signal === 'done') return 'done';
+  if (signal === 'blocked') return 'blocked';
   if (signal === 'continue') return 'running';
   return 'reviewing';
 }

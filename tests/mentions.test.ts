@@ -64,6 +64,24 @@ test('matches aliases with spaces and does not use ambiguous prefixes', () => {
   assert.equal(resolveMentionTargets(room, '@Annie 不应命中').reason, 'none');
 });
 
+test('reports duplicate aliases as ambiguous and accepts a unique connection id', () => {
+  const duplicateRoom: Room = {
+    ...room,
+    members: [
+      ...room.members,
+      { connectionId: 'catgirl-copy', alias: '猫娘', enabled: true },
+    ],
+  };
+  const ambiguous = resolveMentionTargets(duplicateRoom, '@猫娘 请检查');
+  assert.equal(ambiguous.reason, 'ambiguous');
+  assert.deepEqual(ambiguous.targets, []);
+  assert.deepEqual(ambiguous.ambiguousMentions?.[0]?.candidateConnectionIds, ['catgirl', 'catgirl-copy']);
+
+  const exact = resolveMentionTargets(duplicateRoom, '@catgirl-copy 请检查');
+  assert.equal(exact.reason, 'mentions');
+  assert.deepEqual(exact.targets.map((target) => target.connectionId), ['catgirl-copy']);
+});
+
 test('does not dispatch group messages without mentions', () => {
   const result = resolveMentionTargets(room, '这句话先放在房间里');
 
