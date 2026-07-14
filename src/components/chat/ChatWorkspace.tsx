@@ -105,6 +105,7 @@ export function ChatWorkspace(props: any) {
     runQuickCommand,
     runRitualCommand,
     selectedFontFamily,
+    showReasoning,
     selectedMessages,
     selectedRoom,
     selectedRoomCollaborationEvents,
@@ -169,7 +170,8 @@ export function ChatWorkspace(props: any) {
         renderable={getRenderableMessageArtifacts(message)}
         isDarkMode={isDarkMode}
         isWideLayout={isWideLayout}
-        selectedFontFamily={selectedFontFamily}
+          selectedFontFamily={selectedFontFamily}
+          showReasoning={showReasoning}
         isLastEditableUserMessage={message.id === lastEditableUserMessage?.id}
         sending={sending}
         stopping={Boolean(stoppingStreamIds[message.id])}

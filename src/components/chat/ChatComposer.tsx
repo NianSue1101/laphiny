@@ -123,8 +123,8 @@ export function ChatComposer({
       ) : null}
 
       <View style={styles.composerInputRow}>
-        <IconButton icon="image-outline" label="添加图片" onPress={onAttachImages} disabled={!room || sending} />
-        <IconButton icon="document-attach-outline" label="添加文件" onPress={onAttachDocuments} disabled={!room || sending} />
+        <IconButton icon="image-outline" label="添加图片" onPress={onAttachImages} disabled={!room} />
+        <IconButton icon="document-attach-outline" label="添加文件" onPress={onAttachDocuments} disabled={!room} />
         <TextInput
           style={[styles.composerInput, isDarkMode && styles.inputDark]}
           placeholder={getComposerPlaceholder(room)}
@@ -135,7 +135,7 @@ export function ChatComposer({
           onFocus={onFocusInput}
           textAlignVertical="top"
         />
-        <IconButton icon={sending ? 'hourglass-outline' : 'send'} label="发送" onPress={onSendMessage} disabled={sending || !room} variant="primary" />
+        <IconButton icon={sending ? 'hourglass-outline' : 'send'} label="发送" onPress={onSendMessage} disabled={!room} variant="primary" />
       </View>
     </View>
   );

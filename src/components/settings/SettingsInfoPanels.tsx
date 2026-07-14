@@ -197,6 +197,17 @@ export function PersonalizationSettingsPanel({
           : "后续可以继续扩展更多字体。"}
       </Text>
       <View style={styles.storageInfoBox}>
+        <Text style={styles.storageInfoTitle}>服务端 reasoning</Text>
+        <Text style={styles.storageInfoText}>仅在兼容 Hermes Gateway 明确返回 reasoning/thinking 字段时显示；不会要求或伪造模型内部思维。</Text>
+        <View style={styles.toolActions}>
+          <MiniButton
+            icon={appPreferences.showReasoning ? "eye-off-outline" : "eye-outline"}
+            label={appPreferences.showReasoning ? "隐藏 reasoning" : "显示 reasoning"}
+            onPress={() => updateAppPreferences({ showReasoning: !appPreferences.showReasoning })}
+          />
+        </View>
+      </View>
+      <View style={styles.storageInfoBox}>
         <Text style={styles.storageInfoTitle}>下载目录</Text>
         <Text style={styles.storageInfoText}>
           {Platform.OS === "android"

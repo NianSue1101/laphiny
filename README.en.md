@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.30.2](#what-is-new-in-v0302)
 - [What Is New In v0.22.1](#what-is-new-in-v0221)
 - [What Is New In v0.22.0](#what-is-new-in-v0220)
 - [What Is New In v0.20.0](#what-is-new-in-v0200)
@@ -79,9 +80,10 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 ### Chat And Collaboration
 
 - Hermes SSE streaming, stop generation, and retry
-- `@member` targeted replies
+- Exact `@member` targeted replies, including aliases with spaces
 - `@all` parallel replies and `@all-seq` sequential handoff
 - Assistant-to-assistant delegation through line-start `@member task`
+- Keep sending to another member or room while an agent streams; turns for the same Soul remain ordered
 - Delegation quality gates and maximum depth limits
 - Collaboration rituals: `/council`, `/redteam`, `/review`, `/retro`
 - Goal mode with review rounds and notifications only after automatic completion or stop
@@ -136,6 +138,16 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.30.2
+
+- **Faster Android history:** chat storage now uses per-room pages. Existing history is migrated once; later launches load only the newest two pages per room while retaining the full local history.
+- **Concurrent collaboration:** an unrelated streaming reply no longer disables the composer. You can assign the next task to another agent or room immediately, while each Soul still receives ordered turns.
+- **Android streaming and reasoning toggle:** Android now renders SSE response chunks as they arrive. Settings can reveal only `reasoning/thinking` fields explicitly supplied by a compatible server; they are hidden by default and never fabricated.
+- **Reliable mentions and delegation:** routing uses exact aliases or connection IDs with token boundaries, supports multi-word aliases such as `@Project Manager`, and avoids prefix collisions such as `@Ann` versus `@Anna`.
+- **Goal-oriented iterations:** the lead agent works from a plan, acceptance criteria, constrained delegation, and review rounds, then surfaces a continue/done/blocked result for the user.
 
 ---
 

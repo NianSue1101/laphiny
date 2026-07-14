@@ -1,4 +1,4 @@
-import { HermesClient, normalizeHermesReplyText } from './hermes_client';
+import { HermesClient, normalizeHermesReplyText, type HermesStreamEvent } from './hermes_client';
 import type { HermesChatCompletionRequest } from '../types';
 
 export interface RunHermesCompletionOptions {
@@ -9,6 +9,7 @@ export interface RunHermesCompletionOptions {
   signal?: AbortSignal;
   stream: boolean;
   onChunk?: (content: string) => void;
+  onProgress?: (progress: { content: string; reasoning?: string }) => void;
 }
 
 export async function runHermesCompletion(
@@ -32,9 +33,25 @@ export async function runHermesCompletion(
   }
 
   let accumulated = '';
-  for await (const chunk of client.chatCompletionStream(request, transportOptions)) {
-    accumulated += chunk;
+  let reasoning = '';
+  const eventStream = typeof (client as HermesClient & { chatCompletionStreamEvents?: HermesClient['chatCompletionStreamEvents'] }).chatCompletionStreamEvents === 'function'
+    ? client.chatCompletionStreamEvents(request, transportOptions)
+    : legacyStreamEvents(client, request, transportOptions);
+  for await (const chunk of eventStream) {
+    accumulated += chunk.content ?? '';
+    reasoning += chunk.reasoning ?? '';
     options.onChunk?.(accumulated);
+    options.onProgress?.({ content: accumulated, reasoning: reasoning || undefined });
   }
   return accumulated;
+}
+
+async function* legacyStreamEvents(
+  client: HermesClient,
+  request: HermesChatCompletionRequest,
+  transportOptions: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
+): AsyncGenerator<HermesStreamEvent, void, undefined> {
+  for await (const content of client.chatCompletionStream(request, transportOptions)) {
+    yield { content };
+  }
 }

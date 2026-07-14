@@ -105,6 +105,28 @@ test('chatCompletionStream parses readable JSONL chunks without data prefix', as
   assert.deepEqual(chunks, ['流', '式', '完成']);
 });
 
+test('chatCompletionStreamEvents keeps service-provided reasoning separate from visible content', async () => {
+  globalThis.fetch = (async () => new Response([
+    'data: {"choices":[{"delta":{"reasoning_content":"先检查约束。"}}]}',
+    '',
+    'data: {"choices":[{"delta":{"content":"可以开始。"}}]}',
+    '',
+    'data: [DONE]',
+    '',
+  ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
+
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  const events = [];
+  for await (const event of client.chatCompletionStreamEvents({ model: 'test-model', messages: [], stream: true })) {
+    events.push(event);
+  }
+
+  assert.deepEqual(events, [
+    { reasoning: '先检查约束。' },
+    { content: '可以开始。' },
+  ]);
+});
+
 test('normalizeHermesReplyText cleans stored raw SSE replies', () => {
   const raw = [
     'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',

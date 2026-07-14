@@ -7,6 +7,7 @@ import { runHermesCompletion } from './hermes_completion';
 export interface HermesMemberCompletionResult {
   rawText: string;
   content: string;
+  reasoning?: string;
   attachments: Attachment[];
   permissionRequest?: AgentPermissionRequest;
 }
@@ -19,6 +20,7 @@ export async function runHermesMemberCompletion({
   timeoutMs,
   signal,
   onChunk,
+  onProgress,
 }: {
   connection: HermesConnection;
   messages: HermesChatMessage[];
@@ -27,8 +29,10 @@ export async function runHermesMemberCompletion({
   timeoutMs: number;
   signal: AbortSignal;
   onChunk?: (content: string) => void;
+  onProgress?: (progress: { content: string; reasoning?: string }) => void;
 }): Promise<HermesMemberCompletionResult> {
   const client = new HermesClient(connection);
+  let reasoning = '';
   const rawText = await runHermesCompletion(client, {
     request: {
       model: connection.model,
@@ -40,12 +44,17 @@ export async function runHermesMemberCompletion({
     signal,
     stream: shouldStreamHermesReplies(),
     onChunk,
+    onProgress: (progress) => {
+      reasoning = progress.reasoning ?? reasoning;
+      onProgress?.(progress);
+    },
   });
 
   const parsedReply = extractAgentReplyArtifacts(rawText.trim());
   return {
     rawText,
     content: getAgentReplyFallback(parsedReply),
+    reasoning: reasoning || undefined,
     attachments: parsedReply.attachments,
     permissionRequest: parsedReply.permissionRequest,
   };

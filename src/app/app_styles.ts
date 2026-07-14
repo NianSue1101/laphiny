@@ -1131,6 +1131,18 @@ export const styles = StyleSheet.create({
   messageBubbleWide: {
     maxWidth: 760,
   },
+  reasoningPanel: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  reasoningLabel: {
+    marginBottom: 5,
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   messageMeta: {
     flexDirection: 'row',
     justifyContent: 'space-between',

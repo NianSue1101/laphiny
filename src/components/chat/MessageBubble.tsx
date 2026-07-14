@@ -21,6 +21,7 @@ interface MessageBubbleProps {
   isDarkMode: boolean;
   isWideLayout: boolean;
   selectedFontFamily?: string;
+  showReasoning: boolean;
   isLastEditableUserMessage: boolean;
   sending: boolean;
   stopping: boolean;
@@ -43,6 +44,7 @@ export function MessageBubble({
   isDarkMode,
   isWideLayout,
   selectedFontFamily,
+  showReasoning,
   isLastEditableUserMessage,
   sending,
   stopping,
@@ -93,6 +95,12 @@ export function MessageBubble({
         </Text>
       </View>
       <MarkdownText content={displayContent} fontFamily={selectedFontFamily} />
+      {showReasoning && message.reasoning?.trim() ? (
+        <View style={styles.reasoningPanel}>
+          <Text style={styles.reasoningLabel}>服务端 reasoning（可选显示）</Text>
+          <MarkdownText content={message.reasoning} fontFamily={selectedFontFamily} />
+        </View>
+      ) : null}
       {renderable.attachments.length ? (
         <View style={styles.attachments}>
           {renderable.attachments.map((attachment) => (
