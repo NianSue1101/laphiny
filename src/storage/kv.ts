@@ -103,6 +103,30 @@ export async function setDurableString(key: string, value: string): Promise<void
   }
 }
 
+/** Remove a large, non-secret record from the durable backend. */
+export async function removeDurableString(key: string): Promise<void> {
+  durableMemoryFallback.delete(key);
+
+  if (Platform.OS === 'web') {
+    try {
+      globalThis.localStorage?.removeItem(key);
+    } catch {
+      // memory fallback has already been cleared
+    }
+    return;
+  }
+
+  try {
+    const fileUri = durableFileUri(key);
+    const info = await FileSystem.getInfoAsync(fileUri);
+    if (info.exists) {
+      await FileSystem.deleteAsync(fileUri, { idempotent: true });
+    }
+  } catch {
+    // A stale page can safely be ignored; it is no longer referenced by the index.
+  }
+}
+
 /**
  * One-way migration helper for non-secret records that used to live in SecureStore.
  */

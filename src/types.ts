@@ -41,6 +41,8 @@ export type AppFontFamily = 'system' | 'lxgw-wenkai';
 export interface AppPreferences {
   themeMode: AppThemeMode;
   fontFamily: AppFontFamily;
+  /** Show reasoning supplied explicitly by a compatible Hermes endpoint. */
+  showReasoning?: boolean;
   downloadDirectoryUri?: string;
   downloadDirectoryLabel?: string;
   updatedAt: string;
@@ -392,6 +394,7 @@ export interface ChatMessage {
   authorId: 'user' | string;
   authorName: string;
   content: string;
+  reasoning?: string;
   attachments?: Attachment[];
   permissionRequest?: AgentPermissionRequest;
   status: ChatMessageStatus;

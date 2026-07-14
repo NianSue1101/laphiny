@@ -13,7 +13,9 @@ let activeTaskCount = 0;
 let serviceStarted = false;
 
 export function shouldStreamHermesReplies(): boolean {
-  return Platform.OS === 'web';
+  // Android used to force one-shot responses so a long reply was invisible
+  // until completion. Modern Expo fetch supports readable SSE bodies here.
+  return Platform.OS === 'web' || Platform.OS === 'android';
 }
 
 export async function beginBackgroundAgentTask(): Promise<() => Promise<void>> {

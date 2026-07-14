@@ -15,6 +15,9 @@ const room: Room = {
   members: [
     { connectionId: 'catgirl', alias: '猫娘', enabled: true },
     { connectionId: 'fund', alias: '基金猫娘', enabled: true },
+    { connectionId: 'project-manager', alias: 'Project Manager', enabled: true },
+    { connectionId: 'anna', alias: 'Anna', enabled: true },
+    { connectionId: 'ann', alias: 'Ann', enabled: true },
     { connectionId: 'disabled', alias: '睡觉猫', enabled: false },
   ],
 };
@@ -39,7 +42,7 @@ test('resolves full-width ＠all to every enabled member', () => {
   const result = resolveMentionTargets(room, '＠all 开大会');
 
   assert.equal(result.reason, 'all');
-  assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl', 'fund']);
+  assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl', 'fund', 'project-manager', 'anna', 'ann']);
   assert.equal(result.strippedText, '开大会');
 });
 
@@ -47,8 +50,18 @@ test('resolves @all-seq as sequential collaboration', () => {
   const result = resolveMentionTargets(room, '@all-seq 接力讨论这个方案');
 
   assert.equal(result.reason, 'all-seq');
-  assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl', 'fund']);
+  assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl', 'fund', 'project-manager', 'anna', 'ann']);
   assert.equal(result.strippedText, '接力讨论这个方案');
+});
+
+test('matches aliases with spaces and does not use ambiguous prefixes', () => {
+  const spaced = resolveMentionTargets(room, '@Project Manager 请拆解这份需求');
+  assert.deepEqual(spaced.targets.map((target) => target.connectionId), ['project-manager']);
+  assert.equal(spaced.strippedText, '请拆解这份需求');
+
+  const exact = resolveMentionTargets(room, '@Anna 审查方案');
+  assert.deepEqual(exact.targets.map((target) => target.connectionId), ['anna']);
+  assert.equal(resolveMentionTargets(room, '@Annie 不应命中').reason, 'none');
 });
 
 test('does not dispatch group messages without mentions', () => {
@@ -99,6 +112,14 @@ test('assistant delegation normalizes punctuation before task text', () => {
 
   assert.equal(delegations.length, 1);
   assert.equal(delegations[0]?.taskText, '请评估这个方案的财务风险');
+});
+
+test('assistant delegation supports a line-leading multi-word alias', () => {
+  const delegations = resolveAssistantDelegations(room, '- @Project Manager：请给出可验收的上线清单', 'catgirl');
+
+  assert.equal(delegations.length, 1);
+  assert.equal(delegations[0]?.target.connectionId, 'project-manager');
+  assert.equal(delegations[0]?.taskText, '请给出可验收的上线清单');
 });
 
 test('assistant delegation task quality gate requires actionable text', () => {

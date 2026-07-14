@@ -92,7 +92,7 @@ export default function App() {
   const [delegationTasks, setDelegationTasks] = useState<DelegationTask[]>([]);
   const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>([]);
   const [profileVersions, setProfileVersions] = useState<AgentProfileVersion[]>([]);
-  const [appPreferences, setAppPreferences] = useState<AppPreferences>({ themeMode: 'light', fontFamily: 'system', updatedAt: new Date().toISOString() });
+  const [appPreferences, setAppPreferences] = useState<AppPreferences>({ themeMode: 'light', fontFamily: 'system', showReasoning: false, updatedAt: new Date().toISOString() });
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const [managedRoomId, setManagedRoomId] = useState<string | null>(null);
   const [, forceFontRender] = useState(0);
@@ -623,7 +623,9 @@ export default function App() {
     180,
     Math.floor(height * (keyboardAvoidanceEnabled && keyboardHeight > 0 ? 0.28 : 0.42)),
   );
-  const sending = Object.keys(activeStreamIds).length > 0;
+  // Other rooms and members can keep streaming while the user starts a new turn.
+  // The dispatch runtime serializes each individual member where necessary.
+  const sending = selectedMessages.some((message) => message.status === 'running');
   const totalUnread = Object.values(unreadByRoom).reduce<number>((total, count) => total + Number(count ?? 0), 0);
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
   const slashCommandSuggestions = useMemo(() => getSlashCommandSuggestions(draft), [draft]);
@@ -1328,7 +1330,8 @@ export default function App() {
             rpArchiveGenerating,
             runQuickCommand,
             runRitualCommand,
-            selectedFontFamily,
+             selectedFontFamily,
+             showReasoning: Boolean(appPreferences.showReasoning),
             selectedMessages,
             selectedRoom,
             selectedRoomCollaborationEvents,

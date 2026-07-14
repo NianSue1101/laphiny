@@ -1,4 +1,6 @@
 ﻿import { DEFAULT_CONTEXT_LIMIT, MAX_DELEGATION_DEPTH } from '../config/app_config';
+import { useRef } from 'react';
+
 import {
   buildChatHistory,
   buildChatHistoryForDelegation,
@@ -27,6 +29,8 @@ const MAX_GOAL_REVIEW_ROUNDS = 3;
 const MAX_GOAL_DELEGATIONS_PER_ROUND = 3;
 
 export function useChatDispatchRuntime(options: any) {
+  // Requests to the same Soul preserve order; different members remain concurrent.
+  const memberQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
   const {
     appendCollaborationEvent,
     appendDiagnosticLog,
@@ -97,7 +101,7 @@ export function useChatDispatchRuntime(options: any) {
         sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
         timeoutMs: 120_000,
         signal: controller.signal,
-        onChunk: (content) => queueStreamMessageUpdate(room.id, placeholderId, content),
+        onProgress: (progress) => queueStreamMessageUpdate(room.id, placeholderId, progress),
       });
       streamedText = reply.rawText;
 
@@ -112,6 +116,7 @@ export function useChatDispatchRuntime(options: any) {
         authorName: member.alias,
         content: answer,
         attachments: reply.attachments.length ? reply.attachments : undefined,
+        reasoning: reply.reasoning,
         permissionRequest,
         status: 'sent',
         createdAt: new Date().toISOString(),
@@ -119,6 +124,7 @@ export function useChatDispatchRuntime(options: any) {
       updateMessageInRoom(room.id, placeholderId, {
         content: answer,
         attachments: reply.attachments.length ? reply.attachments : undefined,
+        reasoning: reply.reasoning,
         permissionRequest,
         status: 'sent',
       });
@@ -308,7 +314,6 @@ export function useChatDispatchRuntime(options: any) {
     const turnMessages: ChatMessage[] = [...previousMessages, userMessage];
     const dispatchRoom = activeGoalForTurn ? { ...effectiveRoom, activeGoal: activeGoalForTurn } : effectiveRoom;
     const scheduledKeys = new Set<string>();
-    const memberQueues = new Map<string, Promise<void>>();
     const scheduledPromises: Promise<void>[] = [];
     let goalDelegationCount = 0;
     let reviewedGoalDelegationCount = 0;
@@ -326,9 +331,16 @@ export function useChatDispatchRuntime(options: any) {
       if (scheduledKeys.has(key)) return null;
       scheduledKeys.add(key);
 
-      const previousForMember = memberQueues.get(reply.member.connectionId) ?? Promise.resolve();
+      const memberQueueKey = `${room.id}:${reply.member.connectionId}`;
+      const previousForMember = memberQueuesRef.current.get(memberQueueKey) ?? Promise.resolve();
       const taskPromise = previousForMember.then(() => runReply(reply));
-      memberQueues.set(reply.member.connectionId, taskPromise.catch(() => {}));
+      const queued = taskPromise.catch(() => {});
+      memberQueuesRef.current.set(memberQueueKey, queued);
+      void queued.finally(() => {
+        if (memberQueuesRef.current.get(memberQueueKey) === queued) {
+          memberQueuesRef.current.delete(memberQueueKey);
+        }
+      });
       scheduledPromises.push(taskPromise);
       return taskPromise;
     };
@@ -450,7 +462,7 @@ export function useChatDispatchRuntime(options: any) {
           sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
-          onChunk: (content) => queueStreamMessageUpdate(room.id, placeholder.id, content),
+          onProgress: (progress) => queueStreamMessageUpdate(room.id, placeholder.id, progress),
         });
         accumulated = replyResult.rawText;
 
@@ -462,6 +474,7 @@ export function useChatDispatchRuntime(options: any) {
           ...placeholder,
           content: answer,
           attachments: replyResult.attachments.length ? replyResult.attachments : undefined,
+          reasoning: replyResult.reasoning,
           permissionRequest,
           status: 'sent',
         };
@@ -472,6 +485,7 @@ export function useChatDispatchRuntime(options: any) {
         updateMessageInRoom(room.id, placeholder.id, {
           content: answer,
           attachments: completedMessage.attachments,
+          reasoning: completedMessage.reasoning,
           permissionRequest,
           status: 'sent',
         });

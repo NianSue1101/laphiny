@@ -9,7 +9,7 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
   const [stoppingStreamIds, setStoppingStreamIds] = useState<Record<string, true>>({});
   const streamControllersRef = useRef<Record<string, AbortController>>({});
   const streamFlushTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const streamBuffersRef = useRef<Record<string, string>>({});
+  const streamBuffersRef = useRef<Record<string, Partial<ChatMessage>>>({});
 
   function setStreamActive(messageId: string, active: boolean) {
     setActiveStreamIds((current) => {
@@ -31,19 +31,19 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
   }
 
   function flushStreamMessage(roomId: string, messageId: string) {
-    const content = streamBuffersRef.current[messageId];
-    if (content === undefined) return;
+    const patch = streamBuffersRef.current[messageId];
+    if (!patch) return;
     delete streamBuffersRef.current[messageId];
     const timer = streamFlushTimersRef.current[messageId];
     if (timer) {
       clearTimeout(timer);
       delete streamFlushTimersRef.current[messageId];
     }
-    updateMessage(roomId, messageId, { content });
+    updateMessage(roomId, messageId, patch);
   }
 
-  function queueStreamMessageUpdate(roomId: string, messageId: string, content: string) {
-    streamBuffersRef.current[messageId] = content;
+  function queueStreamMessageUpdate(roomId: string, messageId: string, patch: Pick<ChatMessage, 'content'> & Partial<Pick<ChatMessage, 'reasoning'>>) {
+    streamBuffersRef.current[messageId] = { ...streamBuffersRef.current[messageId], ...patch };
     if (streamFlushTimersRef.current[messageId]) return;
     streamFlushTimersRef.current[messageId] = setTimeout(() => {
       flushStreamMessage(roomId, messageId);

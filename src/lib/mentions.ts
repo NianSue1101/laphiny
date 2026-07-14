@@ -1,14 +1,8 @@
 import { Room, RoomMember, TargetResolution } from '../types';
 
-const MENTION_TOKEN = String.raw`[\p{L}\p{N}_\-.\u4e00-\u9fff]+`;
-const USER_MENTION_PATTERN = new RegExp(
-  String.raw`(^|[\s([{（【「『])[@＠](${MENTION_TOKEN})(?=$|[\s,，:：;；、.!?！？)\]）】」』])([,，:：;；、.!?！？]?\s*)?`,
-  'giu',
-);
-const ASSISTANT_DELEGATION_PATTERN = new RegExp(
-  String.raw`(^|\n)[\t >*\-•]*[@＠](${MENTION_TOKEN})(?=$|[\s,，:：;；、.!?！？])([,，:：;；、.!?！？]?[\t ]*)([^\n]*)`,
-  'giu',
-);
+const MENTION_BOUNDARY = /[\s([{（【「『]/u;
+const MENTION_END = /[\s,，:：;；、.!?！？)\]）】」』]/u;
+const TASK_PREFIX = /^[,，:：;；、.!?！？\s]+/u;
 const MIN_ASSISTANT_DELEGATION_TASK_LENGTH = 6;
 const VAGUE_ASSISTANT_DELEGATION_TASKS = new Set([
   '看看',
@@ -21,12 +15,25 @@ const VAGUE_ASSISTANT_DELEGATION_TASKS = new Set([
   '补充一下',
 ]);
 
+type KnownMention = {
+  member?: RoomMember;
+  mention: string;
+  start: number;
+  end: number;
+  special?: 'all' | 'all-seq';
+};
+
 export interface AssistantDelegation {
   target: RoomMember;
   mention: string;
   taskText: string;
 }
 
+/**
+ * Resolves only exact, boundary-delimited aliases/connection IDs. Unlike the
+ * old token regex, aliases with spaces work and @Ann never accidentally selects
+ * @Anna. The longest matching known name wins.
+ */
 export function resolveMentionTargets(room: Room, rawText: string): TargetResolution {
   const enabledMembers = room.members.filter((member) => member.enabled);
 
@@ -39,57 +46,25 @@ export function resolveMentionTargets(room: Room, rawText: string): TargetResolu
     };
   }
 
-  const mentions: string[] = [];
-  let allMentioned = false;
-  let allSequentialMentioned = false;
-  const strippedText = rawText.replace(USER_MENTION_PATTERN, (full, leading: string, mention: string) => {
-    const normalized = normalizeMention(mention);
-    mentions.push(normalized);
-    if (normalized === 'all') {
-      allMentioned = true;
-    }
-    if (normalized === 'all-seq' || normalized === 'all-sequential') {
-      allSequentialMentioned = true;
-    }
-    return leading || '';
-  }).replace(/\s{2,}/g, ' ').trim();
+  const knownMentions = scanKnownMentions(rawText, enabledMembers);
+  const mentions = knownMentions.map((entry) => entry.mention);
+  const allSequentialMentioned = knownMentions.some((entry) => entry.special === 'all-seq');
+  const allMentioned = knownMentions.some((entry) => entry.special === 'all');
+  const strippedText = stripMentionRanges(rawText, knownMentions);
 
   if (allSequentialMentioned) {
-    return {
-      targets: enabledMembers,
-      mentions,
-      strippedText,
-      reason: 'all-seq',
-    };
+    return { targets: enabledMembers, mentions, strippedText, reason: 'all-seq' };
   }
-
   if (allMentioned) {
-    return {
-      targets: enabledMembers,
-      mentions,
-      strippedText,
-      reason: 'all',
-    };
+    return { targets: enabledMembers, mentions, strippedText, reason: 'all' };
   }
 
-  const targets = uniqueMembers(
-    mentions.flatMap((mention) => enabledMembers.filter((member) => memberMatchesMention(member, mention))),
-  );
-
-  if (targets.length === 0) {
-    return {
-      targets: [],
-      mentions,
-      strippedText,
-      reason: 'none',
-    };
-  }
-
+  const targets = uniqueMembers(knownMentions.flatMap((entry) => entry.member ? [entry.member] : []));
   return {
     targets,
     mentions,
     strippedText,
-    reason: 'mentions',
+    reason: targets.length > 0 ? 'mentions' : 'none',
   };
 }
 
@@ -99,27 +74,12 @@ export function memberMatchesMention(member: RoomMember, mention: string): boole
 }
 
 export function normalizeMention(value: string): string {
-  return value.trim().replace(/^[@＠]/, '').toLowerCase();
-}
-
-function uniqueMembers(members: RoomMember[]): RoomMember[] {
-  const seen = new Set<string>();
-  const result: RoomMember[] = [];
-
-  for (const member of members) {
-    if (seen.has(member.connectionId)) {
-      continue;
-    }
-    seen.add(member.connectionId);
-    result.push(member);
-  }
-
-  return result;
+  return value.trim().replace(/^[@＠]/u, '').toLocaleLowerCase();
 }
 
 /**
- * 解析 assistant 回复中用于委托的行首 @提及。
- * 只有单独一行开头的 @成员 才会触发自动转发，降低普通文本误触发概率。
+ * Assistant delegation is deliberately stricter than user routing: only a
+ * line-leading exact @member plus an actionable task is forwarded.
  */
 export function resolveAssistantDelegations(
   room: Room,
@@ -132,24 +92,19 @@ export function resolveAssistantDelegations(
   const delegations: AssistantDelegation[] = [];
   const seen = new Set<string>();
 
-  for (const match of assistantText.matchAll(ASSISTANT_DELEGATION_PATTERN)) {
-    const mention = normalizeMention(match[2] ?? '');
-    if (!mention || mention === 'all' || mention === 'all-seq' || mention === 'all-sequential') {
-      continue;
-    }
+  for (const line of assistantText.split(/\r?\n/u)) {
+    const atIndex = getLineLeadingAtIndex(line);
+    if (atIndex < 0) continue;
+    const mention = resolveKnownMentionAt(line, atIndex, enabledMembers);
+    if (!mention?.member) continue;
 
-    const targets = enabledMembers.filter((member) => memberMatchesMention(member, mention));
-    const taskText = normalizeAssistantDelegationTask(match[4] ?? '');
-    if (!isActionableAssistantDelegationTask(taskText)) {
-      continue;
-    }
+    const taskText = normalizeAssistantDelegationTask(line.slice(mention.end));
+    if (!isActionableAssistantDelegationTask(taskText)) continue;
 
-    for (const target of targets) {
-      const key = `${target.connectionId}:${taskText}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      delegations.push({ target, mention, taskText });
-    }
+    const key = `${mention.member.connectionId}:${taskText}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    delegations.push({ target: mention.member, mention: mention.mention, taskText });
   }
 
   return delegations;
@@ -162,34 +117,89 @@ export function isActionableAssistantDelegationTask(taskText: string): boolean {
   return /[\p{L}\p{N}\u4e00-\u9fff]/u.test(normalized);
 }
 
-function normalizeAssistantDelegationTask(taskText: string): string {
-  return taskText
-    .replace(/^[,，:：;；、.!?！？\s]+/, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+function scanKnownMentions(rawText: string, members: RoomMember[]): KnownMention[] {
+  const found: KnownMention[] = [];
+  for (let index = 0; index < rawText.length; index += 1) {
+    if (rawText[index] !== '@' && rawText[index] !== '＠') continue;
+    if (index > 0 && !MENTION_BOUNDARY.test(rawText[index - 1] ?? '')) continue;
+    const mention = resolveKnownMentionAt(rawText, index, members);
+    if (!mention) continue;
+    found.push(mention);
+    index = mention.end - 1;
+  }
+  return found;
 }
 
-/**
- * 兼容旧调用：解析 assistant 回复中的 @提及，找出被委托的成员。
- * 新逻辑只接受行首 @，推荐新代码使用 resolveAssistantDelegations 获取逐成员任务。
- */
+function resolveKnownMentionAt(text: string, atIndex: number, members: RoomMember[]): KnownMention | null {
+  const suffix = text.slice(atIndex + 1);
+  const candidates: Array<{ value: string; member?: RoomMember; special?: 'all' | 'all-seq' }> = [
+    { value: 'all-sequential', special: 'all-seq' as const },
+    { value: 'all-seq', special: 'all-seq' as const },
+    { value: 'all', special: 'all' as const },
+    ...members.flatMap((member) => [
+      { value: member.alias, member },
+      { value: member.connectionId, member },
+    ]),
+  ].filter((candidate) => candidate.value.trim().length > 0)
+    .sort((left, right) => right.value.length - left.value.length);
+
+  const lowerSuffix = suffix.toLocaleLowerCase();
+  for (const candidate of candidates) {
+    const value = candidate.value.trim();
+    if (!lowerSuffix.startsWith(value.toLocaleLowerCase())) continue;
+    const next = suffix[value.length];
+    if (next && !MENTION_END.test(next)) continue;
+    return {
+      member: candidate.member,
+      mention: normalizeMention(value),
+      start: atIndex,
+      end: atIndex + 1 + value.length,
+      special: candidate.special,
+    };
+  }
+  return null;
+}
+
+function stripMentionRanges(rawText: string, mentions: KnownMention[]): string {
+  let result = rawText;
+  for (const mention of [...mentions].reverse()) {
+    let end = mention.end;
+    if (/[,，:：;；、.!?！？]/u.test(result[end] ?? '')) end += 1;
+    while (/\s/u.test(result[end] ?? '')) end += 1;
+    result = `${result.slice(0, mention.start)}${result.slice(end)}`;
+  }
+  return result.replace(/\s{2,}/gu, ' ').trim();
+}
+
+function getLineLeadingAtIndex(line: string): number {
+  const match = line.match(/^[\t >*\-•]*[@＠]/u);
+  return match ? match[0].length - 1 : -1;
+}
+
+function normalizeAssistantDelegationTask(taskText: string): string {
+  return taskText.replace(TASK_PREFIX, '').replace(/\s+/gu, ' ').trim();
+}
+
+function uniqueMembers(members: RoomMember[]): RoomMember[] {
+  const seen = new Set<string>();
+  return members.filter((member) => {
+    if (seen.has(member.connectionId)) return false;
+    seen.add(member.connectionId);
+    return true;
+  });
+}
+
+/** Compatibility helper for callers that only need the delegation targets. */
 export function resolveAssistantMentions(
   room: Room,
   assistantText: string,
   excludeConnectionId: string,
 ): TargetResolution {
   const delegations = resolveAssistantDelegations(room, assistantText, excludeConnectionId);
-  const mentions = delegations.map((delegation) => delegation.mention);
-  const targets = uniqueMembers(delegations.map((delegation) => delegation.target));
-  const strippedText = assistantText
-    .replace(ASSISTANT_DELEGATION_PATTERN, (full, leading: string, mention: string, separator: string, rest: string) => `${leading}${rest ?? ''}`)
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-
   return {
-    targets,
-    mentions,
-    strippedText,
-    reason: targets.length > 0 ? 'mentions' : 'none',
+    targets: uniqueMembers(delegations.map((delegation) => delegation.target)),
+    mentions: delegations.map((delegation) => delegation.mention),
+    strippedText: assistantText,
+    reason: delegations.length ? 'mentions' : 'none',
   };
 }

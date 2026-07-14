@@ -55,6 +55,15 @@ export class HermesClient {
     request: HermesChatCompletionRequest,
     options?: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
   ): AsyncGenerator<string, void, undefined> {
+    for await (const event of this.chatCompletionStreamEvents(request, options)) {
+      if (event.content) yield event.content;
+    }
+  }
+
+  async *chatCompletionStreamEvents(
+    request: HermesChatCompletionRequest,
+    options?: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
+  ): AsyncGenerator<HermesStreamEvent, void, undefined> {
     const response = await this.fetch('/v1/chat/completions', {
       method: 'POST',
       body: JSON.stringify(request),
@@ -74,7 +83,7 @@ export class HermesClient {
     if (!response.body?.getReader) {
       const text = await response.text();
       const completion = parseChatCompletionText(text, contentType);
-      if (completion) yield completion;
+      if (completion) yield { content: completion };
       return;
     }
 
@@ -98,14 +107,14 @@ export class HermesClient {
         for (const line of lines) {
           const parsed = parseStreamLine(line);
           if (parsed === 'done') return;
-          if (parsed) {
+          if (parsed && (parsed.content || parsed.reasoning)) {
             yield parsed;
           }
         }
       }
 
       const parsed = parseStreamLine(buffer);
-      if (parsed && parsed !== 'done') {
+      if (parsed && parsed !== 'done' && (parsed.content || parsed.reasoning)) {
         yield parsed;
       }
 
@@ -228,6 +237,15 @@ interface HermesSseChunk {
   choices?: Array<{
     delta?: {
       content?: string;
+      reasoning?: string;
+      reasoning_content?: string;
+      thinking?: string;
+    };
+    message?: {
+      content?: string;
+      reasoning?: string;
+      reasoning_content?: string;
+      thinking?: string;
     };
     finish_reason?: string | null;
   }>;
@@ -259,12 +277,17 @@ function parseSseText(text: string): string[] {
   for (const line of text.split(/\r?\n/)) {
     const parsed = parseStreamLine(line);
     if (parsed === 'done') break;
-    if (parsed) chunks.push(parsed);
+    if (parsed?.content) chunks.push(parsed.content);
   }
   return chunks;
 }
 
-function parseStreamLine(line: string): string | 'done' | null {
+export interface HermesStreamEvent {
+  content?: string;
+  reasoning?: string;
+}
+
+function parseStreamLine(line: string): HermesStreamEvent | 'done' | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('event:') || trimmed.startsWith(':')) return null;
 
@@ -281,10 +304,23 @@ function parseStreamLine(line: string): string | 'done' | null {
   }
 }
 
-function extractChatCompletionContent(chunk: HermesSseChunk | HermesChatCompletionResponse): string {
+function extractChatCompletionContent(chunk: HermesSseChunk | HermesChatCompletionResponse): HermesStreamEvent {
   const choice = chunk.choices?.[0];
-  if (!choice) return '';
+  if (!choice) return {};
   const deltaContent = 'delta' in choice ? choice.delta?.content : undefined;
   const messageContent = 'message' in choice ? choice.message?.content : undefined;
-  return deltaContent ?? messageContent ?? '';
+  const delta = 'delta' in choice ? choice.delta : undefined;
+  const message = 'message' in choice ? choice.message : undefined;
+  const messageWithReasoning = message as {
+    reasoning?: string;
+    reasoning_content?: string;
+    thinking?: string;
+  } | undefined;
+  const content = deltaContent ?? messageContent;
+  const reasoning = delta?.reasoning_content ?? delta?.reasoning ?? delta?.thinking
+    ?? messageWithReasoning?.reasoning_content ?? messageWithReasoning?.reasoning ?? messageWithReasoning?.thinking;
+  return {
+    ...(content ? { content } : {}),
+    ...(reasoning ? { reasoning } : {}),
+  };
 }

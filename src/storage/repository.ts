@@ -1,9 +1,11 @@
 import { AgentProfileVersion, AppPreferences, ChatMessage, CollaborationEvent, DelegationTask, DiagnosticLogEntry, FeedbackConfig, HermesConnection, Room, SquareEvent, SyncConfig, TeamTemplate } from '../types';
-import { getDurableJson, migrateSecureStoreValueToDurable, setDurableJson, getJson, setJson } from './kv';
+import { getDurableJson, migrateSecureStoreValueToDurable, removeDurableString, setDurableJson, getJson, setJson } from './kv';
+import { getChangedMessageTail, getInitialPageStart, MESSAGE_INITIAL_PAGE_COUNT, MESSAGE_PAGE_SIZE, splitMessagePages, type MessageRoomPageIndex } from './message_pages';
 
 const CONNECTIONS_KEY = 'laphiny.connections.v1';
 const ROOMS_KEY = 'laphiny.rooms.v1';
 const MESSAGES_KEY = 'laphiny.messages.v1';
+const MESSAGE_PAGES_INDEX_KEY = 'laphiny.messages.pages.v2';
 const SYNC_CONFIG_KEY = 'laphiny.syncConfig.v1';
 const SQUARE_EVENTS_KEY = 'laphiny.squareEvents.v1';
 const DIAGNOSTIC_LOGS_KEY = 'laphiny.diagnosticLogs.v1';
@@ -31,13 +33,97 @@ export async function saveRooms(rooms: Room[]): Promise<void> {
   await setDurableJson(ROOMS_KEY, rooms);
 }
 
+type MessagePagesIndex = {
+  version: 2;
+  rooms: Record<string, MessageRoomPageIndex>;
+};
+
+let messageSaveChain: Promise<void> = Promise.resolve();
+
 export async function loadMessages(): Promise<Record<string, ChatMessage[]>> {
   await migrateSecureStoreValueToDurable(MESSAGES_KEY);
-  return getDurableJson<Record<string, ChatMessage[]>>(MESSAGES_KEY, {});
+  const index = await getDurableJson<MessagePagesIndex | null>(MESSAGE_PAGES_INDEX_KEY, null);
+  if (!isMessagePagesIndex(index)) {
+    // One-time migration. Later launches only read the last two pages of every room.
+    const legacy = await getDurableJson<Record<string, ChatMessage[]>>(MESSAGES_KEY, {});
+    await writeAllMessagePages(legacy);
+    return Object.fromEntries(Object.entries(legacy).map(([roomId, messages]) => [roomId, messages.slice(-MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT)]));
+  }
+
+  const entries = await Promise.all(Object.entries(index.rooms).map(async ([roomId, roomIndex]) => {
+    const start = getInitialPageStart(roomIndex.pageCount);
+    const pages = await Promise.all(Array.from({ length: roomIndex.pageCount - start }, (_, offset) => (
+      getDurableJson<ChatMessage[]>(messagePageKey(roomId, start + offset), [])
+    )));
+    return [roomId, pages.flat()] as const;
+  }));
+  return Object.fromEntries(entries);
 }
 
 export async function saveMessages(messages: Record<string, ChatMessage[]>): Promise<void> {
-  await setDurableJson(MESSAGES_KEY, messages);
+  const save = messageSaveChain.then(() => writeChangedMessagePages(messages));
+  messageSaveChain = save.catch(() => {});
+  await save;
+}
+
+async function writeAllMessagePages(messagesByRoom: Record<string, ChatMessage[]>): Promise<void> {
+  const rooms: Record<string, MessageRoomPageIndex> = {};
+  for (const [roomId, messages] of Object.entries(messagesByRoom)) {
+    const pages = splitMessagePages(Array.isArray(messages) ? messages : []);
+    for (const [pageIndex, page] of pages.entries()) {
+      await setDurableJson(messagePageKey(roomId, pageIndex), page);
+    }
+    rooms[roomId] = { pageCount: pages.length, messageCount: messages.length };
+  }
+  await setDurableJson(MESSAGE_PAGES_INDEX_KEY, { version: 2, rooms } satisfies MessagePagesIndex);
+}
+
+async function writeChangedMessagePages(messagesByRoom: Record<string, ChatMessage[]>): Promise<void> {
+  const index = await getDurableJson<MessagePagesIndex | null>(MESSAGE_PAGES_INDEX_KEY, null);
+  if (!isMessagePagesIndex(index)) {
+    await writeAllMessagePages(messagesByRoom);
+    return;
+  }
+
+  const rooms = { ...index.rooms };
+  for (const [roomId, rawMessages] of Object.entries(messagesByRoom)) {
+    const current = Array.isArray(rawMessages) ? rawMessages : [];
+    const previous = rooms[roomId] ?? { pageCount: 0, messageCount: 0 };
+    const previousStart = getInitialPageStart(previous.pageCount);
+    const storedTail = (await Promise.all(Array.from({ length: previous.pageCount - previousStart }, (_, offset) => (
+      getDurableJson<ChatMessage[]>(messagePageKey(roomId, previousStart + offset), [])
+    )))).flat();
+    const changedTail = getChangedMessageTail(current, storedTail);
+    if (changedTail === null) continue;
+
+    const pageStart = previousStart;
+    const pages = splitMessagePages(changedTail);
+    for (const [offset, page] of pages.entries()) {
+      await setDurableJson(messagePageKey(roomId, pageStart + offset), page);
+    }
+    for (let pageIndex = pageStart + pages.length; pageIndex < previous.pageCount; pageIndex += 1) {
+      await removeDurableString(messagePageKey(roomId, pageIndex));
+    }
+
+    if (current.length === 0) {
+      rooms[roomId] = { pageCount: 0, messageCount: 0 };
+    } else {
+      const leadingCount = Math.max(0, previous.messageCount - storedTail.length);
+      rooms[roomId] = {
+        pageCount: pageStart + pages.length,
+        messageCount: leadingCount + changedTail.length,
+      };
+    }
+  }
+  await setDurableJson(MESSAGE_PAGES_INDEX_KEY, { version: 2, rooms } satisfies MessagePagesIndex);
+}
+
+function isMessagePagesIndex(value: MessagePagesIndex | null): value is MessagePagesIndex {
+  return Boolean(value && value.version === 2 && value.rooms && typeof value.rooms === 'object');
+}
+
+function messagePageKey(roomId: string, pageIndex: number): string {
+  return `laphiny.messages.page.v2.${encodeURIComponent(roomId)}.${pageIndex}`;
 }
 
 export async function loadSyncConfig(): Promise<SyncConfig> {
@@ -113,6 +199,7 @@ export async function loadAppPreferences(): Promise<AppPreferences> {
   return getJson<AppPreferences>(APP_PREFERENCES_KEY, {
     themeMode: 'light',
     fontFamily: 'system',
+    showReasoning: false,
     updatedAt: new Date().toISOString(),
   });
 }
