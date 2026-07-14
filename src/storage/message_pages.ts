@@ -8,6 +8,11 @@ export type MessageRoomPageIndex = {
   messageCount: number;
 };
 
+export type MessageHistoryInfo = {
+  totalCount: number;
+  nextOlderPage: number;
+};
+
 export function splitMessagePages(messages: ChatMessage[], pageSize = MESSAGE_PAGE_SIZE): ChatMessage[][] {
   const pages: ChatMessage[][] = [];
   for (let offset = 0; offset < messages.length; offset += pageSize) {
@@ -18,6 +23,15 @@ export function splitMessagePages(messages: ChatMessage[], pageSize = MESSAGE_PA
 
 export function getInitialPageStart(pageCount: number, initialPageCount = MESSAGE_INITIAL_PAGE_COUNT): number {
   return Math.max(0, pageCount - initialPageCount);
+}
+
+export function getMessageRewriteStart(current: ChatMessage[], previousStart: number): number {
+  return current.length === 0 ? 0 : previousStart;
+}
+
+export function prependMessagePage(current: ChatMessage[], olderPage: ChatMessage[]): ChatMessage[] {
+  const currentIds = new Set(current.map((message) => message.id));
+  return [...olderPage.filter((message) => !currentIds.has(message.id)), ...current];
 }
 
 /**

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getChangedMessageTail, getInitialPageStart, splitMessagePages } from '../src/storage/message_pages';
+import { getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, prependMessagePage, splitMessagePages } from '../src/storage/message_pages';
 import type { ChatMessage } from '../src/types';
 
 function message(id: string): ChatMessage {
@@ -36,4 +36,16 @@ test('returns the changed suffix when a new turn is appended', () => {
   const changed = getChangedMessageTail([...storedTail, message('5')], storedTail);
 
   assert.deepEqual(changed?.map((item) => item.id), ['3', '4', '5']);
+});
+
+test('prepends an older page without duplicating messages already loaded', () => {
+  const current = [message('3'), message('4')];
+  const older = [message('1'), message('2'), message('3')];
+
+  assert.deepEqual(prependMessagePage(current, older).map((item) => item.id), ['1', '2', '3', '4']);
+});
+
+test('clearing a room rewrites from page zero so no old page stays referenced', () => {
+  assert.equal(getMessageRewriteStart([], 7), 0);
+  assert.equal(getMessageRewriteStart([message('8')], 7), 7);
 });

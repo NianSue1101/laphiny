@@ -9,6 +9,8 @@ interface MessageSearchPanelProps {
   query: string;
   results: MessageSearchResult[];
   selectedRoomId: string | null;
+  loading: boolean;
+  error?: string | null;
   styles: Record<string, any>;
   TextComponent: ComponentType<TextProps>;
   TextInputComponent: ComponentType<TextInputProps>;
@@ -20,6 +22,8 @@ export function MessageSearchPanel({
   query,
   results,
   selectedRoomId,
+  loading,
+  error,
   styles,
   TextComponent: Text,
   TextInputComponent: TextInput,
@@ -47,7 +51,13 @@ export function MessageSearchPanel({
       </View>
       {normalizedQuery ? (
         <View style={styles.searchResults}>
-          <Text style={styles.help}>找到 {results.length} 条匹配，最多显示前 8 条。</Text>
+          <Text style={styles.help}>
+            {loading
+              ? `正在读取完整分页历史，当前找到 ${results.length} 条…`
+              : error
+                ? `完整历史读取失败：${error}`
+                : `找到 ${results.length} 条匹配，最多显示前 8 条。`}
+          </Text>
           {results.slice(0, 8).map((result) => (
             <TouchableOpacity
               key={`${result.room.id}-${result.message.id}`}
