@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.30.3](#what-is-new-in-v0303)
 - [What Is New In v0.30.2](#what-is-new-in-v0302)
 - [What Is New In v0.22.1](#what-is-new-in-v0221)
 - [What Is New In v0.22.0](#what-is-new-in-v0220)
@@ -138,6 +139,15 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.30.3
+
+- **On-demand older messages:** a room can load one earlier local page at a time while preserving the current reading position.
+- **Full paged-history search:** complete pages are read only while search is active and released when the query is cleared, keeping normal startup lightweight.
+- **Page cleanup fix:** clearing a room removes indexed pages from page zero instead of leaving older indexed history behind.
+- **Unified version metadata:** in-app, Expo, npm, and Android versions now consistently report `0.30.3`.
 
 ---
 

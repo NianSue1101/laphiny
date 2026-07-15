@@ -1,6 +1,9 @@
-import type { MutableRefObject, ReactElement } from 'react';
+import type { ComponentType, MutableRefObject, ReactElement } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
+  TouchableOpacity,
+  type TextProps,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
@@ -16,10 +19,14 @@ interface ChatMessagesListProps {
   messages: ChatMessage[];
   normalizedSearchQuery: string;
   styles: Styles;
+  TextComponent: ComponentType<TextProps>;
+  hasOlderMessages: boolean;
+  loadingOlderMessages: boolean;
   renderMessageBubble: (message: ChatMessage) => ReactElement;
   onContentSizeChange: () => void;
   onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onOpenRoomsTab: () => void;
+  onLoadOlderMessages: () => void;
 }
 
 export function ChatMessagesList({
@@ -28,10 +35,14 @@ export function ChatMessagesList({
   messages,
   normalizedSearchQuery,
   styles,
+  TextComponent: Text,
+  hasOlderMessages,
+  loadingOlderMessages,
   renderMessageBubble,
   onContentSizeChange,
   onScroll,
   onOpenRoomsTab,
+  onLoadOlderMessages,
 }: ChatMessagesListProps) {
   return (
     <FlatList
@@ -47,6 +58,19 @@ export function ChatMessagesList({
       maxToRenderPerBatch={10}
       updateCellsBatchingPeriod={50}
       windowSize={7}
+      maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+      ListHeaderComponent={room && !normalizedSearchQuery && hasOlderMessages ? (
+        <TouchableOpacity
+          style={styles.historyLoader}
+          onPress={onLoadOlderMessages}
+          disabled={loadingOlderMessages}
+        >
+          {loadingOlderMessages ? <ActivityIndicator size="small" color="#6d28d9" /> : null}
+          <Text style={styles.historyLoaderText}>
+            {loadingOlderMessages ? '正在加载更早消息…' : '加载更早消息'}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
       ListEmptyComponent={(
         !room ? (
           <EmptyState

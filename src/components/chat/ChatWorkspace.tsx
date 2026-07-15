@@ -64,6 +64,8 @@ export function ChatWorkspace(props: any) {
     getGoalPlanItemStatusStyle,
     handleMessagesContentSizeChange,
     handleMessagesScroll,
+    historyByRoom,
+    historySearchError,
     insertMention,
     insertUxCommand,
     isDarkMode,
@@ -84,6 +86,7 @@ export function ChatWorkspace(props: any) {
     mobileFocusedRoomId,
     mobileRoomDetailsOpen,
     normalizedSearchQuery,
+    loadEarlierMessages,
     openFocusedChatRoom,
     openRoomManagement,
     pendingAttachments,
@@ -119,6 +122,7 @@ export function ChatWorkspace(props: any) {
     selectedTaskBoard,
     selectAllTargets,
     sending,
+    searchingFullHistory,
     sendMessage,
     saveSelectedRoomAsTeamTemplate,
     setBlackboardDraft,
@@ -280,10 +284,14 @@ export function ChatWorkspace(props: any) {
         messages={visibleSelectedMessages}
         normalizedSearchQuery={normalizedSearchQuery}
         styles={styles}
+        TextComponent={Text}
+        hasOlderMessages={Boolean(selectedRoom && (historyByRoom[selectedRoom.id]?.nextOlderPage ?? -1) >= 0)}
+        loadingOlderMessages={Boolean(selectedRoom && historyByRoom[selectedRoom.id]?.loading)}
         renderMessageBubble={renderMessageBubble}
         onContentSizeChange={handleMessagesContentSizeChange}
         onScroll={handleMessagesScroll}
         onOpenRoomsTab={() => setTab('rooms')}
+        onLoadOlderMessages={() => selectedRoom && void loadEarlierMessages(selectedRoom.id)}
       />
     );
   }
@@ -538,6 +546,8 @@ export function ChatWorkspace(props: any) {
         query={messageSearchQuery}
         results={messageSearchResults}
         selectedRoomId={selectedRoomId}
+        loading={searchingFullHistory}
+        error={historySearchError}
         styles={styles}
         TextComponent={Text}
         TextInputComponent={TextInput}
