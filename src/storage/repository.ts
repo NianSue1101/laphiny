@@ -66,6 +66,25 @@ export async function saveMessages(messages: Record<string, ChatMessage[]>): Pro
   await save;
 }
 
+/** Permanently removes every paged message and search document for one room. */
+export async function removeMessageHistoryRoom(roomId: string): Promise<void> {
+  const remove = messageSaveChain.then(async () => {
+    const index = await ensureMessagePagesIndex();
+    const roomIndex = index.rooms[roomId];
+    if (!roomIndex) return;
+
+    for (let pageIndex = 0; pageIndex < roomIndex.pageCount; pageIndex += 1) {
+      await removeDurableString(messagePageKey(roomId, pageIndex));
+      await removeDurableString(messageSearchPageKey(roomId, pageIndex));
+    }
+    const rooms = { ...index.rooms };
+    delete rooms[roomId];
+    await persistMessagePagesIndex({ version: 2, rooms });
+  });
+  messageSaveChain = remove.catch(() => {});
+  await remove;
+}
+
 export async function loadMessageHistoryInfo(): Promise<Record<string, MessageHistoryInfo>> {
   await messageSaveChain;
   const index = await ensureMessagePagesIndex();

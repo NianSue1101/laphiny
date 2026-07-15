@@ -13,6 +13,7 @@ Chinese documentation: [README.md](./README.md)
 - [Positioning](#positioning)
 - [Features](#features)
 - [What Is New In v0.32.0](#what-is-new-in-v0320)
+- [What Is New In v0.32.1](#what-is-new-in-v0321)
 - [What Is New In v0.30.3](#what-is-new-in-v0303)
 - [What Is New In v0.30.2](#what-is-new-in-v0302)
 - [What Is New In v0.22.1](#what-is-new-in-v0221)
@@ -142,6 +143,13 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
 
 ---
+
+## What Is New In v0.32.1
+
+- **Hermes tool delegation, on by default:** after installing [`laphiny-hermes-delegation`](https://github.com/Lovely-Laper/laphiny-hermes-delegation), connection checks verify both the Responses API and the `laphiny_delegate_tasks` tool. Supported Agents submit real `function_call` events with an exact connection ID, task, deliverable, and acceptance criteria; Laphiny validates room membership, limits, and duplicates before scheduling.
+- **One-command installation:** run `hermes plugins install Lovely-Laper/laphiny-hermes-delegation --enable && hermes gateway restart` on each Hermes Gateway. Older or unmodified Gateways keep the local structured-delegation compatibility path.
+- **Room management:** the tool-delegation switch is available in group-room management and defaults to on. Opening a room returns to its latest message, and room deletion confirms and clears local paged history plus search indexes.
+- **Unified version metadata:** in-app, Expo, npm, and Android versions report `0.32.1`; Android uses `versionCode 321`.
 
 ## What Is New In v0.32.0
 

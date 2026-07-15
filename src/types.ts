@@ -31,6 +31,11 @@ export interface HermesConnection {
   enabled: boolean;
   avatarUri?: string;
   profile?: AgentProfile;
+  toolDelegation?: {
+    supported: boolean;
+    checkedAt: string;
+    reason?: string;
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -274,6 +279,7 @@ export interface Room {
   defaultCollaborationMode?: 'manual' | 'parallel' | 'sequential';
   summaryConnectionId?: string;
   autoDelegationEnabled?: boolean;
+  agentToolDelegationEnabled?: boolean;
   maxDelegationDepth?: number;
   lastSummary?: RoomSummary;
   memoryCapsule?: RoomMemoryCapsule;

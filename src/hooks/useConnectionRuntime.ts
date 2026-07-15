@@ -140,6 +140,11 @@ export function useConnectionRuntime({
     try {
       const result = await checkHermesConnection(connection);
       if (result.status === 'ok') {
+        setConnections((current) => current.map((item) => item.id === connection.id ? {
+          ...item,
+          toolDelegation: { ...result.toolDelegation, checkedAt: result.checkedAt },
+          updatedAt: result.checkedAt,
+        } : item));
         setConnectionHealth((current) => ({
           ...current,
           [connection.id]: {
@@ -157,9 +162,9 @@ export function useConnectionRuntime({
           connectionId: connection.id,
           connectionName: connection.name,
           durationMs: result.latencyMs,
-          meta: { models: result.modelsCount, status: result.rawStatus ?? 'ok' },
+          meta: { models: result.modelsCount, status: result.rawStatus ?? 'ok', toolDelegation: result.toolDelegation.supported ? 'supported' : result.toolDelegation.reason ?? 'unsupported' },
         });
-        showNotice('连接成功', `状态：${result.rawStatus ?? 'ok'}\n模型数：${result.modelsCount}`);
+        showNotice('连接成功', `状态：${result.rawStatus ?? 'ok'}\n模型数：${result.modelsCount}\n工具委托：${result.toolDelegation.supported ? '可用' : result.toolDelegation.reason ?? '不可用'}`);
         return;
       }
 

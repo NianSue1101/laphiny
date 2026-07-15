@@ -1,6 +1,6 @@
 import type { AgentProfile, HermesConnection } from '../types';
 import { buildAgentProfileInquiryMessages, parseAgentProfileResponse } from './agent_profile';
-import { HermesClient } from './hermes_client';
+import { getHermesToolDelegationSupport, HermesClient } from './hermes_client';
 
 export type ConnectionHealthCheckResult =
   | {
@@ -10,6 +10,7 @@ export type ConnectionHealthCheckResult =
       modelsCount: number;
       checkedAt: string;
       rawStatus?: string;
+      toolDelegation: { supported: boolean; reason?: string };
     }
   | {
       id: string;
@@ -23,9 +24,10 @@ export async function checkHermesConnection(connection: HermesConnection, timeou
   const startedAt = Date.now();
   try {
     const client = new HermesClient(connection);
-    const [health, models] = await Promise.all([
+    const [health, models, toolDelegation] = await Promise.all([
       client.health({ timeoutMs }),
       client.models({ timeoutMs }),
+      getHermesToolDelegationSupport(client, timeoutMs),
     ]);
     return {
       id: connection.id,
@@ -34,6 +36,7 @@ export async function checkHermesConnection(connection: HermesConnection, timeou
       modelsCount: models.length,
       checkedAt: new Date().toISOString(),
       rawStatus: health.status,
+      toolDelegation,
     };
   } catch (error) {
     return {

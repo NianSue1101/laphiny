@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isActionableAssistantDelegationTask, resolveAssistantDelegations, resolveMentionTargets } from '../src/lib/mentions';
+import { isActionableAssistantDelegationTask, resolveAssistantDelegations, resolveAssistantToolDelegations, resolveMentionTargets } from '../src/lib/mentions';
 import { Room } from '../src/types';
 
 const room: Room = {
@@ -138,6 +138,64 @@ test('assistant delegation supports a line-leading multi-word alias', () => {
   assert.equal(delegations.length, 1);
   assert.equal(delegations[0]?.target.connectionId, 'project-manager');
   assert.equal(delegations[0]?.taskText, '请给出可验收的上线清单');
+});
+
+test('assistant delegation supports several consecutive targets for the same task', () => {
+  const delegations = resolveAssistantDelegations(room, '@基金猫娘 @Project Manager：请分别审查预算与上线验收风险', 'catgirl');
+
+  assert.deepEqual(delegations.map((delegation) => delegation.target.connectionId), ['fund', 'project-manager']);
+  assert.equal(delegations[0]?.taskText, '请分别审查预算与上线验收风险');
+});
+
+test('structured delegation block gives each target an unambiguous task', () => {
+  const delegations = resolveAssistantDelegations(room, [
+    '先说明当前方案。',
+    '```laphiny-delegation',
+    JSON.stringify([
+      { to: '基金猫娘', task: '评估预算风险，并给出两条可执行的降本建议。' },
+      { to: 'project-manager', task: '列出上线验收清单及阻塞条件。' },
+    ]),
+    '```',
+    '@Anna 这行旧格式不应和结构化委托混用。',
+  ].join('\n'), 'catgirl');
+
+  assert.deepEqual(delegations.map((delegation) => [delegation.target.connectionId, delegation.taskText]), [
+    ['fund', '评估预算风险，并给出两条可执行的降本建议。'],
+    ['project-manager', '列出上线验收清单及阻塞条件。'],
+  ]);
+});
+
+test('Hermes tool delegation uses connection IDs and preserves acceptance data', () => {
+  const delegations = resolveAssistantToolDelegations(room, [{
+    name: 'laphiny_delegate_tasks',
+    arguments: JSON.stringify({ tasks: [{
+      assignee_id: 'project-manager',
+      task: '整理上线验收清单并指出阻塞条件。',
+      input: '当前发布范围。',
+      deliverable: '可执行的验收清单。',
+      acceptance: '每项都有负责人和完成标准。',
+      priority: 'high',
+    }] }),
+  }], 'catgirl');
+
+  assert.equal(delegations.length, 1);
+  assert.equal(delegations[0]?.target.connectionId, 'project-manager');
+  assert.equal(delegations[0]?.deliverable, '可执行的验收清单。');
+  assert.equal(delegations[0]?.priority, 'high');
+});
+
+test('Hermes tool delegation rejects a caller-supplied member outside the room', () => {
+  const delegations = resolveAssistantToolDelegations(room, [{
+    name: 'laphiny_delegate_tasks',
+    arguments: JSON.stringify({ tasks: [{
+      assignee_id: 'not-in-room',
+      task: '执行独立任务并给出结果。',
+      deliverable: '结果。',
+      acceptance: '结果可复核。',
+    }] }),
+  }], 'catgirl');
+
+  assert.deepEqual(delegations, []);
 });
 
 test('assistant delegation task quality gate requires actionable text', () => {

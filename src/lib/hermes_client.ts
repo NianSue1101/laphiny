@@ -60,6 +60,53 @@ export class HermesClient {
     }
   }
 
+  async requestPublic<T>(path: string, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> {
+    return this.request(path, { method: 'GET', timeoutMs: options?.timeoutMs, signal: options?.signal });
+  }
+
+  async *responseStreamEvents(
+    request: HermesResponseRequest,
+    options?: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
+  ): AsyncGenerator<HermesStreamEvent, void, undefined> {
+    const response = await this.fetch('/v1/responses', {
+      method: 'POST',
+      body: JSON.stringify({ ...request, stream: true, store: false }),
+      contentType: 'application/json',
+      sessionId: options?.sessionId,
+      sessionKey: options?.sessionKey,
+      timeoutMs: options?.timeoutMs,
+      signal: options?.signal,
+    });
+    if (!response.ok) throw new Error(`Hermes Responses API failed: ${response.status} ${await response.text()}`);
+    if (!response.body?.getReader) throw new Error('Hermes Responses API did not return a readable stream');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let eventName = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/u);
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim();
+            continue;
+          }
+          if (!line.startsWith('data:')) continue;
+          const event = parseResponseStreamEvent(eventName, line.slice(5).trim());
+          if (event) yield event;
+          eventName = '';
+        }
+      }
+    } finally {
+      try { await reader.cancel(); } catch { /* already closed */ }
+    }
+  }
+
   async *chatCompletionStreamEvents(
     request: HermesChatCompletionRequest,
     options?: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
@@ -285,6 +332,29 @@ function parseSseText(text: string): string[] {
 export interface HermesStreamEvent {
   content?: string;
   reasoning?: string;
+  toolCall?: { name: string; arguments: string; callId?: string };
+}
+
+export interface HermesResponseRequest {
+  model: string;
+  input: unknown;
+  instructions?: string;
+  stream?: boolean;
+  store?: boolean;
+}
+
+export async function getHermesToolDelegationSupport(client: HermesClient, timeoutMs = 8_000): Promise<{ supported: boolean; reason?: string }> {
+  try {
+    const [capabilities, toolsets] = await Promise.all([
+      client.requestPublic<Record<string, any>>('/v1/capabilities', { timeoutMs }),
+      client.requestPublic<Array<{ tools?: string[] }>>('/v1/toolsets', { timeoutMs }),
+    ]);
+    if (capabilities?.features?.responses_api !== true) return { supported: false, reason: 'Gateway 未声明 Responses API' };
+    const hasTool = Array.isArray(toolsets) && toolsets.some((toolset) => toolset.tools?.includes('laphiny_delegate_tasks'));
+    return hasTool ? { supported: true } : { supported: false, reason: '未安装 laphiny-hermes-delegation 插件' };
+  } catch (error) {
+    return { supported: false, reason: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function parseStreamLine(line: string): HermesStreamEvent | 'done' | null {
@@ -323,4 +393,21 @@ function extractChatCompletionContent(chunk: HermesSseChunk | HermesChatCompleti
     ...(content ? { content } : {}),
     ...(reasoning ? { reasoning } : {}),
   };
+}
+
+function parseResponseStreamEvent(eventName: string, payload: string): HermesStreamEvent | null {
+  try {
+    const data = JSON.parse(payload) as Record<string, any>;
+    if (eventName === 'response.output_text.delta' && typeof data.delta === 'string') return { content: data.delta };
+    const item = data.item as Record<string, any> | undefined;
+    if ((eventName === 'response.output_item.added' || eventName === 'response.output_item.done')
+      && item?.type === 'function_call'
+      && typeof item.name === 'string'
+      && typeof item.arguments === 'string') {
+      return { toolCall: { name: item.name, arguments: item.arguments, callId: typeof item.call_id === 'string' ? item.call_id : undefined } };
+    }
+  } catch {
+    // Ignore malformed SSE frames; a final completion/error frame still decides the request outcome.
+  }
+  return null;
 }

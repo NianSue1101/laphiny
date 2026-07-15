@@ -307,6 +307,7 @@ export function makeRoom(name: string, kind: Room['kind'], members: RoomMember[]
     contextLimit: DEFAULT_CONTEXT_LIMIT,
     defaultCollaborationMode: kind === 'group' ? 'manual' : undefined,
     autoDelegationEnabled: true,
+    agentToolDelegationEnabled: true,
     maxDelegationDepth: MAX_DELEGATION_DEPTH,
     createdAt: now,
     updatedAt: now,

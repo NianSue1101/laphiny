@@ -20,7 +20,7 @@ import { buildGoalReviewPrompt, parseGoalCommand, parseGoalPlanItems, parseGoalS
 import { getActiveGoalLeadMember, getGoalControlCommand, makeGoalSession, mergeGoalPlanItems } from '../lib/goal_session';
 import { isGoalCompletionSupported, makeGoalProgressFingerprint } from '../lib/goal_state_machine';
 import { getSendTargets, type SendTargetSelection } from '../lib/chat_targets';
-import { resolveAssistantDelegations } from '../lib/mentions';
+import { resolveAssistantDelegations, resolveAssistantToolDelegations } from '../lib/mentions';
 import { stripRoomStatePatchBlocks } from '../lib/room_growth';
 import { getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand } from '../lib/roleplay';
 import { makeDefaultRoleplayArchive } from '../lib/stage4_plus';
@@ -489,6 +489,7 @@ export function useChatDispatchRuntime(options: any) {
           sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
+          useToolDelegation: room.agentToolDelegationEnabled !== false && connection.toolDelegation?.supported === true,
           onProgress: (progress) => queueStreamMessageUpdate(room.id, placeholder.id, progress),
         });
         accumulated = replyResult.rawText;
@@ -579,7 +580,12 @@ export function useChatDispatchRuntime(options: any) {
         }
 
         if (room.kind === 'group' && room.autoDelegationEnabled !== false && reply.depth < (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH)) {
-          const delegations = resolveAssistantDelegations(room, answer, reply.member.connectionId);
+          const toolDelegations = room.agentToolDelegationEnabled !== false
+            ? resolveAssistantToolDelegations(room, replyResult.toolCalls, reply.member.connectionId)
+            : [];
+          const delegations = toolDelegations.length > 0
+            ? toolDelegations
+            : resolveAssistantDelegations(room, answer, reply.member.connectionId);
           const acceptedDelegations = reply.goalMode ? delegations.slice(0, MAX_GOAL_DELEGATIONS_PER_ROUND) : delegations;
           if (reply.goalMode && delegations.length > acceptedDelegations.length) {
             appendMessagesToRoom(room.id, [
@@ -616,9 +622,10 @@ export function useChatDispatchRuntime(options: any) {
                 item.ownerConnectionId === delegation.target.connectionId
                 && item.status !== 'done'
               ))?.id,
-              input: taskText,
-              deliverable: goalPlanItems.find((item) => item.ownerConnectionId === delegation.target.connectionId)?.deliverable,
-              acceptance: goalPlanItems.find((item) => item.ownerConnectionId === delegation.target.connectionId)?.acceptance,
+              input: delegation.input ?? taskText,
+              deliverable: delegation.deliverable ?? goalPlanItems.find((item) => item.ownerConnectionId === delegation.target.connectionId)?.deliverable,
+              acceptance: delegation.acceptance ?? goalPlanItems.find((item) => item.ownerConnectionId === delegation.target.connectionId)?.acceptance,
+              priority: delegation.priority,
               attempts: 0,
               evidence: [],
             });
