@@ -58,22 +58,11 @@ export function getAgentPermissionKey(request: Pick<AgentPermissionRequest, 'key
 }
 
 export function buildAgentPermissionDecisionPrompt(request: AgentPermissionRequest, decision: AgentPermissionDecision): string {
-  const decisionText = decision === 'deny'
-    ? '拒绝'
-    : decision === 'always'
-      ? '总是同意'
-      : '同意';
-  return [
-    '用户已经在 Laphiny 权限卡片中做出选择。',
-    `选择：${decisionText}`,
-    `请求：${request.title}`,
-    request.action ? `动作：${request.action}` : null,
-    request.reason ? `原因：${request.reason}` : null,
-    '',
-    decision === 'deny'
-      ? '请不要执行被拒绝的动作，改为说明影响并给出无需该权限的下一步。'
-      : '请继续刚才被权限请求中断的任务，不要再次要求用户手动发送确认消息。',
-  ].filter(Boolean).join('\n');
+  // Hermes routes an approval only when the next user turn is its control
+  // command. A natural-language explanation creates a separate turn and leaves
+  // the original agent blocked on its approval queue.
+  void request;
+  return decision === 'deny' ? '/deny' : '/approve';
 }
 
 function parsePermissionPayload(rawBody: string): PermissionPayload | null {

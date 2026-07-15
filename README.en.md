@@ -12,8 +12,9 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
-- [What Is New In v0.32.0](#what-is-new-in-v0320)
+- [What Is New In v0.32.2](#what-is-new-in-v0322)
 - [What Is New In v0.32.1](#what-is-new-in-v0321)
+- [What Is New In v0.32.0](#what-is-new-in-v0320)
 - [What Is New In v0.30.3](#what-is-new-in-v0303)
 - [What Is New In v0.30.2](#what-is-new-in-v0302)
 - [What Is New In v0.22.1](#what-is-new-in-v0221)
@@ -143,6 +144,11 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
 
 ---
+
+## What Is New In v0.32.2
+
+- **Hermes approval replies fixed:** the Allow, Deny, and Always Allow cards now send Hermes's required `/approve` or `/deny` control command in the same session instead of a natural-language explanation that leaves the blocked turn waiting. Always Allow remains a local Laphiny preference and automatically sends `/approve` for later matching requests.
+- **Unified version metadata:** in-app, Expo, npm, and Android versions report `0.32.2`; Android uses `versionCode 322`.
 
 ## What Is New In v0.32.1
 

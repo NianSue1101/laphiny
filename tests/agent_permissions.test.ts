@@ -24,12 +24,11 @@ test('detects plain permission request text', () => {
   assert.equal(result.request?.status, 'pending');
 });
 
-test('builds decision prompt without requiring a visible user message', () => {
+test('builds Hermes control commands that resume a blocked approval', () => {
   const result = extractAgentPermissionRequest('PERMISSION_REQUEST: {"title":"运行构建","body":"需要确认"}');
   assert.ok(result.request);
 
-  const prompt = buildAgentPermissionDecisionPrompt(result.request!, 'always');
-
-  assert.match(prompt, /总是同意/);
-  assert.match(prompt, /继续刚才被权限请求中断的任务/);
+  assert.equal(buildAgentPermissionDecisionPrompt(result.request!, 'allow'), '/approve');
+  assert.equal(buildAgentPermissionDecisionPrompt(result.request!, 'always'), '/approve');
+  assert.equal(buildAgentPermissionDecisionPrompt(result.request!, 'deny'), '/deny');
 });
