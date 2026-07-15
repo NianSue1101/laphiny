@@ -3,6 +3,7 @@ import { ScrollView, TouchableOpacity, View, type TextProps } from 'react-native
 
 import type { ChatMessage, Room } from '../types';
 import { getStatusLabel } from '../app/app_utils';
+import type { RoomStreamSummary } from '../lib/stream_events';
 import { Ionicons } from './SafeIcon';
 
 interface ChatSidebarProps {
@@ -10,6 +11,7 @@ interface ChatSidebarProps {
   selectedRoomId: string | null;
   messagesByRoom: Record<string, ChatMessage[]>;
   unreadByRoom: Record<string, number>;
+  roomStreamSummaries: Record<string, RoomStreamSummary>;
   styles: Record<string, any>;
   TextComponent: ComponentType<TextProps>;
   onOpenRoom: (roomId: string) => void;
@@ -21,6 +23,7 @@ export function ChatSidebar({
   selectedRoomId,
   messagesByRoom,
   unreadByRoom,
+  roomStreamSummaries,
   styles,
   TextComponent: Text,
   onOpenRoom,
@@ -41,6 +44,7 @@ export function ChatSidebar({
           const lastMessage = roomMessages[roomMessages.length - 1];
           const active = room.id === selectedRoomId;
           const unread = unreadByRoom[room.id] ?? 0;
+          const streamSummary = roomStreamSummaries[room.id];
           return (
             <TouchableOpacity
               key={room.id}
@@ -52,7 +56,9 @@ export function ChatSidebar({
                 {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : <Text style={styles.sidebarRoomMeta}>{room.members.length}</Text>}
               </View>
               <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
-                {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
+                {streamSummary
+                  ? `${streamSummary.activeCount} 个 Agent · ${streamSummary.label}`
+                  : lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
               </Text>
             </TouchableOpacity>
           );

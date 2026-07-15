@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, prependMessagePage, splitMessagePages } from '../src/storage/message_pages';
+import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, isMessagePagesIndex, prependMessagePage, splitMessagePages } from '../src/storage/message_pages';
 import type { ChatMessage } from '../src/types';
 
 function message(id: string): ChatMessage {
@@ -48,4 +48,37 @@ test('prepends an older page without duplicating messages already loaded', () =>
 test('clearing a room rewrites from page zero so no old page stays referenced', () => {
   assert.equal(getMessageRewriteStart([], 7), 0);
   assert.equal(getMessageRewriteStart([message('8')], 7), 7);
+});
+
+test('rejects corrupt page indexes before they can hide history', () => {
+  assert.equal(isMessagePagesIndex({ version: 2, rooms: { room: { pageCount: 2, messageCount: 101 } } }), true);
+  assert.equal(isMessagePagesIndex({ version: 2, rooms: { room: { pageCount: -1, messageCount: 101 } } }), false);
+  assert.equal(isMessagePagesIndex({ version: 2, rooms: { room: { pageCount: 0, messageCount: 101 } } }), false);
+  assert.equal(isMessagePagesIndex({ version: 1, rooms: {} }), false);
+});
+
+test('repairs a corrupt primary index from backup instead of returning empty history', () => {
+  const backup = { version: 2 as const, rooms: { room: { pageCount: 3, messageCount: 205 } } };
+  const decision = decideMessageIndexRecovery({
+    primary: { broken: true },
+    backup,
+    legacy: null,
+    primaryExists: true,
+    legacyExists: false,
+  });
+
+  assert.equal(decision.source, 'backup');
+  if (decision.source === 'backup') assert.deepEqual(decision.index, backup);
+});
+
+test('surfaces unrecoverable corruption instead of silently creating an empty index', () => {
+  const decision = decideMessageIndexRecovery({
+    primary: { broken: true },
+    backup: { alsoBroken: true },
+    legacy: {},
+    primaryExists: true,
+    legacyExists: true,
+  });
+
+  assert.equal(decision.source, 'error');
 });

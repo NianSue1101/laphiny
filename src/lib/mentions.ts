@@ -21,6 +21,7 @@ type KnownMention = {
   start: number;
   end: number;
   special?: 'all' | 'all-seq';
+  ambiguousMembers?: RoomMember[];
 };
 
 export interface AssistantDelegation {
@@ -51,6 +52,14 @@ export function resolveMentionTargets(room: Room, rawText: string): TargetResolu
   const allSequentialMentioned = knownMentions.some((entry) => entry.special === 'all-seq');
   const allMentioned = knownMentions.some((entry) => entry.special === 'all');
   const strippedText = stripMentionRanges(rawText, knownMentions);
+  const ambiguousMentions = knownMentions.flatMap((entry) => entry.ambiguousMembers?.length ? [{
+    mention: entry.mention,
+    candidateConnectionIds: entry.ambiguousMembers.map((member) => member.connectionId),
+  }] : []);
+
+  if (ambiguousMentions.length > 0) {
+    return { targets: [], mentions, ambiguousMentions, strippedText, reason: 'ambiguous' };
+  }
 
   if (allSequentialMentioned) {
     return { targets: enabledMembers, mentions, strippedText, reason: 'all-seq' };
@@ -144,20 +153,26 @@ function resolveKnownMentionAt(text: string, atIndex: number, members: RoomMembe
     .sort((left, right) => right.value.length - left.value.length);
 
   const lowerSuffix = suffix.toLocaleLowerCase();
-  for (const candidate of candidates) {
+  const matches = candidates.filter((candidate) => {
     const value = candidate.value.trim();
-    if (!lowerSuffix.startsWith(value.toLocaleLowerCase())) continue;
+    if (!lowerSuffix.startsWith(value.toLocaleLowerCase())) return false;
     const next = suffix[value.length];
-    if (next && !MENTION_END.test(next)) continue;
-    return {
-      member: candidate.member,
-      mention: normalizeMention(value),
-      start: atIndex,
-      end: atIndex + 1 + value.length,
-      special: candidate.special,
-    };
-  }
-  return null;
+    return !next || MENTION_END.test(next);
+  });
+  if (matches.length === 0) return null;
+  const longestLength = matches[0]!.value.trim().length;
+  const longestMatches = matches.filter((candidate) => candidate.value.trim().length === longestLength);
+  const special = longestMatches.find((candidate) => candidate.special);
+  const value = (special ?? longestMatches[0])!.value.trim();
+  const matchingMembers = uniqueMembers(longestMatches.flatMap((candidate) => candidate.member ? [candidate.member] : []));
+  return {
+    member: special ? undefined : matchingMembers.length === 1 ? matchingMembers[0] : undefined,
+    mention: normalizeMention(value),
+    start: atIndex,
+    end: atIndex + 1 + value.length,
+    special: special?.special,
+    ambiguousMembers: !special && matchingMembers.length > 1 ? matchingMembers : undefined,
+  };
 }
 
 function stripMentionRanges(rawText: string, mentions: KnownMention[]): string {

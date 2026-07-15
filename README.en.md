@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.32.0](#what-is-new-in-v0320)
 - [What Is New In v0.30.3](#what-is-new-in-v0303)
 - [What Is New In v0.30.2](#what-is-new-in-v0302)
 - [What Is New In v0.22.1](#what-is-new-in-v0221)
@@ -139,6 +140,20 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.32.0
+
+- **Reliable long-history loading:** rooms hydrate only the newest pages, automatically load one older page near the top, and keep an explicit retry action. Page indexes now have backup recovery and validation; unrecoverable corruption is reported instead of silently becoming an empty chat.
+- **Lightweight full-history search:** each page keeps a minimal search document. Search identifies matching pages before loading message bodies, while a 50,000-message room still starts from a fixed two-page window.
+- **Independent agent scheduling:** locks are scoped to room plus connection. One agent keeps ordered session turns while unrelated rooms and agents can stream concurrently, with background status visible in room navigation.
+- **Exact mentions and structured delegation:** full aliases and connection IDs are boundary-matched; duplicate aliases present candidates instead of guessing. Delegations persist their goal, input, deliverable, acceptance criteria, evidence, and retry lineage.
+- **Iterative Goal mode:** goals carry a plan, dependencies, acceptance criteria, evidence, review history, and next action across planning / running / reviewing / adjusting states. Completion requires verified evidence; repeated no-progress or the round limit safely pauses for the user.
+- **Unified streaming lifecycle:** replies move through queued, connecting, thinking, responding, delegating, reviewing, and terminal phases. Work left running across an app restart is marked interrupted and can be retried against the exact agent.
+- **Optional reasoning display:** off by default and limited to explicit `reasoning/thinking` fields returned by compatible services. Reasoning stays separate from user-facing content and is throttled; Laphiny does not invent or expose hidden model thought.
+- **Known boundaries:** retry starts a new request rather than resuming a server transport. A Goal run defaults to at most five rounds and pauses after two no-progress reviews to avoid an unbounded loop or unintended spend.
+- **Unified version metadata:** in-app, Expo, npm, and Android versions report `0.32.0`; Android uses `versionCode 320`.
 
 ---
 

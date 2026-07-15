@@ -4,6 +4,7 @@ import { ScrollView, TouchableOpacity, View, type TextProps } from 'react-native
 import { DEFAULT_CONTEXT_LIMIT } from '../config/app_config';
 import type { ChatMessage, Room } from '../types';
 import { getStatusLabel } from '../app/app_utils';
+import type { RoomStreamSummary } from '../lib/stream_events';
 import { EmptyState, MiniButton, SecondaryButton } from './Primitives';
 import { Ionicons } from './SafeIcon';
 
@@ -11,6 +12,7 @@ interface MobileRoomPickerProps {
   rooms: Room[];
   messagesByRoom: Record<string, ChatMessage[]>;
   unreadByRoom: Record<string, number>;
+  roomStreamSummaries: Record<string, RoomStreamSummary>;
   isDarkMode: boolean;
   styles: Record<string, any>;
   TextComponent: ComponentType<TextProps>;
@@ -23,6 +25,7 @@ export function MobileRoomPicker({
   rooms,
   messagesByRoom,
   unreadByRoom,
+  roomStreamSummaries,
   isDarkMode,
   styles,
   TextComponent: Text,
@@ -52,6 +55,7 @@ export function MobileRoomPicker({
         const roomMessages = messagesByRoom[room.id] ?? [];
         const lastMessage = roomMessages[roomMessages.length - 1];
         const unread = unreadByRoom[room.id] ?? 0;
+        const streamSummary = roomStreamSummaries[room.id];
         return (
           <View key={room.id} style={[styles.mobileRoomCard, isDarkMode && styles.mobileRoomCardDark]}>
             <TouchableOpacity activeOpacity={0.88} onPress={() => onOpenRoom(room.id)}>
@@ -63,7 +67,9 @@ export function MobileRoomPicker({
                 {unread > 0 ? <Text style={styles.sidebarUnreadBadge}>{unread}</Text> : null}
               </View>
               <Text style={styles.sidebarRoomPreview} numberOfLines={2}>
-                {lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
+                {streamSummary
+                  ? `${streamSummary.activeCount} 个 Agent 正在${streamSummary.label.replace(/中$/u, '')}`
+                  : lastMessage ? `${lastMessage.authorName}: ${lastMessage.content || getStatusLabel(lastMessage.status)}` : '新的房间'}
               </Text>
             </TouchableOpacity>
             <View style={styles.mobileRoomCardFooter}>

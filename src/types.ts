@@ -185,9 +185,38 @@ export interface RoomSummary {
   createdAt: string;
 }
 
-export type GoalSessionStatus = 'planning' | 'running' | 'reviewing' | 'awaiting_user' | 'done' | 'blocked' | 'cancelled';
+export type GoalSessionStatus = 'planning' | 'running' | 'reviewing' | 'adjusting' | 'awaiting_user' | 'done' | 'blocked' | 'cancelled';
 export type GoalPlanItemStatus = 'todo' | 'running' | 'done' | 'blocked';
 export type GoalStatusSignal = 'done' | 'continue' | 'blocked';
+export type GoalAcceptanceStatus = 'pending' | 'passed' | 'failed';
+
+export interface GoalAcceptanceCriterion {
+  id: string;
+  text: string;
+  status: GoalAcceptanceStatus;
+  evidenceIds: string[];
+  updatedAt: string;
+}
+
+export interface GoalEvidence {
+  id: string;
+  kind: 'message' | 'delegation' | 'artifact' | 'test' | 'review';
+  summary: string;
+  messageId?: string;
+  taskId?: string;
+  planItemIds: string[];
+  createdAt: string;
+}
+
+export interface GoalReviewRecord {
+  id: string;
+  round: number;
+  signal?: GoalStatusSignal;
+  conclusion: string;
+  nextStatus: GoalSessionStatus;
+  evidenceIds: string[];
+  createdAt: string;
+}
 
 export interface GoalPlanItem {
   id: string;
@@ -198,6 +227,9 @@ export interface GoalPlanItem {
   input?: string;
   deliverable?: string;
   acceptance?: string;
+  dependencyIds?: string[];
+  evidenceIds?: string[];
+  attempts?: number;
   status: GoalPlanItemStatus;
   taskId?: string;
   updatedAt: string;
@@ -213,6 +245,14 @@ export interface GoalSession {
   status: GoalSessionStatus;
   statusSignal?: GoalStatusSignal;
   planItems: GoalPlanItem[];
+  acceptanceCriteria: GoalAcceptanceCriterion[];
+  evidence: GoalEvidence[];
+  reviewHistory: GoalReviewRecord[];
+  nextAction?: string;
+  blockedReason?: string;
+  maxRounds: number;
+  noProgressRounds: number;
+  progressFingerprint?: string;
   lastReview?: string;
   lastMessageId?: string;
   userDecision?: 'continue' | 'finish' | 'adjust';
@@ -327,6 +367,14 @@ export interface DelegationTask {
   tags?: string[];
   sourceMessageId?: string;
   resultMessageId?: string;
+  goalId?: string;
+  planItemId?: string;
+  input?: string;
+  deliverable?: string;
+  acceptance?: string;
+  evidence?: string[];
+  attempts?: number;
+  reassignedFromTaskId?: string;
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -370,6 +418,36 @@ export interface Attachment {
 }
 
 export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopped' | 'error';
+export type AgentStreamPhase = 'queued' | 'connecting' | 'thinking' | 'responding' | 'delegating' | 'reviewing' | 'completed' | 'cancelled' | 'failed';
+export type AgentStreamEventKind = 'status' | 'content' | 'reasoning' | 'delegation' | 'review' | 'terminal';
+
+export interface AgentStreamEvent {
+  id: string;
+  messageId: string;
+  roomId: string;
+  connectionId: string;
+  phase: AgentStreamPhase;
+  kind: AgentStreamEventKind;
+  sequence: number;
+  content?: string;
+  reasoning?: string;
+  error?: string;
+  createdAt: string;
+}
+
+export interface AgentStreamState {
+  messageId: string;
+  roomId: string;
+  connectionId: string;
+  phase: AgentStreamPhase;
+  sequence: number;
+  content: string;
+  reasoning?: string;
+  error?: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
 
 export type AgentPermissionDecision = 'allow' | 'deny' | 'always';
 export type AgentPermissionStatus = 'pending' | 'allowed' | 'denied' | 'always';
@@ -395,6 +473,9 @@ export interface ChatMessage {
   authorName: string;
   content: string;
   reasoning?: string;
+  streamPhase?: AgentStreamPhase;
+  streamUpdatedAt?: string;
+  retryOfMessageId?: string;
   attachments?: Attachment[];
   permissionRequest?: AgentPermissionRequest;
   status: ChatMessageStatus;
@@ -466,6 +547,7 @@ export interface HermesChatCompletionResponse {
 export interface TargetResolution {
   targets: RoomMember[];
   mentions: string[];
+  ambiguousMentions?: Array<{ mention: string; candidateConnectionIds: string[] }>;
   strippedText: string;
-  reason: 'direct' | 'mentions' | 'all' | 'all-seq' | 'none';
+  reason: 'direct' | 'mentions' | 'all' | 'all-seq' | 'ambiguous' | 'none';
 }

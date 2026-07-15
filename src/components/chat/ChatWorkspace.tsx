@@ -64,8 +64,7 @@ export function ChatWorkspace(props: any) {
     getGoalPlanItemStatusStyle,
     handleMessagesContentSizeChange,
     handleMessagesScroll,
-    historyByRoom,
-    historySearchError,
+    messageHistoryRuntime,
     insertMention,
     insertUxCommand,
     isDarkMode,
@@ -86,7 +85,6 @@ export function ChatWorkspace(props: any) {
     mobileFocusedRoomId,
     mobileRoomDetailsOpen,
     normalizedSearchQuery,
-    loadEarlierMessages,
     openFocusedChatRoom,
     openRoomManagement,
     pendingAttachments,
@@ -102,6 +100,7 @@ export function ChatWorkspace(props: any) {
     roomDetailsCollapsed,
     roomDetailsMaxHeight,
     roomGrowthPanel,
+    roomStreamSummaries,
     roomToolsOpen,
     rooms,
     rpArchiveGenerating,
@@ -122,7 +121,6 @@ export function ChatWorkspace(props: any) {
     selectedTaskBoard,
     selectAllTargets,
     sending,
-    searchingFullHistory,
     sendMessage,
     saveSelectedRoomAsTeamTemplate,
     setBlackboardDraft,
@@ -167,6 +165,14 @@ export function ChatWorkspace(props: any) {
     visibleSelectedMessages,
     width,
   } = props;
+  const {
+    historyByRoom,
+    historyLoadError,
+    historySearchError,
+    loadEarlierMessages,
+    refreshMessageHistory,
+    searchingFullHistory,
+  } = messageHistoryRuntime;
   function renderMessageBubble(message: ChatMessage) {
     return (
       <MessageBubble
@@ -287,11 +293,19 @@ export function ChatWorkspace(props: any) {
         TextComponent={Text}
         hasOlderMessages={Boolean(selectedRoom && (historyByRoom[selectedRoom.id]?.nextOlderPage ?? -1) >= 0)}
         loadingOlderMessages={Boolean(selectedRoom && historyByRoom[selectedRoom.id]?.loading)}
+        historyError={selectedRoom ? historyByRoom[selectedRoom.id]?.error ?? historyLoadError : historyLoadError}
         renderMessageBubble={renderMessageBubble}
         onContentSizeChange={handleMessagesContentSizeChange}
         onScroll={handleMessagesScroll}
         onOpenRoomsTab={() => setTab('rooms')}
         onLoadOlderMessages={() => selectedRoom && void loadEarlierMessages(selectedRoom.id)}
+        onRetryHistory={() => {
+          if (selectedRoom && historyByRoom[selectedRoom.id]?.error) {
+            void loadEarlierMessages(selectedRoom.id);
+          } else {
+            void refreshMessageHistory();
+          }
+        }}
       />
     );
   }
@@ -378,6 +392,7 @@ export function ChatWorkspace(props: any) {
         rooms={rooms}
         messagesByRoom={messagesByRoom}
         unreadByRoom={unreadByRoom}
+        roomStreamSummaries={roomStreamSummaries}
         isDarkMode={isDarkMode}
         styles={styles}
         TextComponent={Text}
@@ -394,6 +409,7 @@ export function ChatWorkspace(props: any) {
         rooms={rooms}
         selectedRoomId={selectedRoomId}
         unreadByRoom={unreadByRoom}
+        roomStreamSummaries={roomStreamSummaries}
         styles={styles}
         TextComponent={Text}
         onOpenRoom={openFocusedChatRoom}
@@ -409,6 +425,7 @@ export function ChatWorkspace(props: any) {
         selectedRoomId={selectedRoomId}
         messagesByRoom={messagesByRoom}
         unreadByRoom={unreadByRoom}
+        roomStreamSummaries={roomStreamSummaries}
         styles={styles}
         TextComponent={Text}
         onOpenRoom={openFocusedChatRoom}
@@ -466,7 +483,14 @@ export function ChatWorkspace(props: any) {
   }
 
   function renderRoomStatusBar() {
-    return <RoomStatusBar room={selectedRoom} delegationTasks={selectedRoomDelegationTasks} styles={styles} />;
+    return (
+      <RoomStatusBar
+        room={selectedRoom}
+        delegationTasks={selectedRoomDelegationTasks}
+        streamSummary={selectedRoom ? roomStreamSummaries[selectedRoom.id] : undefined}
+        styles={styles}
+      />
+    );
   }
 
   function renderActiveGoalPanel() {

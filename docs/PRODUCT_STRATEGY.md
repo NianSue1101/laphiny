@@ -18,6 +18,18 @@ Laphiny is a local-first collaboration client for multiple Hermes agents. Its st
 - Attachment contracts for agent-generated files. Agents can now emit simple filename plus code block text, but the app should document the preferred `laphiny-file` format in the UI and prompts.
 - A privacy dashboard showing exactly what is local, what can be backed up, what can sync, and what can be uploaded for feedback.
 
+## Iteration After v0.32
+
+The next releases should deepen the ability to execute one goal reliably instead of adding more disconnected surfaces. Every milestone should use the same loop: define a verifiable goal, create a bounded plan, delegate to an exact agent, collect structured evidence, review the remaining gap, adjust, and notify the user only after acceptance or a safe stop.
+
+1. **v0.33 — observability and recovery.** Turn stream events and Goal reviews into an exportable local audit timeline; add a real task-queue view, failure categories, step-level retry, and Android lifecycle tests for backgrounding and process death.
+2. **v0.34 — editability and control.** Let users edit acceptance criteria, dependencies, owners, round/budget limits, and pause points in the Goal panel. Add delegation cancellation, reassignment, manual takeover, and permission boundaries.
+3. **v0.35 — stronger room memory.** Sediment only accepted evidence and decisions into the room growth layer, with provenance, conflict warnings, expiry checks, and user confirmation so that a summary never automatically becomes a fact.
+4. **v0.36 — multi-device consistency.** Version message pages, Goal state, delegations, and event streams with an idempotent merge protocol; solve offline reconnect and conflict behavior before expanding hosted services.
+5. **Continuous quality gates.** Keep regression coverage for 50,000-message rooms, duplicate aliases, concurrent rooms, cancellation/retry, no-progress goals, and Android lifecycle changes. UX changes should be justified by latency, memory, error-rate, or completion-rate evidence.
+
+Prioritization follows three rules: prevent data loss and false completion first, reduce waiting and manual coordination second, and add new rituals or presentation surfaces last.
+
 ## Differentiation
 
 Most adjacent products optimize for single-agent chat, prompt libraries, generic workflows, or hosted team automation. Laphiny can win by becoming the best client for "agent society with human direction":

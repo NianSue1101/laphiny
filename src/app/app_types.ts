@@ -33,6 +33,7 @@ export type ScheduledReply = {
   taskId?: string;
   goalMode?: GoalModeCommand;
   goalReviewRound?: number;
+  retryOfMessageId?: string;
 };
 
 export type ConnectionFormState = {
