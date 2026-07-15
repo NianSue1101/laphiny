@@ -127,6 +127,26 @@ test('chatCompletionStreamEvents keeps service-provided reasoning separate from 
   ]);
 });
 
+test('responseStreamEvents preserves structured Hermes function calls', async () => {
+  globalThis.fetch = (async () => new Response([
+    'event: response.output_item.added',
+    'data: {"item":{"type":"function_call","name":"laphiny_delegate_tasks","arguments":"{\\"tasks\\":[]}","call_id":"call_1"}}',
+    '',
+    'event: response.output_text.delta',
+    'data: {"delta":"已委托。"}',
+    '',
+  ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
+
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  const events = [];
+  for await (const event of client.responseStreamEvents({ model: 'test-model', input: 'hello' })) events.push(event);
+
+  assert.deepEqual(events, [
+    { toolCall: { name: 'laphiny_delegate_tasks', arguments: '{"tasks":[]}', callId: 'call_1' } },
+    { content: '已委托。' },
+  ]);
+});
+
 test('normalizeHermesReplyText cleans stored raw SSE replies', () => {
   const raw = [
     'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',

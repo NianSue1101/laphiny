@@ -7,6 +7,7 @@ import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText } from '../
 import { summarizeRoomMemory } from '../lib/room_memory';
 import { makeDefaultRoleplayConfig, summarizeRoleplayConfig } from '../lib/roleplay';
 import { getRoomModeDefinition, makeDefaultRoleplayArchive } from '../lib/stage4_plus';
+import { removeMessageHistoryRoom } from '../storage/repository';
 import type {
   AgentProfileVersion,
   ChatMessage,
@@ -268,13 +269,13 @@ export function useRoomToolsRuntime({
     });
   }
 
-  function deleteSelectedRoom() {
-    if (!selectedRoom) return;
-    const roomToDelete = selectedRoom;
+  function deleteRoom(roomId: string) {
+    const roomToDelete = roomsRef.current.find((room) => room.id === roomId);
+    if (!roomToDelete) return;
     requestConfirm('删除房间', `将删除「${roomToDelete.name}」及其本地消息记录。不会删除 Hermes 连接配置或服务端记忆。`, () => {
       setRooms((current) => {
         const next = current.filter((room) => room.id !== roomToDelete.id);
-        setSelectedRoomId(next[0]?.id ?? null);
+        setSelectedRoomId((selectedId) => selectedId === roomToDelete.id ? next[0]?.id ?? null : selectedId);
         return next;
       });
       setMessagesByRoom((current) => {
@@ -287,8 +288,24 @@ export function useRoomToolsRuntime({
         delete next[roomToDelete.id];
         return next;
       });
+      void removeMessageHistoryRoom(roomToDelete.id).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        appendDiagnosticLog({
+          level: 'error',
+          category: 'storage',
+          title: '删除房间历史失败',
+          message,
+          roomId: roomToDelete.id,
+          roomName: roomToDelete.name,
+        });
+        showNotice('房间已删除，但历史清理失败', message);
+      });
       setRoomToolsOpen(false);
     });
+  }
+
+  function deleteSelectedRoom() {
+    if (selectedRoom) deleteRoom(selectedRoom.id);
   }
 
   function updateSelectedRoomRoleplay(patch: Partial<RoleplayConfig>) {
@@ -634,6 +651,7 @@ export function useRoomToolsRuntime({
     clearRoomMemoryCapsule,
     clearSelectedRoomMessages,
     confirmPendingRoomMemoryCapsule,
+    deleteRoom,
     deleteSelectedRoom,
     deleteTeamTemplate,
     discardPendingRoomMemoryCapsule,

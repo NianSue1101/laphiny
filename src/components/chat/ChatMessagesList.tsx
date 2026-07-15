@@ -51,11 +51,15 @@ export function ChatMessagesList({
 }: ChatMessagesListProps) {
   return (
     <FlatList
+      // Native FlatList retains its offset when only data changes. A room id
+      // key resets that offset before the post-layout scroll-to-end runs.
+      key={room?.id ?? 'no-room'}
       ref={messageScrollRef}
       data={room ? messages : []}
       keyExtractor={(message) => message.id}
       style={styles.messages}
       contentContainerStyle={styles.messagesContent}
+      onLayout={onContentSizeChange}
       onContentSizeChange={onContentSizeChange}
       onScroll={(event) => {
         onScroll(event);

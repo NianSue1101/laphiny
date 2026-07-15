@@ -81,6 +81,7 @@ const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
 
 type MessageListSignature = {
   roomId: string | null;
+  tab: Tab;
   messageCount: number;
   lastMessageId: string | null;
 };
@@ -125,7 +126,7 @@ export default function App() {
   const messageScrollRef = useRef<FlatList<ChatMessage> | null>(null);
   const messageListAtBottomRef = useRef(true);
   const pendingMessageScrollToEndRef = useRef(false);
-  const messageListSignatureRef = useRef<MessageListSignature>({ roomId: null, messageCount: 0, lastMessageId: null });
+  const messageListSignatureRef = useRef<MessageListSignature>({ roomId: null, tab: 'chat', messageCount: 0, lastMessageId: null });
   const saveMessagesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const delayedGoalMessageIdsRef = useRef<Set<string>>(new Set());
   const alwaysApprovedPermissionKeysRef = useRef<Set<string>>(new Set());
@@ -414,6 +415,7 @@ export default function App() {
     clearRoomMemoryCapsule,
     clearSelectedRoomMessages,
     confirmPendingRoomMemoryCapsule,
+    deleteRoom,
     deleteSelectedRoom,
     deleteTeamTemplate,
     discardPendingRoomMemoryCapsule,
@@ -556,10 +558,11 @@ export default function App() {
   useEffect(() => {
     const previous = messageListSignatureRef.current;
     const roomChanged = selectedRoomId !== previous.roomId;
+    const chatOpened = tab === 'chat' && previous.tab !== 'chat';
     const messageAppended = selectedRoomId === previous.roomId && visibleSelectedMessages.length > previous.messageCount;
     const latestMessageChanged = selectedRoomId === previous.roomId && latestVisibleMessage?.id !== previous.lastMessageId;
 
-    if (roomChanged) {
+    if ((roomChanged && tab === 'chat') || chatOpened) {
       messageListAtBottomRef.current = true;
       pendingMessageScrollToEndRef.current = true;
       scrollMessagesToEnd(false);
@@ -569,10 +572,11 @@ export default function App() {
 
     messageListSignatureRef.current = {
       roomId: selectedRoomId,
+      tab,
       messageCount: visibleSelectedMessages.length,
       lastMessageId: latestVisibleMessage?.id ?? null,
     };
-  }, [selectedRoomId, visibleSelectedMessages.length, latestVisibleMessage?.id]);
+  }, [selectedRoomId, tab, visibleSelectedMessages.length, latestVisibleMessage?.id]);
 
   function scrollMessagesToEnd(animated: boolean) {
     requestAnimationFrame(() => {
@@ -1624,6 +1628,7 @@ export default function App() {
         toggleRoomMemberEnabledInline={toggleRoomMemberEnabledInline}
         chooseConnectionAvatar={chooseConnectionAvatar}
         openFocusedChatRoom={openFocusedChatRoom}
+        deleteRoom={deleteRoom}
         closeManagement={() => setManagedRoomId(null)}
       />
     );

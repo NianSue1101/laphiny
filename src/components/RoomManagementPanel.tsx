@@ -21,6 +21,7 @@ interface RoomManagementPanelProps {
   toggleRoomMemberEnabledInline: (room: Room, member: RoomMember) => void;
   chooseConnectionAvatar: (connection: HermesConnection) => void;
   openFocusedChatRoom: (roomId: string) => void;
+  deleteRoom: (roomId: string) => void;
   closeManagement: () => void;
 }
 
@@ -38,6 +39,7 @@ export function RoomManagementPanel({
   toggleRoomMemberEnabledInline,
   chooseConnectionAvatar,
   openFocusedChatRoom,
+  deleteRoom,
   closeManagement,
 }: RoomManagementPanelProps) {
   const enabledCount = room.members.filter((member) => member.enabled).length;
@@ -105,12 +107,14 @@ export function RoomManagementPanel({
             <MiniButton icon="git-network-outline" label={room.defaultCollaborationMode === 'parallel' ? '默认：并行' : '切并行'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'parallel' })} />
             <MiniButton icon="git-branch-outline" label={room.defaultCollaborationMode === 'sequential' ? '默认：接力' : '切接力'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'sequential' })} />
             <MiniButton icon={room.autoDelegationEnabled === false ? 'flash-off-outline' : 'flash-outline'} label={room.autoDelegationEnabled === false ? '自动委托关' : '自动委托开'} onPress={() => updateRoomInline(room.id, { autoDelegationEnabled: room.autoDelegationEnabled === false })} />
+            <MiniButton icon={room.agentToolDelegationEnabled === false ? 'construct-outline' : 'construct'} label={room.agentToolDelegationEnabled === false ? '工具委托关' : '工具委托开'} onPress={() => updateRoomInline(room.id, { agentToolDelegationEnabled: room.agentToolDelegationEnabled === false })} />
           </View>
           <View style={styles.stepper}>
             <MiniButton icon="remove-outline" label="深度 -1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) - 1)) })} />
             <Text style={styles.help}>最大委托深度：{room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH}</Text>
             <MiniButton icon="add-outline" label="深度 +1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) + 1)) })} />
           </View>
+          <Text style={styles.help}>工具委托默认开启。连接测试确认已安装 laphiny-hermes-delegation 后，Agent 会通过 Hermes 工具调用创建可验证的委托；不支持的连接会保留兼容委托解析。</Text>
         </>
       ) : null}
 
@@ -162,6 +166,7 @@ export function RoomManagementPanel({
       <Text style={styles.help}>成员启用、别名、头像、加入和移除都在这里完成；聊天页不再维护另一套重复入口。</Text>
       <View style={styles.toolActions}>
         <MiniButton icon="chatbubble-ellipses-outline" label="进入聊天" onPress={() => openFocusedChatRoom(room.id)} />
+        <MiniButton icon="trash-outline" label="删除房间" onPress={() => deleteRoom(room.id)} />
         <MiniButton icon="close-outline" label="关闭管理" onPress={closeManagement} />
       </View>
     </View>

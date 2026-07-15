@@ -28,7 +28,16 @@ export interface AssistantDelegation {
   target: RoomMember;
   mention: string;
   taskText: string;
+  input?: string;
+  deliverable?: string;
+  acceptance?: string;
+  priority?: 'low' | 'normal' | 'high';
 }
+
+type DelegationPayload = {
+  to?: unknown;
+  task?: unknown;
+};
 
 /**
  * Resolves only exact, boundary-delimited aliases/connection IDs. Unlike the
@@ -77,6 +86,49 @@ export function resolveMentionTargets(room: Room, rawText: string): TargetResolu
   };
 }
 
+/** Resolves the validated arguments emitted by the Hermes plugin tool call. */
+export function resolveAssistantToolDelegations(
+  room: Room,
+  toolCalls: Array<{ name: string; arguments: string }> | undefined,
+  excludeConnectionId: string,
+): AssistantDelegation[] {
+  const members = room.members.filter((member) => member.enabled && member.connectionId !== excludeConnectionId);
+  const result: AssistantDelegation[] = [];
+  const seen = new Set<string>();
+  for (const call of toolCalls ?? []) {
+    if (call.name !== 'laphiny_delegate_tasks') continue;
+    try {
+      const payload = JSON.parse(call.arguments) as { tasks?: unknown };
+      if (!Array.isArray(payload.tasks)) continue;
+      for (const item of payload.tasks) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+        const task = item as Record<string, unknown>;
+        const assigneeId = typeof task.assignee_id === 'string' ? task.assignee_id.trim() : '';
+        const taskText = typeof task.task === 'string' ? normalizeAssistantDelegationTask(task.task) : '';
+        const deliverable = typeof task.deliverable === 'string' ? normalizeAssistantDelegationTask(task.deliverable) : '';
+        const acceptance = typeof task.acceptance === 'string' ? normalizeAssistantDelegationTask(task.acceptance) : '';
+        const target = members.find((member) => member.connectionId === assigneeId);
+        if (!target || !isActionableAssistantDelegationTask(taskText) || !deliverable || !acceptance) continue;
+        const key = `${target.connectionId}:${taskText}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push({
+          target,
+          mention: normalizeMention(assigneeId),
+          taskText,
+          input: typeof task.input === 'string' ? normalizeAssistantDelegationTask(task.input) : undefined,
+          deliverable,
+          acceptance,
+          priority: task.priority === 'low' || task.priority === 'high' ? task.priority : 'normal',
+        });
+      }
+    } catch {
+      // A malformed tool call is not executable; the regular reply remains visible.
+    }
+  }
+  return result;
+}
+
 export function memberMatchesMention(member: RoomMember, mention: string): boolean {
   const normalizedMention = normalizeMention(mention);
   return normalizeMention(member.alias) === normalizedMention || normalizeMention(member.connectionId) === normalizedMention;
@@ -87,8 +139,8 @@ export function normalizeMention(value: string): string {
 }
 
 /**
- * Assistant delegation is deliberately stricter than user routing: only a
- * line-leading exact @member plus an actionable task is forwarded.
+ * Assistant delegation prefers the explicit laphiny-delegation JSON protocol.
+ * The line-leading @ form remains as a backward-compatible fallback.
  */
 export function resolveAssistantDelegations(
   room: Room,
@@ -98,25 +150,79 @@ export function resolveAssistantDelegations(
   const enabledMembers = room.members.filter(
     (member) => member.enabled && member.connectionId !== excludeConnectionId,
   );
+  const structured = resolveStructuredAssistantDelegations(assistantText, enabledMembers);
+  if (structured.length > 0) return structured;
+
   const delegations: AssistantDelegation[] = [];
   const seen = new Set<string>();
 
   for (const line of assistantText.split(/\r?\n/u)) {
     const atIndex = getLineLeadingAtIndex(line);
     if (atIndex < 0) continue;
-    const mention = resolveKnownMentionAt(line, atIndex, enabledMembers);
-    if (!mention?.member) continue;
-
-    const taskText = normalizeAssistantDelegationTask(line.slice(mention.end));
+    const mentions = resolveLeadingDelegationMentions(line, atIndex, enabledMembers);
+    if (mentions.length === 0) continue;
+    const taskText = normalizeAssistantDelegationTask(line.slice(mentions.at(-1)!.end));
     if (!isActionableAssistantDelegationTask(taskText)) continue;
 
-    const key = `${mention.member.connectionId}:${taskText}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    delegations.push({ target: mention.member, mention: mention.mention, taskText });
+    for (const mention of mentions) {
+      const key = `${mention.member!.connectionId}:${taskText}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      delegations.push({ target: mention.member!, mention: mention.mention, taskText });
+    }
   }
 
   return delegations;
+}
+
+/**
+ * Parses a machine-readable delegation block. Each entry owns one task, which
+ * avoids guessing how prose after several consecutive mentions should split.
+ */
+function resolveStructuredAssistantDelegations(text: string, members: RoomMember[]): AssistantDelegation[] {
+  const delegations: AssistantDelegation[] = [];
+  const seen = new Set<string>();
+  const blockPattern = /```laphiny-delegation\s*\n([\s\S]*?)```/gi;
+  let block: RegExpExecArray | null;
+  while ((block = blockPattern.exec(text)) !== null) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(block[1] ?? '');
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(payload)) continue;
+    for (const item of payload) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const { to, task } = item as DelegationPayload;
+      const targetName = typeof to === 'string' ? to.trim() : '';
+      const taskText = typeof task === 'string' ? normalizeAssistantDelegationTask(task) : '';
+      if (!targetName || !isActionableAssistantDelegationTask(taskText)) continue;
+      const candidates = uniqueMembers(members.filter((member) => memberMatchesMention(member, targetName)));
+      if (candidates.length !== 1) continue;
+      const target = candidates[0]!;
+      const key = `${target.connectionId}:${taskText}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      delegations.push({ target, mention: normalizeMention(targetName), taskText });
+    }
+  }
+  return delegations;
+}
+
+function resolveLeadingDelegationMentions(line: string, start: number, members: RoomMember[]): KnownMention[] {
+  const mentions: KnownMention[] = [];
+  let offset = start;
+  while (offset >= 0) {
+    const mention = resolveKnownMentionAt(line, offset, members);
+    if (!mention?.member) break;
+    mentions.push(mention);
+    const rest = line.slice(mention.end);
+    const next = rest.match(/^[\s,，、]+[@＠]/u);
+    if (!next) break;
+    offset = mention.end + next[0].length - 1;
+  }
+  return mentions;
 }
 
 export function isActionableAssistantDelegationTask(taskText: string): boolean {
