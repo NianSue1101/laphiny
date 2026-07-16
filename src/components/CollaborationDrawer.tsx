@@ -11,6 +11,8 @@ import { MarkdownText } from './MarkdownText';
 import { RoomStatusBar } from './RoomStatusBar';
 import { RoleplaySceneCard } from './RoleplaySceneCard';
 import { Ionicons } from './SafeIcon';
+import { DelegationTaskCard } from './DelegationTaskCard';
+import type { RoomStreamSummary } from '../lib/stream_events';
 
 interface CollaborationDrawerProps {
   room: Room | null;
@@ -23,6 +25,9 @@ interface CollaborationDrawerProps {
   TextComponent: ComponentType<TextProps>;
   getDelegationTaskStatusStyle: (status: DelegationTask['status']) => any;
   onClose: () => void;
+  onRetryDelegation?: (task: DelegationTask) => void;
+  onReassignDelegation?: (task: DelegationTask, targetConnectionId: string) => void;
+  streamSummary?: RoomStreamSummary;
 }
 
 export function CollaborationDrawer({
@@ -36,6 +41,9 @@ export function CollaborationDrawer({
   TextComponent: Text,
   getDelegationTaskStatusStyle,
   onClose,
+  onRetryDelegation,
+  onReassignDelegation,
+  streamSummary,
 }: CollaborationDrawerProps) {
   if (!room || room.kind !== 'group') return null;
 
@@ -51,7 +59,7 @@ export function CollaborationDrawer({
             <Ionicons name="close" size={18} color="#4b5563" />
           </TouchableOpacity>
         </View>
-        <RoomStatusBar room={room} delegationTasks={delegationTasks} styles={styles} />
+        <RoomStatusBar room={room} delegationTasks={delegationTasks} streamSummary={streamSummary} styles={styles} />
         <RoleplaySceneCard room={room} styles={styles} TextComponent={Text} />
         {room.lastSummary ? (
           <View style={styles.summaryBox}>
@@ -89,13 +97,7 @@ export function CollaborationDrawer({
         ))}
         <Text style={styles.panelLabel}>委托任务</Text>
         {delegationTasks.length ? delegationTasks.slice(0, 8).map((task) => (
-          <View key={task.id} style={styles.taskCard}>
-            <View style={styles.conflictHeader}>
-              <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias}</Text>
-              <Text style={[styles.badge, getDelegationTaskStatusStyle(task.status)]}>{getDelegationTaskStatusLabel(task.status)}</Text>
-            </View>
-            <Text style={styles.help} numberOfLines={3}>{task.taskText}</Text>
-          </View>
+          <DelegationTaskCard key={task.id} task={task} room={room} styles={styles} TextComponent={Text} getStatusStyle={getDelegationTaskStatusStyle} onRetry={onRetryDelegation} onReassign={onReassignDelegation} />
         )) : <Text style={styles.help}>暂无委托任务。</Text>}
         <Text style={styles.panelLabel}>最近协作</Text>
         {collaborationEvents.length ? collaborationEvents.slice(0, 10).map((event) => (

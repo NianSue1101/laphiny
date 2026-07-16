@@ -8,6 +8,7 @@ import {
   reduceAgentStreamEvent,
   shouldDisplayServiceReasoning,
   summarizeActiveAgentStreams,
+  summarizeGlobalAgentStreams,
 } from '../src/lib/stream_events';
 
 function initial(messageId = 'message-1', roomId = 'room-1', connectionId = 'agent-1') {
@@ -77,6 +78,10 @@ test('summarizes active streams independently by room', () => {
   assert.equal(summaries['room-a']?.label, '思考中');
   assert.equal(summaries['room-b']?.label, '回复中');
   assert.equal(summaries['room-a']?.activeCount, 1);
+  const global = summarizeGlobalAgentStreams({ m1: one, m2: two, m3: done });
+  assert.equal(global.activeRooms, 2);
+  assert.equal(global.activeAgents, 1);
+  assert.equal(global.byPhase.responding, 1);
 });
 
 test('only exposes service reasoning when the user enables it', () => {

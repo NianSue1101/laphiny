@@ -76,6 +76,7 @@ interface MobileRoomDetailsDrawerProps {
   onConfirmPendingMemory: () => void;
   onDiscardPendingMemory: () => void;
   onGenerateMemory: () => void;
+  onExportCollaborationReport: () => void;
 }
 
 export function MobileRoomDetailsDrawer({
@@ -94,6 +95,7 @@ export function MobileRoomDetailsDrawer({
   onConfirmPendingMemory,
   onDiscardPendingMemory,
   onGenerateMemory,
+  onExportCollaborationReport,
 }: MobileRoomDetailsDrawerProps) {
   const Text = TextComponent;
 
@@ -112,7 +114,17 @@ export function MobileRoomDetailsDrawer({
             <Text style={[styles.cardTitle, isDarkMode && styles.titleDark]} numberOfLines={1}>房间详情</Text>
             <Text style={[styles.help, isDarkMode && styles.subtitleDark]} numberOfLines={1}>左滑打开 · 右滑或点击空白关闭</Text>
           </View>
-          <TouchableOpacity style={styles.sidebarIconButton} onPress={onClose}>
+          {room.kind === 'group' ? (
+            <TouchableOpacity
+              style={styles.sidebarIconButton}
+              onPress={onExportCollaborationReport}
+              accessibilityRole="button"
+              accessibilityLabel="导出脱敏协作报告"
+            >
+              <Ionicons name="shield-checkmark-outline" size={18} color="#2563eb" />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity style={styles.sidebarIconButton} onPress={onClose} accessibilityRole="button" accessibilityLabel="关闭房间详情">
             <Ionicons name="close" size={18} color="#4b5563" />
           </TouchableOpacity>
         </View>

@@ -58,6 +58,7 @@ interface RoomToolsPanelProps {
   onGenerateMemory: () => void;
   onClearMemory: () => void;
   onExportRoom: (format: 'json' | 'markdown') => void;
+  onExportCollaborationReport: () => void;
   onResetSession: () => void;
   onClearMessages: () => void;
   onDeleteRoom: () => void;
@@ -99,6 +100,7 @@ export function RoomToolsPanel({
   onGenerateMemory,
   onClearMemory,
   onExportRoom,
+  onExportCollaborationReport,
   onResetSession,
   onClearMessages,
   onDeleteRoom,
@@ -377,6 +379,7 @@ export function RoomToolsPanel({
       ) : null}
 
       <View style={styles.toolActions}>
+        {room.kind === 'group' ? <MiniButton icon="shield-checkmark-outline" label="导出脱敏协作报告" onPress={onExportCollaborationReport} /> : null}
         <MiniButton icon="download-outline" label="导出 JSON" onPress={() => onExportRoom('json')} />
         <MiniButton icon="document-text-outline" label="导出 MD" onPress={() => onExportRoom('markdown')} />
         <MiniButton icon="refresh-circle-outline" label="清空记忆" onPress={onResetSession} />

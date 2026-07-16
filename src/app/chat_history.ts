@@ -1,4 +1,5 @@
 import { formatAgentProfileForPrompt } from '../lib/agent_profile';
+import { buildAgentConnectionDirectory, formatAgentConnectionDirectory } from '../lib/connection_directory';
 import { buildAgentFilePromptAppendix } from '../lib/agent_files';
 import { buildHermesUserContent } from '../lib/payload';
 import { formatRoomGrowthForPrompt, formatRoomStatePatchProtocolPrompt } from '../lib/room_growth';
@@ -255,7 +256,7 @@ export function buildCollaborationProtocol({
     '2. 回应要增量推进：避免复述共享记录里已经完成的内容，优先补充新结论、可执行步骤、风险或缺口。',
     '3. 判断“谁更适合”时，优先参考成员公开卡片里的擅长领域、适合委托和不适合委托；没有卡片时只可依据用户明确指定或近期上下文。',
     allowDelegation
-      ? '4. 只有某个独立子任务明显更适合其他成员、且你无法高质量完成时，才发起委托。如果当前工具列表中有 laphiny_delegate_tasks，必须调用它创建委托；不要用自然语言或 @ 猜测任务归属。没有这个工具时才使用下方结构化块作为兼容。'
+      ? '4. 只有某个独立子任务明显更适合其他成员、且你无法高质量完成时，才发起委托。如果当前工具列表中有 laphiny_delegate_tasks，必须调用它创建委托；assignee_id 只能逐字复制“稳定 connection 目录”里的 connection_id，禁止猜测、改写或使用别名代替。没有这个工具时才使用下方结构化块作为兼容。'
       : '4. 当前不应继续发起委托；请尽量直接完成任务或说明缺少什么输入。',
     '5. 委托必须写清楚：目标、输入材料、期望产物和边界；不要只写成员名或泛泛地说“帮忙看看”。',
     '6. 一次最多委托 1 个最关键的子任务；不要 @自己，不要使用 @all，不要为了寒暄、赞同、总结或甩锅而委托。',
@@ -269,14 +270,12 @@ export function buildCollaborationProtocol({
 }
 
 export function buildMemberCapabilityGuide(room: Room, currentMember: RoomMember, connections: HermesConnection[]): string {
-  const enabledMembers = room.members.filter((member) => member.enabled);
-  if (enabledMembers.length === 0) return '- 暂无可用成员';
-
-  return enabledMembers.map((member) => {
-    const selfMark = member.connectionId === currentMember.connectionId ? '（你）' : '';
-    const connection = connections.find((item) => item.id === member.connectionId);
-    return `- ${member.alias}${selfMark}：${formatAgentProfileForPrompt(member.alias, connection?.profile)}`;
-  }).join('\n');
+  return formatAgentConnectionDirectory(buildAgentConnectionDirectory(
+    room,
+    currentMember,
+    connections,
+    formatAgentProfileForPrompt,
+  ));
 }
 
 export function buildSharedGroupHistoryMessage(

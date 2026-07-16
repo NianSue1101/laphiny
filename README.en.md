@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.33.0](#what-is-new-in-v0330)
 - [What Is New In v0.32.3](#what-is-new-in-v0323)
 - [What Is New In v0.32.2](#what-is-new-in-v0322)
 - [What Is New In v0.32.1](#what-is-new-in-v0321)
@@ -147,6 +148,19 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.33.0
+
+- **Stable connection directory:** group and delegation prompts now carry `laphiny.connection-directory.v1`, containing only enabled room members, exact IDs, aliases, and public collaboration profiles. Gateway URLs, API keys, and models are excluded, so `laphiny_delegate_tasks` no longer has to guess an internal ID.
+- **Actionable plugin diagnostics:** both the current `{ data: [...] }` and legacy array `/v1/toolsets` shapes are supported. Laphiny distinguishes a missing Responses API, missing plugin, disabled toolset, incompatible metadata, and probe failure, then provides remediation. Runtime Responses incompatibility appears as a small activity hint before a safe chat fallback; cancellation and timeouts never trigger a second request.
+- **Delegation retry and reassignment:** failed task cards can retry or move the same logical task to another enabled member. Each execution records an attempt, operation ID, revision, target, terminal state, and assignment history. Duplicate taps are idempotent, stale attempt results cannot overwrite the current attempt, and unfinished attempts become interrupted after restart.
+- **Whole-stream timeout policy:** connection timeout covers the period before response headers; idle timeout remains active for the complete body and resets on every raw chunk; user cancellation remains distinct. A delegation that times out after partial output becomes outcome-unknown instead of being falsely labelled a safe failure.
+- **Background stream and Android performance:** the app header aggregates active Agents and rooms, with per-room phase counts. Android delta flushes are coalesced to 140 ms, a flush writes the message once, and unchanged message bubbles no longer re-render on every delta. Sending also re-locks the list to the newest bubble even after a very tall previous reply.
+- **Redacted collaboration report:** group tools and the mobile room-details drawer can export a local JSON report through a strict allowlist. Agent names are pseudonymized; only structured terminal states, attempts, event kinds, and redacted goal evidence are included. URL, token, email, IP, path, or forbidden-field canaries block export. Chat text, attachments, private connection metadata, and hidden reasoning are never included.
+- **Boundaries:** retry is a new Hermes request, not server-side stream resume. `outcome_unknown` means side effects cannot be proven after partial output. Laphiny does not invent a plugin version when the Gateway does not report one.
+- **Unified version metadata:** in-app, Expo, npm, and Android versions report `0.33.0`; Android uses `versionCode 330`.
 
 ---
 
