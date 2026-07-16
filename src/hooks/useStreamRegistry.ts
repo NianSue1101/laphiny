@@ -113,7 +113,7 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
   function queueStreamMessageUpdate(
     roomId: string,
     messageId: string,
-    patch: Pick<ChatMessage, 'content'> & Partial<Pick<ChatMessage, 'reasoning'>>,
+    patch: Pick<ChatMessage, 'content'> & Partial<Pick<ChatMessage, 'reasoning' | 'activityNotices'>>,
   ) {
     streamBuffersRef.current[messageId] = { ...streamBuffersRef.current[messageId], ...patch };
     if (streamFlushTimersRef.current[messageId]) return;

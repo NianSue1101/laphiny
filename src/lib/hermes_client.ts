@@ -6,14 +6,17 @@ import {
   HermesModel,
   HermesModelsResponse,
 } from '../types';
+import { getRuntimeFetch } from './runtime_fetch';
 
 export class HermesClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  private readonly fetchImpl: typeof globalThis.fetch;
 
-  constructor(connection: Pick<HermesConnection, 'baseUrl' | 'apiKey'>) {
+  constructor(connection: Pick<HermesConnection, 'baseUrl' | 'apiKey'>, fetchImpl?: typeof globalThis.fetch) {
     this.baseUrl = connection.baseUrl.trim().replace(/\/+$/, '');
     this.apiKey = connection.apiKey.trim();
+    this.fetchImpl = fetchImpl ?? getRuntimeFetch();
   }
 
   async health(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HermesHealthResponse> {
@@ -137,6 +140,7 @@ export class HermesClient {
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    let eventName = '';
     const abortReader = () => {
       void reader.cancel().catch(() => undefined);
     };
@@ -152,16 +156,21 @@ export class HermesClient {
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
-          const parsed = parseStreamLine(line);
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim();
+            continue;
+          }
+          const parsed = parseStreamLine(line, eventName);
+          if (line.trim().startsWith('data:')) eventName = '';
           if (parsed === 'done') return;
-          if (parsed && (parsed.content || parsed.reasoning)) {
+          if (parsed && hasHermesStreamPayload(parsed)) {
             yield parsed;
           }
         }
       }
 
-      const parsed = parseStreamLine(buffer);
-      if (parsed && parsed !== 'done' && (parsed.content || parsed.reasoning)) {
+      const parsed = parseStreamLine(buffer, eventName);
+      if (parsed && parsed !== 'done' && hasHermesStreamPayload(parsed)) {
         yield parsed;
       }
 
@@ -240,7 +249,7 @@ export class HermesClient {
     }
 
     try {
-      return await globalThis.fetch(`${this.baseUrl}${path}`, {
+      return await this.fetchImpl(`${this.baseUrl}${path}`, {
         method: options.method,
         headers,
         body: options.body,
@@ -332,7 +341,15 @@ function parseSseText(text: string): string[] {
 export interface HermesStreamEvent {
   content?: string;
   reasoning?: string;
-  toolCall?: { name: string; arguments: string; callId?: string };
+  toolCall?: { name: string; arguments: string; callId?: string; status?: 'running' | 'completed' };
+  activity?: HermesActivityEvent;
+}
+
+export interface HermesActivityEvent {
+  id?: string;
+  tool?: string;
+  label: string;
+  status: 'running' | 'completed' | 'failed' | 'info';
 }
 
 export interface HermesResponseRequest {
@@ -357,7 +374,7 @@ export async function getHermesToolDelegationSupport(client: HermesClient, timeo
   }
 }
 
-function parseStreamLine(line: string): HermesStreamEvent | 'done' | null {
+function parseStreamLine(line: string, eventName = ''): HermesStreamEvent | 'done' | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('event:') || trimmed.startsWith(':')) return null;
 
@@ -367,6 +384,27 @@ function parseStreamLine(line: string): HermesStreamEvent | 'done' | null {
   if (payload === '[DONE]') return 'done';
 
   try {
+    if (eventName === 'hermes.tool.progress') {
+      const progress = JSON.parse(payload) as Record<string, unknown>;
+      const tool = typeof progress.tool === 'string' ? progress.tool : undefined;
+      const label = typeof progress.label === 'string' && progress.label.trim()
+        ? progress.label.trim()
+        : tool ? `正在使用 ${tool}` : 'Hermes 正在处理';
+      const rawStatus = typeof progress.status === 'string' ? progress.status.toLowerCase() : 'running';
+      const status: HermesActivityEvent['status'] = rawStatus === 'completed' || rawStatus === 'done'
+        ? 'completed'
+        : rawStatus === 'failed' || rawStatus === 'error'
+          ? 'failed'
+          : rawStatus === 'running' || rawStatus === 'started'
+            ? 'running'
+            : 'info';
+      const id = typeof progress.toolCallId === 'string'
+        ? progress.toolCallId
+        : typeof progress.tool_call_id === 'string'
+          ? progress.tool_call_id
+          : undefined;
+      return { activity: { id, tool, label, status } };
+    }
     const chunk = JSON.parse(payload) as HermesSseChunk | HermesChatCompletionResponse;
     return extractChatCompletionContent(chunk);
   } catch {
@@ -395,6 +433,10 @@ function extractChatCompletionContent(chunk: HermesSseChunk | HermesChatCompleti
   };
 }
 
+function hasHermesStreamPayload(event: HermesStreamEvent): boolean {
+  return Boolean(event.content || event.reasoning || event.toolCall || event.activity);
+}
+
 function parseResponseStreamEvent(eventName: string, payload: string): HermesStreamEvent | null {
   try {
     const data = JSON.parse(payload) as Record<string, any>;
@@ -404,10 +446,33 @@ function parseResponseStreamEvent(eventName: string, payload: string): HermesStr
       && item?.type === 'function_call'
       && typeof item.name === 'string'
       && typeof item.arguments === 'string') {
-      return { toolCall: { name: item.name, arguments: item.arguments, callId: typeof item.call_id === 'string' ? item.call_id : undefined } };
+      const status = eventName === 'response.output_item.done' ? 'completed' : 'running';
+      const callId = typeof item.call_id === 'string' ? item.call_id : undefined;
+      return {
+        toolCall: { name: item.name, arguments: item.arguments, callId, status },
+        activity: {
+          id: callId,
+          tool: item.name,
+          label: describeToolActivity(item.name, item.arguments, status),
+          status,
+        },
+      };
     }
   } catch {
     // Ignore malformed SSE frames; a final completion/error frame still decides the request outcome.
   }
   return null;
+}
+
+function describeToolActivity(tool: string, rawArguments: string, status: 'running' | 'completed'): string {
+  let subject = '';
+  try {
+    const args = JSON.parse(rawArguments) as Record<string, unknown>;
+    subject = [args.skill, args.name, args.target, args.action]
+      .find((value): value is string => typeof value === 'string' && Boolean(value.trim()))?.trim() ?? '';
+  } catch {
+    // The tool name is still useful when arguments are partial or malformed.
+  }
+  const prefix = status === 'completed' ? '已完成' : '正在执行';
+  return `${prefix} ${tool}${subject ? ` · ${subject}` : ''}`;
 }

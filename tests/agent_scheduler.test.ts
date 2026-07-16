@@ -33,3 +33,17 @@ test('serializes the same room/Agent pair while other pairs run concurrently', a
   assert.equal(started.at(-1), 'a:one:second');
   assert.deepEqual(scheduler.activeKeys(), []);
 });
+
+test('does not collide when imported room or Agent ids contain colons', async () => {
+  const scheduler = new AgentTaskScheduler();
+  let release: (() => void) | undefined;
+  const first = scheduler.schedule({ roomId: 'room:a', connectionId: 'b' }, async () => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    return 'first';
+  });
+  const second = scheduler.schedule({ roomId: 'room', connectionId: 'a:b' }, async () => 'second');
+
+  assert.equal(await second, 'second');
+  release?.();
+  assert.equal(await first, 'first');
+});

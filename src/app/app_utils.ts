@@ -51,6 +51,10 @@ export function formatDateTime(value: string): string {
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+export function formatMessageTimestamp(value: string, showDate = false): string {
+  return showDate ? formatDateTime(value) : formatTime(value);
+}
+
 export function getSquareEventIcon(kind: SquareEvent['kind']): IconName {
   if (kind === 'system') return 'information-circle-outline';
   if (kind === 'task') return 'checkbox-outline';

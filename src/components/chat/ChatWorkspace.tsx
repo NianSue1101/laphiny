@@ -108,6 +108,7 @@ export function ChatWorkspace(props: any) {
     runRitualCommand,
     selectedFontFamily,
     showReasoning,
+    showMessageDate,
     selectedMessages,
     selectedRoom,
     selectedRoomCollaborationEvents,
@@ -173,15 +174,19 @@ export function ChatWorkspace(props: any) {
     refreshMessageHistory,
     searchingFullHistory,
   } = messageHistoryRuntime;
+  // The 900px breakpoint enables the desktop shell; the collaboration drawer
+  // needs more room, so it uses a separate, explicit breakpoint.
+  const isCollaborationLayout = isWideLayout && width >= 1200;
   function renderMessageBubble(message: ChatMessage) {
     return (
       <MessageBubble
         message={message}
         renderable={getRenderableMessageArtifacts(message)}
         isDarkMode={isDarkMode}
-        isWideLayout={isWideLayout}
+        isWideLayout={isCollaborationLayout}
           selectedFontFamily={selectedFontFamily}
           showReasoning={showReasoning}
+          showMessageDate={showMessageDate}
         isLastEditableUserMessage={message.id === lastEditableUserMessage?.id}
         sending={sending}
         stopping={Boolean(stoppingStreamIds[message.id])}
@@ -337,7 +342,7 @@ export function ChatWorkspace(props: any) {
 
         {renderChatComposer()}
         </KeyboardAvoidingView>
-        {isWideLayout && collaborationDrawerOpen ? renderCollaborationDrawer() : null}
+        {isCollaborationLayout && collaborationDrawerOpen ? renderCollaborationDrawer() : null}
       </View>
     );
   }

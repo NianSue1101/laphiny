@@ -65,3 +65,24 @@ test('runHermesCompletion accumulates streaming chunks and reports progress', as
   assert.equal(result, 'hello stream');
   assert.deepEqual(progress, ['hello', 'hello ', 'hello stream']);
 });
+
+test('runHermesCompletion merges tool lifecycle events into one small activity notice', async () => {
+  const client = {
+    async *chatCompletionStreamEvents() {
+      yield { activity: { id: 'tool_1', tool: 'skill_manage', label: '正在创建 skill', status: 'running' as const } };
+      yield { content: '已完成' };
+      yield { activity: { id: 'tool_1', tool: 'skill_manage', label: 'skill 已创建', status: 'completed' as const } };
+    },
+  } as any;
+  const progress: any[] = [];
+  const result = await runHermesCompletion(client, {
+    request: { model: 'test-model', messages: [] },
+    stream: true,
+    onProgress: (value) => progress.push(value),
+  });
+
+  assert.equal(result, '已完成');
+  assert.equal(progress.at(-1)?.activityNotices?.length, 1);
+  assert.equal(progress.at(-1)?.activityNotices?.[0]?.status, 'completed');
+  assert.equal(progress.at(-1)?.activityNotices?.[0]?.label, 'skill 已创建');
+});

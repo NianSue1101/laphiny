@@ -142,9 +142,65 @@ test('responseStreamEvents preserves structured Hermes function calls', async ()
   for await (const event of client.responseStreamEvents({ model: 'test-model', input: 'hello' })) events.push(event);
 
   assert.deepEqual(events, [
-    { toolCall: { name: 'laphiny_delegate_tasks', arguments: '{"tasks":[]}', callId: 'call_1' } },
+    {
+      toolCall: { name: 'laphiny_delegate_tasks', arguments: '{"tasks":[]}', callId: 'call_1', status: 'running' },
+      activity: {
+        id: 'call_1',
+        tool: 'laphiny_delegate_tasks',
+        label: '正在执行 laphiny_delegate_tasks',
+        status: 'running',
+      },
+    },
     { content: '已委托。' },
   ]);
+});
+
+test('chatCompletionStreamEvents preserves Hermes tool progress without mixing it into reply text', async () => {
+  globalThis.fetch = (async () => new Response([
+    'event: hermes.tool.progress',
+    'data: {"tool":"memory","label":"更新长期记忆","toolCallId":"tool_1","status":"running"}',
+    '',
+    'data: {"choices":[{"delta":{"content":"处理完成。"}}]}',
+    '',
+    'event: hermes.tool.progress',
+    'data: {"tool":"memory","label":"长期记忆已更新","toolCallId":"tool_1","status":"completed"}',
+    '',
+    'data: [DONE]',
+    '',
+  ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
+
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  const events = [];
+  for await (const event of client.chatCompletionStreamEvents({ model: 'test-model', messages: [], stream: true })) events.push(event);
+
+  assert.deepEqual(events, [
+    { activity: { id: 'tool_1', tool: 'memory', label: '更新长期记忆', status: 'running' } },
+    { content: '处理完成。' },
+    { activity: { id: 'tool_1', tool: 'memory', label: '长期记忆已更新', status: 'completed' } },
+  ]);
+});
+
+test('chatCompletionStreamEvents yields the first delayed SSE chunk before completion', async () => {
+  let completed = false;
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"先"}}]}\n\n'));
+      setTimeout(() => {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"后"}}]}\n\ndata: [DONE]\n\n'));
+        completed = true;
+        controller.close();
+      }, 20);
+    },
+  }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
+
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  const iterator = client.chatCompletionStream({ model: 'test-model', messages: [], stream: true });
+  const first = await iterator.next();
+  assert.deepEqual(first, { value: '先', done: false });
+  assert.equal(completed, false);
+  const second = await iterator.next();
+  assert.deepEqual(second, { value: '后', done: false });
 });
 
 test('normalizeHermesReplyText cleans stored raw SSE replies', () => {

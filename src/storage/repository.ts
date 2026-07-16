@@ -362,6 +362,7 @@ export async function loadAppPreferences(): Promise<AppPreferences> {
     themeMode: 'light',
     fontFamily: 'system',
     showReasoning: false,
+    showMessageDate: false,
     updatedAt: new Date().toISOString(),
   });
 }

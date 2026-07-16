@@ -32,5 +32,5 @@ export class AgentTaskScheduler {
 }
 
 export function makeAgentQueueKey(scope: AgentQueueScope): string {
-  return `${scope.roomId}:${scope.connectionId}`;
+  return JSON.stringify([scope.roomId, scope.connectionId]);
 }

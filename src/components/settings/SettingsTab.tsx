@@ -315,7 +315,7 @@ export function SettingsTab({
               onPress={() => setDiagnosticLogsOpen((open) => !open)}
             >
               <Text style={[styles.syncToggleText, diagnosticLogsOpen && styles.syncToggleTextOn]}>
-                {diagnosticLogsOpen ? '已展开' : '已收起'}
+                {diagnosticLogsOpen ? '收起日志' : '查看日志'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -358,7 +358,7 @@ export function SettingsTab({
                     </Text>
                   </View>
                   <Text style={styles.squareEventMeta}>
-                    {getDiagnosticCategoryLabel(log.category)}
+                    {formatDateTime(log.createdAt)} · {getDiagnosticCategoryLabel(log.category)}
                     {log.connectionName ? ` · ${log.connectionName}` : ''}
                     {log.roomName ? ` · ${log.roomName}` : ''}
                     {log.durationMs != null ? ` · ${log.durationMs}ms` : ''}

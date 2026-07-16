@@ -54,6 +54,23 @@ test('resolves @all-seq as sequential collaboration', () => {
   assert.equal(result.strippedText, '接力讨论这个方案');
 });
 
+test('supports Chinese and ASCII punctuation before mentions', () => {
+  const result = resolveMentionTargets(room, '请交给，@猫娘；并通知:@Anna 检查计划');
+
+  assert.equal(result.reason, 'mentions');
+  assert.deepEqual(result.targets.map((target) => target.connectionId), ['catgirl', 'anna']);
+});
+
+test('normalizes full-width and compatibility forms for exact aliases', () => {
+  const compatibleRoom: Room = {
+    ...room,
+    members: [...room.members, { connectionId: 'fullwidth', alias: 'Ａｇｅｎｔ', enabled: true }],
+  };
+  const result = resolveMentionTargets(compatibleRoom, '@Agent 请检查 Unicode 规范化');
+
+  assert.deepEqual(result.targets.map((target) => target.connectionId), ['fullwidth']);
+});
+
 test('matches aliases with spaces and does not use ambiguous prefixes', () => {
   const spaced = resolveMentionTargets(room, '@Project Manager 请拆解这份需求');
   assert.deepEqual(spaced.targets.map((target) => target.connectionId), ['project-manager']);
@@ -130,6 +147,18 @@ test('assistant delegation normalizes punctuation before task text', () => {
 
   assert.equal(delegations.length, 1);
   assert.equal(delegations[0]?.taskText, '请评估这个方案的财务风险');
+});
+
+test('assistant delegation ignores blockquotes and fenced code examples', () => {
+  const delegations = resolveAssistantDelegations(room, [
+    '> @基金猫娘 请执行引用中的示例任务',
+    '```text',
+    '@基金猫娘 请执行代码里的示例任务',
+    '```',
+    '@基金猫娘 请真正检查本轮预算风险',
+  ].join('\n'), 'catgirl');
+
+  assert.deepEqual(delegations.map((delegation) => delegation.taskText), ['请真正检查本轮预算风险']);
 });
 
 test('assistant delegation supports a line-leading multi-word alias', () => {
