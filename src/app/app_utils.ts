@@ -13,6 +13,7 @@ import type {
   SquareEvent,
   TeamTemplate,
 } from '../types';
+import { mergeDelegationTaskRecords } from '../lib/delegation_tasks';
 import { DEFAULT_CONTEXT_LIMIT, MAX_DELEGATION_DEPTH, STATUS_LABELS } from '../config/app_config';
 import type { IconName, ServiceWorkerStatus } from './app_types';
 
@@ -81,6 +82,7 @@ export function getCollaborationEventIcon(kind: CollaborationEvent['kind']): Ico
 export function getDelegationTaskStatusLabel(status: DelegationTask['status']): string {
   if (status === 'pending') return '待处理';
   if (status === 'running') return '处理中';
+  if (status === 'waiting_permission') return '等待权限';
   if (status === 'done') return '已完成';
   if (status === 'error') return '失败';
   return '已取消';
@@ -199,9 +201,7 @@ export function mergeCollaborationEvents(events: CollaborationEvent[]): Collabor
 }
 
 export function mergeDelegationTasks(tasks: DelegationTask[]): DelegationTask[] {
-  const byId = new Map<string, DelegationTask>();
-  for (const task of tasks) byId.set(task.id, task);
-  return Array.from(byId.values()).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+  return mergeDelegationTaskRecords(tasks);
 }
 
 export function mergeProfileVersions(versions: AgentProfileVersion[]): AgentProfileVersion[] {

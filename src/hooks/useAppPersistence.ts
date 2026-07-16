@@ -2,6 +2,7 @@ import { useEffect, type MutableRefObject } from 'react';
 
 import { getErrorMessage, showNotice } from '../app/app_utils';
 import { describeStorageBackend } from '../storage/kv';
+import { normalizeDelegationTasksAfterHydration } from '../lib/delegation_tasks';
 import {
   loadAppPreferences,
   loadConnections,
@@ -137,7 +138,7 @@ export function useAppPersistence({
         setSquareEvents(loadedSquareEvents);
         replaceDiagnosticLogs(loadedDiagnosticLogs);
         setCollaborationEvents(loadedCollaborationEvents.slice(-500));
-        setDelegationTasks(loadedDelegationTasks.slice(-200));
+        setDelegationTasks(normalizeDelegationTasksAfterHydration(loadedDelegationTasks, new Date().toISOString()).slice(-200));
         setTeamTemplates(loadedTeamTemplates);
         setProfileVersions(loadedProfileVersions.slice(-100));
         setStorageBackend(loadedStorageBackend);

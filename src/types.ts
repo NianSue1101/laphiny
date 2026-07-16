@@ -35,6 +35,10 @@ export interface HermesConnection {
     supported: boolean;
     checkedAt: string;
     reason?: string;
+    compatibility?: 'compatible' | 'responses_unavailable' | 'plugin_missing' | 'plugin_disabled' | 'metadata_incompatible' | 'probe_failed' | 'runtime_failed';
+    protocol?: 'laphiny.delegation.v1';
+    reasonCode?: string;
+    suggestedFix?: string;
   };
   createdAt: string;
   updatedAt: string;
@@ -358,7 +362,36 @@ export interface CollaborationEvent {
   createdAt: string;
 }
 
-export type DelegationTaskStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
+export type DelegationTaskStatus = 'pending' | 'running' | 'waiting_permission' | 'done' | 'error' | 'cancelled';
+export type DelegationAttemptStatus = DelegationTaskStatus | 'interrupted' | 'outcome_unknown';
+export type DelegationAttemptKind = 'initial' | 'retry' | 'reassign';
+
+export interface DelegationAttempt {
+  id: string;
+  operationId: string;
+  number: number;
+  kind: DelegationAttemptKind;
+  toConnectionId: string;
+  toAlias: string;
+  status: DelegationAttemptStatus;
+  resultMessageId?: string;
+  error?: string;
+  evidence?: string[];
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface DelegationAssignment {
+  id: string;
+  attemptId: string;
+  fromConnectionId?: string;
+  fromAlias?: string;
+  toConnectionId: string;
+  toAlias: string;
+  reason: 'initial' | 'reassign';
+  createdAt: string;
+}
 
 export interface DelegationTask {
   id: string;
@@ -385,6 +418,10 @@ export interface DelegationTask {
   evidence?: string[];
   attempts?: number;
   reassignedFromTaskId?: string;
+  revision?: number;
+  currentAttemptId?: string;
+  attemptHistory?: DelegationAttempt[];
+  assignmentHistory?: DelegationAssignment[];
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -502,6 +539,7 @@ export interface ChatMessage {
   error?: string;
   delegatedFrom?: string;
   delegationTaskId?: string;
+  delegationAttemptId?: string;
   createdAt: string;
 }
 

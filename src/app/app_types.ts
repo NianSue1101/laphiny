@@ -31,6 +31,7 @@ export type ScheduledReply = {
   delegatedFromConnectionId?: string;
   delegatorMessage?: string;
   taskId?: string;
+  delegationAttemptId?: string;
   goalMode?: GoalModeCommand;
   goalReviewRound?: number;
   retryOfMessageId?: string;

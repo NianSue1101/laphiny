@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 
-import { HermesClient, normalizeHermesReplyText } from '../src/lib/hermes_client';
+import { HermesClient, HermesTransportError, normalizeHermesReplyText } from '../src/lib/hermes_client';
 
 const originalFetch = globalThis.fetch;
 
@@ -201,6 +201,43 @@ test('chatCompletionStreamEvents yields the first delayed SSE chunk before compl
   assert.equal(completed, false);
   const second = await iterator.next();
   assert.deepEqual(second, { value: '后', done: false });
+});
+
+test('stream timeout distinguishes connection timeout before headers', async () => {
+  globalThis.fetch = ((_: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+  })) as typeof fetch;
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  await assert.rejects(
+    async () => client.chatCompletionStreamEvents({ model: 'test', messages: [], stream: true }, { connectTimeoutMs: 10 }).next(),
+    (error) => error instanceof HermesTransportError && error.kind === 'connect_timeout',
+  );
+});
+
+test('stream timeout distinguishes idle timeout after headers', async () => {
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  })) as typeof fetch;
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  await assert.rejects(
+    async () => client.chatCompletionStreamEvents({ model: 'test', messages: [], stream: true }, { connectTimeoutMs: 50, idleTimeoutMs: 10 }).next(),
+    (error) => error instanceof HermesTransportError && error.kind === 'stream_idle_timeout',
+  );
+});
+
+test('each received stream chunk resets the idle timeout', async () => {
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      setTimeout(() => controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"一"}}]}\n\n')), 5);
+      setTimeout(() => controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"二"}}]}\n\ndata: [DONE]\n\n')), 12);
+    },
+  }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
+  const chunks: string[] = [];
+  for await (const chunk of client.chatCompletionStream({ model: 'test', messages: [], stream: true }, { idleTimeoutMs: 10 })) chunks.push(chunk);
+  assert.deepEqual(chunks, ['一', '二']);
 });
 
 test('normalizeHermesReplyText cleans stored raw SSE replies', () => {

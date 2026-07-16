@@ -164,7 +164,7 @@ export function useConnectionRuntime({
           durationMs: result.latencyMs,
           meta: { models: result.modelsCount, status: result.rawStatus ?? 'ok', toolDelegation: result.toolDelegation.supported ? 'supported' : result.toolDelegation.reason ?? 'unsupported' },
         });
-        showNotice('连接成功', `状态：${result.rawStatus ?? 'ok'}\n模型数：${result.modelsCount}\n工具委托：${result.toolDelegation.supported ? '可用' : result.toolDelegation.reason ?? '不可用'}`);
+        showNotice('连接成功', `状态：${result.rawStatus ?? 'ok'}\n模型数：${result.modelsCount}\n工具委托：${result.toolDelegation.supported ? '可用' : result.toolDelegation.reason ?? '不可用'}${result.toolDelegation.suggestedFix ? `\n修复建议：${result.toolDelegation.suggestedFix}` : ''}`);
         return;
       }
 

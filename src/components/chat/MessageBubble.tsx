@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import { memo, type ComponentType } from 'react';
 import { TouchableOpacity, View, type TextProps } from 'react-native';
 
 import { formatMessageTimestamp, getStatusLabel } from '../../app/app_utils';
@@ -40,7 +40,7 @@ interface MessageBubbleProps {
   onEditLastUserMessage: () => void;
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   renderable,
   isDarkMode,
@@ -157,6 +157,23 @@ export function MessageBubble({
       ) : null}
     </View>
   );
+}, areMessageBubblePropsEqual);
+
+function areMessageBubblePropsEqual(previous: MessageBubbleProps, next: MessageBubbleProps): boolean {
+  // Message updates are immutable, so a streaming delta changes only the
+  // active message reference. Keep the other visible Markdown trees mounted
+  // instead of re-rendering the entire FlatList on every throttled flush.
+  return previous.message === next.message
+    && previous.isDarkMode === next.isDarkMode
+    && previous.isWideLayout === next.isWideLayout
+    && previous.selectedFontFamily === next.selectedFontFamily
+    && previous.showReasoning === next.showReasoning
+    && previous.showMessageDate === next.showMessageDate
+    && previous.isLastEditableUserMessage === next.isLastEditableUserMessage
+    && previous.sending === next.sending
+    && previous.stopping === next.stopping
+    && previous.styles === next.styles
+    && previous.TextComponent === next.TextComponent;
 }
 
 function AgentPermissionPanel({

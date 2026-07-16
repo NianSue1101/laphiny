@@ -4,6 +4,7 @@ import { ScrollView, View, type TextProps } from 'react-native';
 import type { IconName, Tab } from '../app/app_types';
 import { Ionicons } from './SafeIcon';
 import { TabButton } from './Primitives';
+import type { GlobalStreamSummary } from '../lib/stream_events';
 
 type Styles = Record<string, any>;
 
@@ -20,6 +21,7 @@ interface AppShellHeaderProps {
   roomsCount: number;
   enabledConnectionsCount: number;
   totalUnread: number;
+  streamSummary: GlobalStreamSummary;
   isDarkMode: boolean;
   styles: Styles;
   TextComponent: ComponentType<TextProps>;
@@ -31,6 +33,7 @@ export function AppShellHeader({
   roomsCount,
   enabledConnectionsCount,
   totalUnread,
+  streamSummary,
   isDarkMode,
   styles,
   TextComponent,
@@ -58,6 +61,12 @@ export function AppShellHeader({
             <View style={styles.unreadPill}>
               <Ionicons name="notifications" size={14} color="#991b1b" />
               <Text style={styles.unreadPillText}>{totalUnread} 未读</Text>
+            </View>
+          ) : null}
+          {streamSummary.activeAgents > 0 ? (
+            <View style={[styles.statPill, styles.statPillAccent]}>
+              <Ionicons name="pulse-outline" size={14} color="#065f46" />
+              <Text style={[styles.statText, styles.statTextAccent]}>{streamSummary.activeAgents} Agent · {streamSummary.activeRooms} 房间运行中</Text>
             </View>
           ) : null}
         </View>

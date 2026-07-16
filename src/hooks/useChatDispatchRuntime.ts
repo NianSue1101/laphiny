@@ -25,6 +25,7 @@ import { stripRoomStatePatchBlocks } from '../lib/room_growth';
 import { getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand } from '../lib/roleplay';
 import { makeDefaultRoleplayArchive } from '../lib/stage4_plus';
 import { runHermesMemberCompletion } from '../lib/chat_runtime';
+import { HermesTransportError } from '../lib/hermes_client';
 import type { Attachment, ChatMessage, RoleplayConfig, Room, RoomMember } from '../types';
 
 const MAX_GOAL_REVIEW_ROUNDS = 5;
@@ -46,12 +47,14 @@ export function useChatDispatchRuntime(options: any) {
     connections,
     continueAgentAfterPermission,
     createDelegationTask,
+    beginDelegationTaskAttempt,
     delayedGoalMessageIdsRef,
     finishActiveGoal,
     flushStreamMessage,
     generateRitualConsensus,
     markStreamPhase,
     messagesByRoom,
+    rooms,
     notifyAgentReplyFinished,
     pauseActiveGoal,
     queueStreamMessageUpdate,
@@ -64,6 +67,7 @@ export function useChatDispatchRuntime(options: any) {
     startStream,
     showRoomReplyNotification,
     updateDelegationTask,
+    transitionDelegationTaskAttempt,
     updateMessageInRoom,
     updateRoomById,
   } = options;
@@ -78,6 +82,8 @@ export function useChatDispatchRuntime(options: any) {
     attachments,
     previousMessages,
     delegationTaskId,
+    delegationAttemptId,
+    delegatedFrom,
   }: {
     room: Room;
     member: RoomMember;
@@ -86,13 +92,15 @@ export function useChatDispatchRuntime(options: any) {
     attachments: Attachment[];
     previousMessages: ChatMessage[];
     delegationTaskId?: string;
+    delegationAttemptId?: string;
+    delegatedFrom?: string;
   }) {
     startStream(placeholderId, room.id, member.connectionId);
     const connection = connectionById.get(member.connectionId);
     if (!connection) {
       markStreamPhase(placeholderId, 'failed', 'Hermes 连接不存在');
       updateMessageInRoom(room.id, placeholderId, { status: 'error', error: 'Hermes 连接不存在', content: '发送失败' });
-      updateDelegationTask(delegationTaskId, { status: 'error', error: 'Hermes 连接不存在', resultMessageId: placeholderId, attempts: 1 });
+      transitionTask(delegationTaskId, delegationAttemptId, { status: 'error', error: 'Hermes 连接不存在', resultMessageId: placeholderId });
       cleanupStream(placeholderId);
       return;
     }
@@ -101,6 +109,7 @@ export function useChatDispatchRuntime(options: any) {
     registerStreamController(placeholderId, controller);
     setStreamActive(placeholderId, true);
     markStreamPhase(placeholderId, 'connecting');
+    transitionTask(delegationTaskId, delegationAttemptId, { status: 'running' });
     const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
 
     let streamedText = '';
@@ -109,7 +118,9 @@ export function useChatDispatchRuntime(options: any) {
     try {
       const reply = await runHermesMemberCompletion({
         connection,
-        messages: buildChatHistory(previousMessages, room, member, text, attachments, connections, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT),
+        messages: delegatedFrom
+          ? buildChatHistoryForDelegation(previousMessages, room, member, text, delegatedFrom, text, connections, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT)
+          : buildChatHistory(previousMessages, room, member, text, attachments, connections, room.contextLimit ?? DEFAULT_CONTEXT_LIMIT),
         sessionId: room.sessionIds[connection.id],
         sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
         timeoutMs: 120_000,
@@ -135,6 +146,7 @@ export function useChatDispatchRuntime(options: any) {
         reasoning: reply.reasoning,
         activityNotices: reply.activityNotices,
         delegationTaskId,
+        delegationAttemptId,
         permissionRequest,
         status: 'sent',
         createdAt: new Date().toISOString(),
@@ -145,12 +157,19 @@ export function useChatDispatchRuntime(options: any) {
         reasoning: reply.reasoning,
         activityNotices: reply.activityNotices,
         delegationTaskId,
+        delegationAttemptId,
         permissionRequest,
         status: 'sent',
       });
       markStreamPhase(placeholderId, 'completed');
-      if (delegationTaskId && permissionRequest?.status !== 'pending') {
-        updateDelegationTask(delegationTaskId, {
+      if (delegationTaskId && permissionRequest?.status === 'pending') {
+        transitionTask(delegationTaskId, delegationAttemptId, {
+          status: 'waiting_permission',
+          resultMessageId: placeholderId,
+          error: '等待用户确认 Agent 权限',
+        });
+      } else if (delegationTaskId) {
+        transitionTask(delegationTaskId, delegationAttemptId, {
           status: 'done',
           resultMessageId: placeholderId,
           evidence: [answer.replace(/\s+/gu, ' ').trim().slice(0, 500)],
@@ -167,7 +186,7 @@ export function useChatDispatchRuntime(options: any) {
           content: streamedText.trim() || '已停止生成',
           status: 'stopped',
         });
-        updateDelegationTask(delegationTaskId, { status: 'cancelled', resultMessageId: placeholderId });
+        transitionTask(delegationTaskId, delegationAttemptId, { status: 'cancelled', resultMessageId: placeholderId });
         return;
       }
 
@@ -178,11 +197,27 @@ export function useChatDispatchRuntime(options: any) {
         error: errorMessage,
         content: streamedText.trim() || '发送失败',
       });
-      updateDelegationTask(delegationTaskId, { status: 'error', error: errorMessage, resultMessageId: placeholderId });
+      transitionTask(delegationTaskId, delegationAttemptId, {
+        status: error instanceof HermesTransportError && streamedText.trim() ? 'outcome_unknown' : 'error',
+        error: errorMessage,
+        resultMessageId: placeholderId,
+      });
     } finally {
       cleanupStream(placeholderId);
       await releaseBackgroundAgentTask();
     }
+  }
+
+  function transitionTask(
+    taskId: string | undefined,
+    attemptId: string | undefined,
+    patch: { status: string; resultMessageId?: string; error?: string; evidence?: string[] },
+  ) {
+    if (attemptId) {
+      transitionDelegationTaskAttempt(taskId, attemptId, patch);
+      return;
+    }
+    updateDelegationTask(taskId, patch);
   }
 
   async function dispatchMessage(
@@ -413,7 +448,7 @@ export function useChatDispatchRuntime(options: any) {
           connectionId: reply.member.connectionId,
           connectionName: reply.member.alias,
         });
-        updateDelegationTask(reply.taskId, { status: 'error', error: 'Hermes 连接不存在', resultMessageId: placeholder.id, attempts: 1 });
+        transitionTask(reply.taskId, reply.delegationAttemptId, { status: 'error', error: 'Hermes 连接不存在', resultMessageId: placeholder.id });
         cleanupStream(placeholder.id);
         return;
       }
@@ -430,7 +465,7 @@ export function useChatDispatchRuntime(options: any) {
       let accumulated = '';
 
       if (reply.taskId) {
-        updateDelegationTask(reply.taskId, { status: 'running', attempts: 1 });
+        transitionTask(reply.taskId, reply.delegationAttemptId, { status: 'running' });
         appendCollaborationEvent({
           kind: 'delegation_started',
           roomId: room.id,
@@ -510,7 +545,11 @@ export function useChatDispatchRuntime(options: any) {
           sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
-          useToolDelegation: room.agentToolDelegationEnabled !== false && connection.toolDelegation?.supported === true,
+          // New/imported connections may not have been probed yet. Try the
+          // structured endpoint optimistically; chat_runtime falls back only
+          // for explicit Responses compatibility failures. A recorded
+          // unsupported capability remains authoritative until re-tested.
+          useToolDelegation: room.agentToolDelegationEnabled !== false && connection.toolDelegation?.supported !== false,
           onProgress: (progress) => {
             accumulated = progress.content;
             queueStreamMessageUpdate(room.id, placeholder.id, progress);
@@ -529,6 +568,7 @@ export function useChatDispatchRuntime(options: any) {
           reasoning: replyResult.reasoning,
           activityNotices: replyResult.activityNotices,
           delegationTaskId: reply.taskId,
+          delegationAttemptId: reply.delegationAttemptId,
           permissionRequest,
           status: 'sent',
         };
@@ -552,6 +592,7 @@ export function useChatDispatchRuntime(options: any) {
           reasoning: completedMessage.reasoning,
           activityNotices: completedMessage.activityNotices,
           delegationTaskId: completedMessage.delegationTaskId,
+          delegationAttemptId: completedMessage.delegationAttemptId,
           permissionRequest,
           status: 'sent',
         });
@@ -579,13 +620,13 @@ export function useChatDispatchRuntime(options: any) {
           meta: { mode, depth: reply.depth, chars: answer.length, promptMessages: promptMessagesCount },
         });
         if (reply.taskId && permissionRequest?.status === 'pending') {
-          updateDelegationTask(reply.taskId, {
-            status: 'running',
+          transitionTask(reply.taskId, reply.delegationAttemptId, {
+            status: 'waiting_permission',
             resultMessageId: completedMessage.id,
             error: '等待用户确认 Agent 权限',
           });
         } else if (reply.taskId) {
-          updateDelegationTask(reply.taskId, {
+          transitionTask(reply.taskId, reply.delegationAttemptId, {
             status: 'done',
             resultMessageId: completedMessage.id,
             evidence: [answer.replace(/\s+/gu, ' ').trim().slice(0, 500)],
@@ -681,6 +722,7 @@ export function useChatDispatchRuntime(options: any) {
               delegatedFromConnectionId: reply.member.connectionId,
               delegatorMessage: answer,
               taskId: task.id,
+              delegationAttemptId: task.currentAttemptId,
               goalMode: reply.goalMode,
             });
             if (!scheduled) {
@@ -709,7 +751,7 @@ export function useChatDispatchRuntime(options: any) {
             content: stoppedContent,
             status: 'stopped',
           });
-          updateDelegationTask(reply.taskId, { status: 'cancelled', resultMessageId: stoppedMessage.id });
+          transitionTask(reply.taskId, reply.delegationAttemptId, { status: 'cancelled', resultMessageId: stoppedMessage.id });
           appendDiagnosticLog({
             level: 'warning',
             category: 'chat',
@@ -737,7 +779,11 @@ export function useChatDispatchRuntime(options: any) {
           goalPausedBySafety = true;
           pauseActiveGoal(room.id, `主 Agent 执行失败：${errorMessage}`, placeholder.id);
         }
-        updateDelegationTask(reply.taskId, { status: 'error', error: errorMessage, resultMessageId: placeholder.id });
+        transitionTask(reply.taskId, reply.delegationAttemptId, {
+          status: error instanceof HermesTransportError && accumulated.trim() ? 'outcome_unknown' : 'error',
+          error: errorMessage,
+          resultMessageId: placeholder.id,
+        });
         updateMessageInRoom(room.id, placeholder.id, {
           status: 'error',
           error: errorMessage,
@@ -754,7 +800,13 @@ export function useChatDispatchRuntime(options: any) {
           connectionName: reply.member.alias,
           requestId,
           durationMs: Date.now() - startedAt,
-          meta: { mode, depth: reply.depth, promptMessages: promptMessagesCount },
+          meta: {
+            mode,
+            depth: reply.depth,
+            promptMessages: promptMessagesCount,
+            errorKind: error instanceof HermesTransportError ? error.kind : 'request_failed',
+            receivedChars: accumulated.length,
+          },
         });
       } finally {
         cleanupStream(placeholder.id);
@@ -829,8 +881,42 @@ export function useChatDispatchRuntime(options: any) {
     }
   }
 
+  async function retryDelegationTask(task: import('../types').DelegationTask, targetConnectionId = task.toConnectionId) {
+    const room = rooms.find((item: Room) => item.id === task.roomId) as Room | undefined;
+    if (!room) throw new Error('委托所属房间不存在');
+    const member = room.members.find((item) => item.connectionId === targetConnectionId && item.enabled);
+    if (!member) throw new Error('目标 Agent 不在房间中或已禁用');
+    const kind = targetConnectionId === task.toConnectionId ? 'retry' as const : 'reassign' as const;
+    const operationId = `ui:${kind}:${task.id}:${task.revision ?? 0}:${targetConnectionId}`;
+    const result = beginDelegationTaskAttempt(task.id, {
+      operationId,
+      kind,
+      toConnectionId: member.connectionId,
+      toAlias: member.alias,
+    });
+    if (!result.created) return;
+
+    const placeholder = makeAssistantPlaceholder(room.id, member);
+    placeholder.delegatedFrom = task.fromAlias;
+    placeholder.delegationTaskId = task.id;
+    placeholder.delegationAttemptId = result.attempt.id;
+    appendMessagesToRoom(room.id, [placeholder]);
+    await schedulerRef.current.schedule({ roomId: room.id, connectionId: member.connectionId }, () => streamHermesReply({
+      room,
+      member,
+      placeholderId: placeholder.id,
+      text: task.taskText,
+      attachments: [],
+      previousMessages: messagesByRoom[room.id] ?? [],
+      delegationTaskId: task.id,
+      delegationAttemptId: result.attempt.id,
+      delegatedFrom: task.fromAlias,
+    }));
+  }
+
   return {
     dispatchMessage,
+    retryDelegationTask,
     streamHermesReply,
   };
 }

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Platform } from 'react-native';
 
 import {
   createAgentStreamEvent,
@@ -14,7 +15,7 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
   const [activeStreamIds, setActiveStreamIds] = useState<Record<string, true>>({});
   const [stoppingStreamIds, setStoppingStreamIds] = useState<Record<string, true>>({});
   const [streamStates, setStreamStates] = useState<Record<string, AgentStreamState>>({});
-  const [recentStreamEvents, setRecentStreamEvents] = useState<AgentStreamEvent[]>([]);
+  const recentStreamEventsRef = useRef<AgentStreamEvent[]>([]);
   const streamControllersRef = useRef<Record<string, AbortController>>({});
   const streamFlushTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const streamBuffersRef = useRef<Record<string, Partial<ChatMessage>>>({});
@@ -35,11 +36,11 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
       sequence: 0,
       createdAt: now,
     };
-    setRecentStreamEvents((current) => [...current, queuedEvent].slice(-200));
+    recentStreamEventsRef.current = [...recentStreamEventsRef.current, queuedEvent].slice(-200);
     updateMessage(roomId, messageId, { streamPhase: 'queued', streamUpdatedAt: now });
   }
 
-  function emitStreamEvent(messageId: string, input: Omit<StreamEventInput, 'messageId' | 'roomId' | 'connectionId'>) {
+  function emitStreamEvent(messageId: string, input: Omit<StreamEventInput, 'messageId' | 'roomId' | 'connectionId'>, updateStoredMessage = true) {
     const current = streamStatesRef.current[messageId];
     if (!current) return null;
     const event = createAgentStreamEvent(current, {
@@ -51,12 +52,14 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
     const next = reduceAgentStreamEvent(current, event);
     streamStatesRef.current[messageId] = next;
     setStreamStates((states) => ({ ...states, [messageId]: next }));
-    setRecentStreamEvents((events) => [...events, event].slice(-200));
-    updateMessage(current.roomId, messageId, {
-      streamPhase: next.phase,
-      streamUpdatedAt: next.updatedAt,
-      error: next.error,
-    });
+    recentStreamEventsRef.current = [...recentStreamEventsRef.current, { ...event, content: undefined, reasoning: undefined }].slice(-200);
+    if (updateStoredMessage) {
+      updateMessage(current.roomId, messageId, {
+        streamPhase: next.phase,
+        streamUpdatedAt: next.updatedAt,
+        error: next.error,
+      });
+    }
     return event;
   }
 
@@ -101,13 +104,18 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
       : patch.reasoning?.trim()
         ? 'thinking'
         : streamStatesRef.current[messageId]?.phase ?? 'connecting';
-    emitStreamEvent(messageId, {
+    const event = emitStreamEvent(messageId, {
       phase,
       kind: patch.content?.trim() ? 'content' : patch.reasoning?.trim() ? 'reasoning' : 'status',
       content: patch.content,
       reasoning: patch.reasoning,
+    }, false);
+    updateMessage(roomId, messageId, {
+      ...patch,
+      streamPhase: event?.phase,
+      streamUpdatedAt: event?.createdAt,
+      error: event?.error,
     });
-    updateMessage(roomId, messageId, patch);
   }
 
   function queueStreamMessageUpdate(
@@ -119,7 +127,7 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
     if (streamFlushTimersRef.current[messageId]) return;
     streamFlushTimersRef.current[messageId] = setTimeout(() => {
       flushStreamMessage(roomId, messageId);
-    }, 80);
+    }, Platform.OS === 'android' ? 140 : 100);
   }
 
   function cleanupStream(messageId: string) {
@@ -153,12 +161,12 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
     setActiveStreamIds({});
     setStoppingStreamIds({});
     setStreamStates({});
-    setRecentStreamEvents([]);
+    recentStreamEventsRef.current = [];
   }
 
   return {
     activeStreamIds,
-    recentStreamEvents,
+    recentStreamEvents: recentStreamEventsRef.current,
     stoppingStreamIds,
     streamStates,
     cleanupAllStreams,

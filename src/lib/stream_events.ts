@@ -6,6 +6,14 @@ export type RoomStreamSummary = {
   label: string;
   connectionIds: string[];
   updatedAt: string;
+  byPhase: Partial<Record<AgentStreamPhase, number>>;
+};
+
+export type GlobalStreamSummary = {
+  activeRooms: number;
+  activeAgents: number;
+  queued: number;
+  byPhase: Partial<Record<AgentStreamPhase, number>>;
 };
 
 const TERMINAL_PHASES = new Set<AgentStreamPhase>(['completed', 'cancelled', 'failed']);
@@ -109,9 +117,31 @@ export function summarizeActiveAgentStreams(states: Record<string, AgentStreamSt
       label: getAgentStreamPhaseLabel(latest ? state.phase : current.phase),
       connectionIds,
       updatedAt: latest ? state.updatedAt : current.updatedAt,
+      byPhase: {
+        ...(current?.byPhase ?? {}),
+        [state.phase]: (current?.byPhase?.[state.phase] ?? 0) + 1,
+      },
     };
   }
   return result;
+}
+
+export function summarizeGlobalAgentStreams(states: Record<string, AgentStreamState>): GlobalStreamSummary {
+  const roomIds = new Set<string>();
+  const connectionIds = new Set<string>();
+  const byPhase: Partial<Record<AgentStreamPhase, number>> = {};
+  for (const state of Object.values(states)) {
+    if (isTerminalStreamPhase(state.phase)) continue;
+    roomIds.add(state.roomId);
+    connectionIds.add(state.connectionId);
+    byPhase[state.phase] = (byPhase[state.phase] ?? 0) + 1;
+  }
+  return {
+    activeRooms: roomIds.size,
+    activeAgents: connectionIds.size,
+    queued: byPhase.queued ?? 0,
+    byPhase,
+  };
 }
 
 export function shouldDisplayServiceReasoning(enabled: boolean, reasoning?: string): boolean {

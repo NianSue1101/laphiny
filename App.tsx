@@ -55,12 +55,14 @@ import { COLLABORATION_RITUALS, type CollaborationRitualId } from './src/lib/col
 import { parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { buildGoalMemoryCapsule } from './src/lib/goal_session';
 import { applyGoalAssistantReview, collectGoalDelegationEvidence } from './src/lib/goal_state_machine';
+import { beginDelegationAttempt, normalizeDelegationTask, transitionDelegationAttempt } from './src/lib/delegation_tasks';
 import { summarizeRoomGrowth } from './src/lib/room_growth';
-import { summarizeActiveAgentStreams } from './src/lib/stream_events';
+import { summarizeActiveAgentStreams, summarizeGlobalAgentStreams } from './src/lib/stream_events';
 import { makeDefaultRoleplayConfig } from './src/lib/roleplay';
 import { buildOnboardingSteps, buildSoulRelations, buildTaskBoard, getRoomModeDefinition } from './src/lib/stage4_plus';
 import { getSlashCommandSuggestions, type UXCommandDefinition } from './src/lib/ux';
 import { buildAppBackup as buildAppBackupData, buildSyncSnapshot as buildSyncSnapshotData, normalizeBackupSnapshot, type SyncSnapshotCollections } from './src/lib/sync_snapshot';
+import { buildCollaborationRunReport } from './src/lib/collaboration_report';
 import { DEFAULT_FEEDBACK_BASE_URL, useDiagnosticsRuntime } from './src/hooks/useDiagnosticsRuntime';
 import { useConnectionRuntime } from './src/hooks/useConnectionRuntime';
 import { useChatDispatchRuntime } from './src/hooks/useChatDispatchRuntime';
@@ -492,6 +494,7 @@ export default function App() {
   });
   const {
     dispatchMessage,
+    retryDelegationTask,
     streamHermesReply,
   } = useChatDispatchRuntime({
     appendCollaborationEvent,
@@ -505,11 +508,13 @@ export default function App() {
     connections,
     continueAgentAfterPermission,
     createDelegationTask,
+    beginDelegationTaskAttempt,
     delayedGoalMessageIdsRef,
     finishActiveGoal,
     flushStreamMessage,
     generateRitualConsensus,
     messagesByRoom,
+    rooms,
     notifyAgentReplyFinished,
     pauseActiveGoal,
     queueStreamMessageUpdate,
@@ -523,6 +528,7 @@ export default function App() {
     startStream,
     showRoomReplyNotification,
     updateDelegationTask,
+    transitionDelegationTaskAttempt,
     updateMessageInRoom,
     updateRoomById,
     schedulerRef: agentTaskSchedulerRef,
@@ -669,6 +675,7 @@ export default function App() {
   const sending = selectedMessages.some((message) => message.status === 'running');
   const totalUnread = Object.values(unreadByRoom).reduce<number>((total, count) => total + Number(count ?? 0), 0);
   const roomStreamSummaries = useMemo(() => summarizeActiveAgentStreams(streamStates), [streamStates]);
+  const globalStreamSummary = useMemo(() => summarizeGlobalAgentStreams(streamStates), [streamStates]);
   const selectedTargetSet = useMemo(() => new Set(selectedTargetIds), [selectedTargetIds]);
   const slashCommandSuggestions = useMemo(() => getSlashCommandSuggestions(draft), [draft]);
   useAppUiEffects({
@@ -871,6 +878,8 @@ export default function App() {
         attachments: [],
         previousMessages: messagesByRoom[room.id] ?? [],
         delegationTaskId: message.delegationTaskId,
+        delegationAttemptId: message.delegationAttemptId,
+        delegatedFrom: message.delegatedFrom,
       });
     });
   }
@@ -932,6 +941,11 @@ export default function App() {
     }
 
     const rawText = draft.trim();
+    // Focusing the composer can resize Android's list and consume the earlier
+    // pending scroll before the user actually sends. Re-arm it at dispatch so
+    // a new placeholder is visible even after a very tall previous response.
+    messageListAtBottomRef.current = true;
+    pendingMessageScrollToEndRef.current = true;
     await dispatchMessage(selectedRoom, rawText, pendingAttachments);
   }
 
@@ -1128,15 +1142,27 @@ export default function App() {
 
   function createDelegationTask(input: Omit<DelegationTask, 'id' | 'status' | 'createdAt' | 'updatedAt'>): DelegationTask {
     const now = new Date().toISOString();
-    const task: DelegationTask = {
+    const taskId = makeId('task');
+    const baseTask: DelegationTask = {
       ...input,
-      id: makeId('task'),
+      id: taskId,
       status: 'pending',
-      attempts: input.attempts ?? 0,
+      attempts: 0,
+      revision: 0,
+      attemptHistory: [],
+      assignmentHistory: [],
       evidence: input.evidence ?? [],
       createdAt: now,
       updatedAt: now,
     };
+    const task = beginDelegationAttempt(baseTask, {
+      operationId: `initial:${taskId}`,
+      kind: 'initial',
+      toConnectionId: input.toConnectionId,
+      toAlias: input.toAlias,
+      now,
+      attemptId: makeId('attempt'),
+    }).task;
     setDelegationTasks((current) => {
       const next = mergeDelegationTasks([...current, task]).slice(-200);
       delegationTasksRef.current = next;
@@ -1167,6 +1193,52 @@ export default function App() {
       delegationTasksRef.current = next;
       return next;
     });
+  }
+
+  function beginDelegationTaskAttempt(
+    taskId: string,
+    input: { operationId: string; kind: 'retry' | 'reassign'; toConnectionId: string; toAlias: string },
+  ) {
+    const currentTask = delegationTasksRef.current.find((task) => task.id === taskId);
+    if (!currentTask) throw new Error('委托任务不存在');
+    const result = beginDelegationAttempt(currentTask, {
+      ...input,
+      now: new Date().toISOString(),
+      attemptId: makeId('attempt'),
+    });
+    if (result.created) {
+      const next = delegationTasksRef.current.map((task) => task.id === taskId ? result.task : task);
+      delegationTasksRef.current = next;
+      setDelegationTasks(next);
+    }
+    return result;
+  }
+
+  function transitionDelegationTaskAttempt(
+    taskId: string | undefined,
+    attemptId: string | undefined,
+    transition: { status: import('./src/types').DelegationAttemptStatus; resultMessageId?: string; error?: string; evidence?: string[] },
+  ) {
+    if (!taskId || !attemptId) return;
+    const currentTask = delegationTasksRef.current.find((task) => task.id === taskId);
+    if (!currentTask) return;
+    try {
+      const updated = transitionDelegationAttempt(normalizeDelegationTask(currentTask), attemptId, {
+        ...transition,
+        now: new Date().toISOString(),
+      });
+      const next = delegationTasksRef.current.map((task) => task.id === taskId ? updated : task);
+      delegationTasksRef.current = next;
+      setDelegationTasks(next);
+    } catch (error) {
+      appendDiagnosticLog({
+        level: 'warning',
+        category: 'chat',
+        title: '忽略过期的委托状态更新',
+        message: getErrorMessage(error),
+        meta: { taskId, attemptId, status: transition.status },
+      });
+    }
   }
 
   function makeSquareEventFromMessage(roomId: string, message: ChatMessage): SquareEvent {
@@ -1235,6 +1307,23 @@ export default function App() {
 
     await Clipboard.setStringAsync(text);
     showNotice('备份已复制', '当前环境无法直接保存文件，完整 JSON 已复制到剪贴板。请妥善保存，其中可能包含 API Key。');
+  }
+
+  async function exportCollaborationReport() {
+    if (!selectedRoom || selectedRoom.kind !== 'group') return;
+    try {
+      const report = buildCollaborationRunReport({
+        room: selectedRoom,
+        tasks: delegationTasks,
+        events: collaborationEvents,
+        appVersion: APP_VERSION,
+      });
+      const filename = `laphiny-collaboration-report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      const savedTo = await saveTextFile(filename, JSON.stringify(report, null, 2), 'application/json');
+      if (savedTo) showNotice('脱敏协作报告已导出', '报告不包含聊天正文、API Key、私有连接信息、附件或隐藏 reasoning。');
+    } catch (error) {
+      showNotice('协作报告导出已阻止', getErrorMessage(error));
+    }
   }
 
   function importBackupFromText(text: string) {
@@ -1309,6 +1398,7 @@ export default function App() {
           roomsCount={rooms.length}
           enabledConnectionsCount={enabledConnections.length}
           totalUnread={totalUnread}
+          streamSummary={globalStreamSummary}
           isDarkMode={isDarkMode}
           styles={styles}
           TextComponent={Text}
@@ -1348,6 +1438,7 @@ export default function App() {
             dispatchMessage,
             draft,
             exportSelectedRoom,
+            exportCollaborationReport,
             generateRoleplayArchive,
             generateRoomMemoryCapsule,
             generateRoomSummary,
@@ -1388,6 +1479,7 @@ export default function App() {
             removeRoomKnowledgeItem,
             resetRoomSession,
             resolveAgentPermissionRequest,
+            retryDelegationTask,
             retryMessage,
             roomDetailsCollapsed,
             roomDetailsMaxHeight,

@@ -7,6 +7,35 @@ import {
   HermesModelsResponse,
 } from '../types';
 import { getRuntimeFetch } from './runtime_fetch';
+import { evaluateHermesToolDelegationSupport, type HermesToolDelegationSupport } from './hermes_capabilities';
+
+export type HermesTransportErrorKind = 'connect_timeout' | 'stream_idle_timeout';
+
+export class HermesTransportError extends Error {
+  readonly kind: HermesTransportErrorKind;
+
+  constructor(kind: HermesTransportErrorKind, message: string) {
+    super(message);
+    this.name = 'HermesTransportError';
+    this.kind = kind;
+  }
+}
+
+type HermesRequestOptions = {
+  sessionId?: string;
+  sessionKey?: string;
+  timeoutMs?: number;
+  connectTimeoutMs?: number;
+  idleTimeoutMs?: number;
+  signal?: AbortSignal;
+};
+
+type HermesResponseScope = {
+  response: Response;
+  controller: AbortController;
+  release: () => void;
+  externalSignal?: AbortSignal;
+};
 
 export class HermesClient {
   private readonly baseUrl: string;
@@ -41,7 +70,7 @@ export class HermesClient {
 
   async chatCompletion(
     request: HermesChatCompletionRequest,
-    options?: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
+    options?: HermesRequestOptions,
   ): Promise<HermesChatCompletionResponse> {
     return this.request('/v1/chat/completions', {
       method: 'POST',
@@ -50,13 +79,14 @@ export class HermesClient {
       sessionId: options?.sessionId,
       sessionKey: options?.sessionKey,
       timeoutMs: options?.timeoutMs,
+      connectTimeoutMs: options?.connectTimeoutMs,
       signal: options?.signal,
     });
   }
 
   async *chatCompletionStream(
     request: HermesChatCompletionRequest,
-    options?: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
+    options?: HermesRequestOptions,
   ): AsyncGenerator<string, void, undefined> {
     for await (const event of this.chatCompletionStreamEvents(request, options)) {
       if (event.content) yield event.content;
@@ -69,28 +99,40 @@ export class HermesClient {
 
   async *responseStreamEvents(
     request: HermesResponseRequest,
-    options?: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
+    options?: HermesRequestOptions,
   ): AsyncGenerator<HermesStreamEvent, void, undefined> {
-    const response = await this.fetch('/v1/responses', {
+    const scope = await this.openResponse('/v1/responses', {
       method: 'POST',
       body: JSON.stringify({ ...request, stream: true, store: false }),
       contentType: 'application/json',
       sessionId: options?.sessionId,
       sessionKey: options?.sessionKey,
       timeoutMs: options?.timeoutMs,
+      connectTimeoutMs: options?.connectTimeoutMs,
       signal: options?.signal,
     });
-    if (!response.ok) throw new Error(`Hermes Responses API failed: ${response.status} ${await response.text()}`);
-    if (!response.body?.getReader) throw new Error('Hermes Responses API did not return a readable stream');
+    const { response } = scope;
+    if (!response.ok) {
+      try { throw new Error(`Hermes Responses API failed: ${response.status} ${await response.text()}`); }
+      finally { scope.release(); }
+    }
+    if (!response.body?.getReader) {
+      scope.release();
+      throw new Error('Hermes Responses API did not return a readable stream');
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let eventName = '';
+    let streamEnded = false;
     try {
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const { done, value } = await readStreamChunk(reader, scope, options?.idleTimeoutMs ?? options?.timeoutMs);
+        if (done) {
+          streamEnded = true;
+          break;
+        }
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split(/\r?\n/u);
         buffer = lines.pop() ?? '';
@@ -106,50 +148,66 @@ export class HermesClient {
         }
       }
     } finally {
-      try { await reader.cancel(); } catch { /* already closed */ }
+      // React Native's stream polyfill can throw asynchronously when cancel()
+      // races a natural close or an AbortController-driven close. Only cancel
+      // when the consumer stopped early and the request itself is still live.
+      if (!streamEnded && !scope.controller.signal.aborted) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+      }
+      scope.release();
     }
   }
 
   async *chatCompletionStreamEvents(
     request: HermesChatCompletionRequest,
-    options?: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
+    options?: HermesRequestOptions,
   ): AsyncGenerator<HermesStreamEvent, void, undefined> {
-    const response = await this.fetch('/v1/chat/completions', {
+    const scope = await this.openResponse('/v1/chat/completions', {
       method: 'POST',
       body: JSON.stringify(request),
       contentType: 'application/json',
       sessionId: options?.sessionId,
       sessionKey: options?.sessionKey,
       timeoutMs: options?.timeoutMs,
+      connectTimeoutMs: options?.connectTimeoutMs,
       signal: options?.signal,
     });
+    const { response } = scope;
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+      try {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+      } finally {
+        scope.release();
+      }
     }
 
     const contentType = response.headers.get('content-type') ?? '';
     if (!response.body?.getReader) {
-      const text = await response.text();
-      const completion = parseChatCompletionText(text, contentType);
-      if (completion) yield { content: completion };
-      return;
+      try {
+        const text = await response.text();
+        const completion = parseChatCompletionText(text, contentType);
+        if (completion) yield { content: completion };
+        return;
+      } finally {
+        scope.release();
+      }
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let eventName = '';
-    const abortReader = () => {
-      void reader.cancel().catch(() => undefined);
-    };
-    options?.signal?.addEventListener('abort', abortReader, { once: true });
+    let streamEnded = false;
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const { done, value } = await readStreamChunk(reader, scope, options?.idleTimeoutMs ?? options?.timeoutMs);
+        if (done) {
+          streamEnded = true;
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -162,7 +220,10 @@ export class HermesClient {
           }
           const parsed = parseStreamLine(line, eventName);
           if (line.trim().startsWith('data:')) eventName = '';
-          if (parsed === 'done') return;
+          if (parsed === 'done') {
+            streamEnded = true;
+            return;
+          }
           if (parsed && hasHermesStreamPayload(parsed)) {
             yield parsed;
           }
@@ -174,16 +235,16 @@ export class HermesClient {
         yield parsed;
       }
 
-      if (options?.signal?.aborted) {
-        throw new Error('aborted');
-      }
+      throwIfExternallyAborted(scope.externalSignal);
     } finally {
-      options?.signal?.removeEventListener('abort', abortReader);
-      try {
-        await reader.cancel();
-      } catch {
-        // The reader may already be closed or canceled.
+      if (!streamEnded && !scope.controller.signal.aborted) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The reader may already be closed or canceled.
+        }
       }
+      scope.release();
     }
   }
 
@@ -193,38 +254,35 @@ export class HermesClient {
       method: 'GET' | 'POST';
       body?: string;
       contentType?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      timeoutMs?: number;
-      signal?: AbortSignal;
-    },
+    } & HermesRequestOptions,
   ): Promise<T> {
-    const response = await this.fetch(path, options);
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+    const scope = await this.openResponse(path, options);
+    try {
+      const text = await readResponseText(scope, options.timeoutMs);
+      if (!scope.response.ok) {
+        throw new Error(`HTTP ${scope.response.status}: ${text || scope.response.statusText}`);
+      }
+      return text ? (JSON.parse(text) as T) : ({} as T);
+    } finally {
+      scope.release();
     }
-    return text ? (JSON.parse(text) as T) : ({} as T);
   }
 
-  private async fetch(
+  private async openResponse(
     path: string,
     options: {
       method: 'GET' | 'POST';
       body?: string;
       contentType?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      timeoutMs?: number;
-      signal?: AbortSignal;
-    },
-  ): Promise<Response> {
+    } & HermesRequestOptions,
+  ): Promise<HermesResponseScope> {
     const controller = new AbortController();
     let timeoutFired = false;
-    const timeoutId = options.timeoutMs ? setTimeout(() => {
+    const connectTimeoutMs = options.connectTimeoutMs ?? options.timeoutMs;
+    const timeoutId = connectTimeoutMs ? setTimeout(() => {
       timeoutFired = true;
       controller.abort();
-    }, options.timeoutMs) : null;
+    }, connectTimeoutMs) : null;
 
     const releaseAbort = options.signal
       ? (() => {
@@ -249,22 +307,65 @@ export class HermesClient {
     }
 
     try {
-      return await this.fetchImpl(`${this.baseUrl}${path}`, {
+      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method: options.method,
         headers,
         body: options.body,
         signal: controller.signal,
       });
+      if (timeoutId) clearTimeout(timeoutId);
+      return {
+        response,
+        controller,
+        externalSignal: options.signal,
+        release: () => releaseAbort?.(),
+      };
     } catch (error) {
-      if (timeoutFired) {
-        throw new Error(`Hermes request timed out after ${options.timeoutMs}ms`);
-      }
-      throw error;
-    } finally {
       if (timeoutId) clearTimeout(timeoutId);
       releaseAbort?.();
+      if (timeoutFired) {
+        throw new HermesTransportError('connect_timeout', `Hermes connection timed out after ${connectTimeoutMs}ms`);
+      }
+      throw error;
     }
   }
+}
+
+async function readResponseText(scope: HermesResponseScope, idleTimeoutMs?: number): Promise<string> {
+  if (!idleTimeoutMs) return scope.response.text();
+  return raceWithIdleTimeout(scope.response.text(), scope, idleTimeoutMs);
+}
+
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  scope: HermesResponseScope,
+  idleTimeoutMs?: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  throwIfExternallyAborted(scope.externalSignal);
+  const result = idleTimeoutMs
+    ? await raceWithIdleTimeout(reader.read(), scope, idleTimeoutMs)
+    : await reader.read();
+  throwIfExternallyAborted(scope.externalSignal);
+  return result;
+}
+
+function raceWithIdleTimeout<T>(promise: Promise<T>, scope: HermesResponseScope, idleTimeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      scope.controller.abort();
+      reject(new HermesTransportError('stream_idle_timeout', `Hermes response stream was idle for ${idleTimeoutMs}ms`));
+    }, idleTimeoutMs);
+    promise.then(
+      (value) => { clearTimeout(timeoutId); resolve(value); },
+      (error) => { clearTimeout(timeoutId); reject(error); },
+    );
+  });
+}
+
+function throwIfExternallyAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new DOMException('The operation was aborted', 'AbortError');
 }
 
 export function normalizeHermesReplyText(text: string): string {
@@ -360,17 +461,22 @@ export interface HermesResponseRequest {
   store?: boolean;
 }
 
-export async function getHermesToolDelegationSupport(client: HermesClient, timeoutMs = 8_000): Promise<{ supported: boolean; reason?: string }> {
+export async function getHermesToolDelegationSupport(client: HermesClient, timeoutMs = 8_000): Promise<HermesToolDelegationSupport> {
   try {
     const [capabilities, toolsets] = await Promise.all([
       client.requestPublic<Record<string, any>>('/v1/capabilities', { timeoutMs }),
-      client.requestPublic<Array<{ tools?: string[] }>>('/v1/toolsets', { timeoutMs }),
+      client.requestPublic<unknown>('/v1/toolsets', { timeoutMs }),
     ]);
-    if (capabilities?.features?.responses_api !== true) return { supported: false, reason: 'Gateway 未声明 Responses API' };
-    const hasTool = Array.isArray(toolsets) && toolsets.some((toolset) => toolset.tools?.includes('laphiny_delegate_tasks'));
-    return hasTool ? { supported: true } : { supported: false, reason: '未安装 laphiny-hermes-delegation 插件' };
+    return evaluateHermesToolDelegationSupport(capabilities, toolsets);
   } catch (error) {
-    return { supported: false, reason: error instanceof Error ? error.message : String(error) };
+    return {
+      supported: false,
+      compatibility: 'probe_failed',
+      protocol: 'laphiny.delegation.v1',
+      reasonCode: 'capability_probe_failed',
+      reason: error instanceof Error ? error.message : String(error),
+      suggestedFix: '请检查 Gateway 版本、插件状态和 /v1/capabilities、/v1/toolsets 端点。',
+    };
   }
 }
 

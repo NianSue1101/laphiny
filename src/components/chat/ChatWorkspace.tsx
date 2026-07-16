@@ -56,6 +56,7 @@ export function ChatWorkspace(props: any) {
     dispatchMessage,
     draft,
     exportSelectedRoom,
+    exportCollaborationReport,
     generateRoleplayArchive,
     generateRoomMemoryCapsule,
     generateRoomSummary,
@@ -97,6 +98,7 @@ export function ChatWorkspace(props: any) {
     resetRoomSession,
     resolveAgentPermissionRequest,
     retryMessage,
+    retryDelegationTask,
     roomDetailsCollapsed,
     roomDetailsMaxHeight,
     roomGrowthPanel,
@@ -387,6 +389,7 @@ export function ChatWorkspace(props: any) {
         onConfirmPendingMemory={confirmPendingRoomMemoryCapsule}
         onDiscardPendingMemory={discardPendingRoomMemoryCapsule}
         onGenerateMemory={generateRoomMemoryCapsule}
+        onExportCollaborationReport={exportCollaborationReport}
       />
     );
   }
@@ -564,6 +567,9 @@ export function ChatWorkspace(props: any) {
         styles={styles}
         TextComponent={Text}
         getDelegationTaskStatusStyle={getDelegationTaskStatusStyle}
+        onRetryDelegation={(task) => void retryDelegationTask(task)}
+        onReassignDelegation={(task, targetConnectionId) => void retryDelegationTask(task, targetConnectionId)}
+        streamSummary={selectedRoom ? roomStreamSummaries[selectedRoom.id] : undefined}
         onClose={() => setCollaborationDrawerOpen(false)}
       />
     );
@@ -598,6 +604,8 @@ export function ChatWorkspace(props: any) {
         styles={styles}
         TextComponent={Text}
         getDelegationTaskStatusStyle={getDelegationTaskStatusStyle}
+        onRetryDelegation={(task) => void retryDelegationTask(task)}
+        onReassignDelegation={(task, targetConnectionId) => void retryDelegationTask(task, targetConnectionId)}
         onToggleOpen={() => setCollaborationPanelOpen((open: boolean) => !open)}
       />
     );
@@ -656,6 +664,7 @@ export function ChatWorkspace(props: any) {
         onGenerateMemory={generateRoomMemoryCapsule}
         onClearMemory={clearRoomMemoryCapsule}
         onExportRoom={exportSelectedRoom}
+        onExportCollaborationReport={exportCollaborationReport}
         onResetSession={resetRoomSession}
         onClearMessages={clearSelectedRoomMessages}
         onDeleteRoom={deleteSelectedRoom}

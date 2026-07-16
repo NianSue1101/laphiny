@@ -1,6 +1,7 @@
 import type { AgentProfile, HermesConnection } from '../types';
 import { buildAgentProfileInquiryMessages, parseAgentProfileResponse } from './agent_profile';
 import { getHermesToolDelegationSupport, HermesClient } from './hermes_client';
+import type { HermesToolDelegationSupport } from './hermes_capabilities';
 
 export type ConnectionHealthCheckResult =
   | {
@@ -10,7 +11,7 @@ export type ConnectionHealthCheckResult =
       modelsCount: number;
       checkedAt: string;
       rawStatus?: string;
-      toolDelegation: { supported: boolean; reason?: string };
+      toolDelegation: HermesToolDelegationSupport;
     }
   | {
       id: string;

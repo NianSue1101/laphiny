@@ -8,6 +8,7 @@ import { summarizeRoleplayConfig } from '../lib/roleplay';
 import { summarizeRoomMemory } from '../lib/room_memory';
 import { MarkdownText } from './MarkdownText';
 import { Ionicons } from './SafeIcon';
+import { DelegationTaskCard } from './DelegationTaskCard';
 
 interface RoomCollaborationDashboardProps {
   room: Room | null;
@@ -20,6 +21,8 @@ interface RoomCollaborationDashboardProps {
   TextComponent: ComponentType<TextProps>;
   getDelegationTaskStatusStyle: (status: DelegationTask['status']) => any;
   onToggleOpen: () => void;
+  onRetryDelegation?: (task: DelegationTask) => void;
+  onReassignDelegation?: (task: DelegationTask, targetConnectionId: string) => void;
 }
 
 export function RoomCollaborationDashboard({
@@ -33,6 +36,8 @@ export function RoomCollaborationDashboard({
   TextComponent: Text,
   getDelegationTaskStatusStyle,
   onToggleOpen,
+  onRetryDelegation,
+  onReassignDelegation,
 }: RoomCollaborationDashboardProps) {
   if (!room || room.kind !== 'group') return null;
 
@@ -77,10 +82,7 @@ export function RoomCollaborationDashboard({
           {delegationTasks.length ? (
             <View style={styles.taskList}>
               {delegationTasks.slice(0, 4).map((task) => (
-                <View key={task.id} style={styles.taskCard}>
-                  <Text style={styles.taskTitle}>{task.fromAlias} → {task.toAlias} · {getDelegationTaskStatusLabel(task.status)}</Text>
-                  <Text style={styles.help} numberOfLines={2}>{task.taskText}</Text>
-                </View>
+                <DelegationTaskCard key={task.id} task={task} room={room} styles={styles} TextComponent={Text} getStatusStyle={getDelegationTaskStatusStyle} onRetry={onRetryDelegation} onReassign={onReassignDelegation} />
               ))}
             </View>
           ) : null}

@@ -4,7 +4,7 @@ import type { DelegationTask, DiagnosticLogEntry, GoalSession } from '../types';
 
 export function getDelegationTaskStatusStyle(status: DelegationTask['status']) {
   if (status === 'done') return styles.diagnosticLevelSuccess;
-  if (status === 'running' || status === 'pending') return styles.diagnosticLevelWarning;
+  if (status === 'running' || status === 'pending' || status === 'waiting_permission') return styles.diagnosticLevelWarning;
   if (status === 'error') return styles.diagnosticLevelError;
   return styles.diagnosticLevelInfo;
 }

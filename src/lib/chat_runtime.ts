@@ -1,7 +1,7 @@
 import type { AgentActivityNotice, AgentPermissionRequest, Attachment, HermesChatMessage, HermesConnection } from '../types';
 import { shouldStreamHermesReplies } from './background_agent';
 import { extractAgentReplyArtifacts, getAgentReplyFallback } from './chat_rendering';
-import { HermesClient } from './hermes_client';
+import { HermesClient, HermesTransportError } from './hermes_client';
 import { runHermesCompletion } from './hermes_completion';
 
 export interface HermesMemberCompletionResult {
@@ -52,9 +52,19 @@ export async function runHermesMemberCompletion({
         onProgress,
         onToolCall: (toolCall) => responseToolCalls.set(toolCall.callId || `${toolCall.name}:${toolCall.arguments}`, toolCall),
       });
-    } catch {
+    } catch (error) {
+      if (!isResponsesCompatibilityFailure(error)) throw error;
       // Capability metadata can become stale after a Gateway downgrade.
       // Preserve chat availability by returning to the compatible endpoint.
+      const compatibilityNotice: AgentActivityNotice = {
+        id: `compatibility_${connection.id}`,
+        kind: 'system',
+        label: '工具委托接口不兼容，已切换普通聊天；请重新测试连接或更新插件。',
+        status: 'failed',
+        createdAt: new Date().toISOString(),
+      };
+      activityNotices = [compatibilityNotice];
+      onProgress?.({ content: rawText, activityNotices });
       rawText = await runHermesCompletion(client, {
         request: {
           model: connection.model,
@@ -68,8 +78,8 @@ export async function runHermesMemberCompletion({
         onChunk,
         onProgress: (progress) => {
           reasoning = progress.reasoning ?? reasoning;
-          activityNotices = progress.activityNotices ?? activityNotices;
-          onProgress?.(progress);
+          activityNotices = mergeActivityNotices(activityNotices, progress.activityNotices);
+          onProgress?.({ ...progress, activityNotices });
         },
       });
     }
@@ -103,6 +113,24 @@ export async function runHermesMemberCompletion({
     permissionRequest: parsedReply.permissionRequest,
     toolCalls: [...responseToolCalls.values()],
   };
+}
+
+function mergeActivityNotices(
+  current?: AgentActivityNotice[],
+  incoming?: AgentActivityNotice[],
+): AgentActivityNotice[] | undefined {
+  if (!current?.length) return incoming;
+  if (!incoming?.length) return current;
+  const byId = new Map(current.map((notice) => [notice.id, notice]));
+  for (const notice of incoming) byId.set(notice.id, notice);
+  return [...byId.values()];
+}
+
+function isResponsesCompatibilityFailure(error: unknown): boolean {
+  if (error instanceof HermesTransportError) return false;
+  if (error instanceof DOMException && error.name === 'AbortError') return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return /Responses API failed:\s*(400|404|405|415|422)\b|did not return a readable stream/iu.test(message);
 }
 
 async function runHermesResponsesCompletion(
