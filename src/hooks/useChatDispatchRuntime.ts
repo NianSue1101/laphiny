@@ -32,7 +32,8 @@ const MAX_GOAL_DELEGATIONS_PER_ROUND = 3;
 
 export function useChatDispatchRuntime(options: any) {
   // Requests to the same Soul preserve order; different members remain concurrent.
-  const schedulerRef = useRef(new AgentTaskScheduler());
+  const localSchedulerRef = useRef(new AgentTaskScheduler());
+  const schedulerRef = options.schedulerRef ?? localSchedulerRef;
   const {
     appendCollaborationEvent,
     appendDiagnosticLog,
@@ -76,6 +77,7 @@ export function useChatDispatchRuntime(options: any) {
     text,
     attachments,
     previousMessages,
+    delegationTaskId,
   }: {
     room: Room;
     member: RoomMember;
@@ -83,12 +85,14 @@ export function useChatDispatchRuntime(options: any) {
     text: string;
     attachments: Attachment[];
     previousMessages: ChatMessage[];
+    delegationTaskId?: string;
   }) {
     startStream(placeholderId, room.id, member.connectionId);
     const connection = connectionById.get(member.connectionId);
     if (!connection) {
       markStreamPhase(placeholderId, 'failed', 'Hermes 连接不存在');
       updateMessageInRoom(room.id, placeholderId, { status: 'error', error: 'Hermes 连接不存在', content: '发送失败' });
+      updateDelegationTask(delegationTaskId, { status: 'error', error: 'Hermes 连接不存在', resultMessageId: placeholderId, attempts: 1 });
       cleanupStream(placeholderId);
       return;
     }
@@ -110,12 +114,15 @@ export function useChatDispatchRuntime(options: any) {
         sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
         timeoutMs: 120_000,
         signal: controller.signal,
-        onProgress: (progress) => queueStreamMessageUpdate(room.id, placeholderId, progress),
+        onProgress: (progress) => {
+          streamedText = progress.content;
+          queueStreamMessageUpdate(room.id, placeholderId, progress);
+        },
       });
       streamedText = reply.rawText;
 
       flushStreamMessage(room.id, placeholderId);
-      const permissionRequest = applyAlwaysPermissionIfNeeded(reply.permissionRequest);
+      const permissionRequest = applyAlwaysPermissionIfNeeded(member.connectionId, reply.permissionRequest);
       const answer = permissionRequest ? reply.content || permissionRequest.body : reply.content;
       const completedMessage: ChatMessage = {
         id: placeholderId,
@@ -126,6 +133,8 @@ export function useChatDispatchRuntime(options: any) {
         content: answer,
         attachments: reply.attachments.length ? reply.attachments : undefined,
         reasoning: reply.reasoning,
+        activityNotices: reply.activityNotices,
+        delegationTaskId,
         permissionRequest,
         status: 'sent',
         createdAt: new Date().toISOString(),
@@ -134,10 +143,19 @@ export function useChatDispatchRuntime(options: any) {
         content: answer,
         attachments: reply.attachments.length ? reply.attachments : undefined,
         reasoning: reply.reasoning,
+        activityNotices: reply.activityNotices,
+        delegationTaskId,
         permissionRequest,
         status: 'sent',
       });
       markStreamPhase(placeholderId, 'completed');
+      if (delegationTaskId && permissionRequest?.status !== 'pending') {
+        updateDelegationTask(delegationTaskId, {
+          status: 'done',
+          resultMessageId: placeholderId,
+          evidence: [answer.replace(/\s+/gu, ' ').trim().slice(0, 500)],
+        });
+      }
       if (permissionRequest?.status === 'always') {
         void continueAgentAfterPermission(room, member, completedMessage, 'always');
       }
@@ -149,6 +167,7 @@ export function useChatDispatchRuntime(options: any) {
           content: streamedText.trim() || '已停止生成',
           status: 'stopped',
         });
+        updateDelegationTask(delegationTaskId, { status: 'cancelled', resultMessageId: placeholderId });
         return;
       }
 
@@ -159,6 +178,7 @@ export function useChatDispatchRuntime(options: any) {
         error: errorMessage,
         content: streamedText.trim() || '发送失败',
       });
+      updateDelegationTask(delegationTaskId, { status: 'error', error: errorMessage, resultMessageId: placeholderId });
     } finally {
       cleanupStream(placeholderId);
       await releaseBackgroundAgentTask();
@@ -349,7 +369,7 @@ export function useChatDispatchRuntime(options: any) {
     let goalNoProgressRounds = 0;
 
     const scheduleReply = (reply: ScheduledReply): Promise<void> | null => {
-      const normalizedTask = reply.text.trim().replace(/\s+/g, ' ').slice(0, 160);
+      const normalizedTask = reply.text.trim().replace(/\s+/g, ' ');
       const key = [
         reply.delegatedFromConnectionId ?? 'user',
         reply.member.connectionId,
@@ -393,6 +413,7 @@ export function useChatDispatchRuntime(options: any) {
           connectionId: reply.member.connectionId,
           connectionName: reply.member.alias,
         });
+        updateDelegationTask(reply.taskId, { status: 'error', error: 'Hermes 连接不存在', resultMessageId: placeholder.id, attempts: 1 });
         cleanupStream(placeholder.id);
         return;
       }
@@ -490,12 +511,15 @@ export function useChatDispatchRuntime(options: any) {
           timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
           useToolDelegation: room.agentToolDelegationEnabled !== false && connection.toolDelegation?.supported === true,
-          onProgress: (progress) => queueStreamMessageUpdate(room.id, placeholder.id, progress),
+          onProgress: (progress) => {
+            accumulated = progress.content;
+            queueStreamMessageUpdate(room.id, placeholder.id, progress);
+          },
         });
         accumulated = replyResult.rawText;
 
         flushStreamMessage(room.id, placeholder.id);
-        const permissionRequest = applyAlwaysPermissionIfNeeded(replyResult.permissionRequest);
+        const permissionRequest = applyAlwaysPermissionIfNeeded(reply.member.connectionId, replyResult.permissionRequest);
         const rawAnswer = permissionRequest ? replyResult.content || permissionRequest.body : replyResult.content;
         const answer = stripRoomStatePatchBlocks(rawAnswer) || rawAnswer;
         const completedMessage: ChatMessage = {
@@ -503,6 +527,8 @@ export function useChatDispatchRuntime(options: any) {
           content: answer,
           attachments: replyResult.attachments.length ? replyResult.attachments : undefined,
           reasoning: replyResult.reasoning,
+          activityNotices: replyResult.activityNotices,
+          delegationTaskId: reply.taskId,
           permissionRequest,
           status: 'sent',
         };
@@ -524,6 +550,8 @@ export function useChatDispatchRuntime(options: any) {
           content: answer,
           attachments: completedMessage.attachments,
           reasoning: completedMessage.reasoning,
+          activityNotices: completedMessage.activityNotices,
+          delegationTaskId: completedMessage.delegationTaskId,
           permissionRequest,
           status: 'sent',
         });
@@ -550,7 +578,13 @@ export function useChatDispatchRuntime(options: any) {
           durationMs: Date.now() - startedAt,
           meta: { mode, depth: reply.depth, chars: answer.length, promptMessages: promptMessagesCount },
         });
-        if (reply.taskId) {
+        if (reply.taskId && permissionRequest?.status === 'pending') {
+          updateDelegationTask(reply.taskId, {
+            status: 'running',
+            resultMessageId: completedMessage.id,
+            error: '等待用户确认 Agent 权限',
+          });
+        } else if (reply.taskId) {
           updateDelegationTask(reply.taskId, {
             status: 'done',
             resultMessageId: completedMessage.id,
@@ -580,16 +614,22 @@ export function useChatDispatchRuntime(options: any) {
         }
 
         if (room.kind === 'group' && room.autoDelegationEnabled !== false && reply.depth < (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH)) {
+          const hasDelegationToolCall = room.agentToolDelegationEnabled !== false
+            && Boolean(replyResult.toolCalls?.some((call) => call.name === 'laphiny_delegate_tasks'));
           const toolDelegations = room.agentToolDelegationEnabled !== false
             ? resolveAssistantToolDelegations(room, replyResult.toolCalls, reply.member.connectionId)
             : [];
-          const delegations = toolDelegations.length > 0
+          const delegations = hasDelegationToolCall
             ? toolDelegations
             : resolveAssistantDelegations(room, answer, reply.member.connectionId);
-          const acceptedDelegations = reply.goalMode ? delegations.slice(0, MAX_GOAL_DELEGATIONS_PER_ROUND) : delegations;
-          if (reply.goalMode && delegations.length > acceptedDelegations.length) {
+          if (hasDelegationToolCall && toolDelegations.length === 0) {
+            appendMessagesToRoom(room.id, [makeLocalNotice(room.id, `${reply.member.alias} 提交的工具委托无有效任务，已拒绝且不会回退解析正文中的 @ 示例。`)]);
+          }
+          const delegationLimit = reply.goalMode ? MAX_GOAL_DELEGATIONS_PER_ROUND : 1;
+          const acceptedDelegations = delegations.slice(0, delegationLimit);
+          if (delegations.length > acceptedDelegations.length) {
             appendMessagesToRoom(room.id, [
-              makeLocalNotice(room.id, `目标模式本轮最多接收 ${MAX_GOAL_DELEGATIONS_PER_ROUND} 个委托，已忽略 ${delegations.length - acceptedDelegations.length} 个额外委托。`),
+              makeLocalNotice(room.id, `${reply.goalMode ? '目标模式' : '普通模式'}本轮最多接收 ${delegationLimit} 个委托，已忽略 ${delegations.length - acceptedDelegations.length} 个额外委托。`),
             ]);
           }
           for (const delegation of acceptedDelegations) {
@@ -632,7 +672,7 @@ export function useChatDispatchRuntime(options: any) {
             if (goalMode) {
               goalDelegationCount += 1;
             }
-            scheduleReply({
+            const scheduled = scheduleReply({
               member: delegation.target,
               text: taskText,
               attachments: [],
@@ -643,6 +683,9 @@ export function useChatDispatchRuntime(options: any) {
               taskId: task.id,
               goalMode: reply.goalMode,
             });
+            if (!scheduled) {
+              updateDelegationTask(task.id, { status: 'cancelled', error: '重复委托已忽略' });
+            }
           }
         }
         markStreamPhase(placeholder.id, 'completed');

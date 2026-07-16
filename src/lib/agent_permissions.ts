@@ -57,6 +57,13 @@ export function getAgentPermissionKey(request: Pick<AgentPermissionRequest, 'key
   return makePermissionKey(request.action || request.title || request.body);
 }
 
+export function getScopedAgentPermissionKey(
+  connectionId: string,
+  request: Pick<AgentPermissionRequest, 'key' | 'title' | 'action' | 'body'>,
+): string {
+  return JSON.stringify([connectionId.normalize('NFKC'), getAgentPermissionKey(request)]);
+}
+
 export function buildAgentPermissionDecisionPrompt(request: AgentPermissionRequest, decision: AgentPermissionDecision): string {
   // Hermes routes an approval only when the next user turn is its control
   // command. A natural-language explanation creates a separate turn and leaves

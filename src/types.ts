@@ -48,6 +48,10 @@ export interface AppPreferences {
   fontFamily: AppFontFamily;
   /** Show reasoning supplied explicitly by a compatible Hermes endpoint. */
   showReasoning?: boolean;
+  /** Include month/day in chat message timestamps. */
+  showMessageDate?: boolean;
+  /** Permission keys explicitly approved for future use, scoped to one Agent connection. */
+  alwaysApprovedPermissionKeys?: string[];
   downloadDirectoryUri?: string;
   downloadDirectoryLabel?: string;
   updatedAt: string;
@@ -427,6 +431,15 @@ export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopp
 export type AgentStreamPhase = 'queued' | 'connecting' | 'thinking' | 'responding' | 'delegating' | 'reviewing' | 'completed' | 'cancelled' | 'failed';
 export type AgentStreamEventKind = 'status' | 'content' | 'reasoning' | 'delegation' | 'review' | 'terminal';
 
+export interface AgentActivityNotice {
+  id: string;
+  kind: 'tool' | 'system';
+  label: string;
+  status: 'running' | 'completed' | 'failed' | 'info';
+  tool?: string;
+  createdAt: string;
+}
+
 export interface AgentStreamEvent {
   id: string;
   messageId: string;
@@ -479,6 +492,7 @@ export interface ChatMessage {
   authorName: string;
   content: string;
   reasoning?: string;
+  activityNotices?: AgentActivityNotice[];
   streamPhase?: AgentStreamPhase;
   streamUpdatedAt?: string;
   retryOfMessageId?: string;
@@ -487,6 +501,7 @@ export interface ChatMessage {
   status: ChatMessageStatus;
   error?: string;
   delegatedFrom?: string;
+  delegationTaskId?: string;
   createdAt: string;
 }
 

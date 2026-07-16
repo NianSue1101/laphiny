@@ -48,7 +48,8 @@ Notifications.setNotificationHandler({
   }),
 });
 
-import { buildAgentPermissionDecisionPrompt, getAgentPermissionKey } from './src/lib/agent_permissions';
+import { buildAgentPermissionDecisionPrompt, getScopedAgentPermissionKey } from './src/lib/agent_permissions';
+import { AgentTaskScheduler } from './src/lib/agent_scheduler';
 import { resolveChatRetryRequest } from './src/lib/chat_retry';
 import { COLLABORATION_RITUALS, type CollaborationRitualId } from './src/lib/collaboration_rituals';
 import { parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
@@ -96,7 +97,7 @@ export default function App() {
   const [delegationTasks, setDelegationTasks] = useState<DelegationTask[]>([]);
   const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>([]);
   const [profileVersions, setProfileVersions] = useState<AgentProfileVersion[]>([]);
-  const [appPreferences, setAppPreferences] = useState<AppPreferences>({ themeMode: 'light', fontFamily: 'system', showReasoning: false, updatedAt: new Date().toISOString() });
+  const [appPreferences, setAppPreferences] = useState<AppPreferences>({ themeMode: 'light', fontFamily: 'system', showReasoning: false, showMessageDate: false, updatedAt: new Date().toISOString() });
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const [managedRoomId, setManagedRoomId] = useState<string | null>(null);
   const [, forceFontRender] = useState(0);
@@ -130,6 +131,8 @@ export default function App() {
   const saveMessagesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const delayedGoalMessageIdsRef = useRef<Set<string>>(new Set());
   const alwaysApprovedPermissionKeysRef = useRef<Set<string>>(new Set());
+  const resolvingPermissionIdsRef = useRef<Set<string>>(new Set());
+  const agentTaskSchedulerRef = useRef(new AgentTaskScheduler());
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const selectedRoomIdRef = useRef<string | null>(selectedRoomId);
   const tabRef = useRef<Tab>(tab);
@@ -374,6 +377,10 @@ export default function App() {
     }),
     setMessagesByRoom,
   });
+
+  useEffect(() => {
+    alwaysApprovedPermissionKeysRef.current = new Set(appPreferences.alwaysApprovedPermissionKeys ?? []);
+  }, [appPreferences.alwaysApprovedPermissionKeys]);
   const { searchMessagesByRoom } = messageHistoryRuntime;
   const messageSearchSourceByRoom = useMemo(() => (
     searchMessagesByRoom ? mergeMessagesByRoom(searchMessagesByRoom, messagesByRoom) : messagesByRoom
@@ -518,6 +525,7 @@ export default function App() {
     updateDelegationTask,
     updateMessageInRoom,
     updateRoomById,
+    schedulerRef: agentTaskSchedulerRef,
   });
 
   useEffect(() => {
@@ -838,9 +846,9 @@ export default function App() {
     });
   }
 
-  function applyAlwaysPermissionIfNeeded(permissionRequest: AgentPermissionRequest | undefined): AgentPermissionRequest | undefined {
+  function applyAlwaysPermissionIfNeeded(connectionId: string, permissionRequest: AgentPermissionRequest | undefined): AgentPermissionRequest | undefined {
     if (!permissionRequest) return undefined;
-    const permissionKey = getAgentPermissionKey(permissionRequest);
+    const permissionKey = getScopedAgentPermissionKey(connectionId, permissionRequest);
     if (!alwaysApprovedPermissionKeysRef.current.has(permissionKey)) return permissionRequest;
     return {
       ...permissionRequest,
@@ -852,21 +860,26 @@ export default function App() {
 
   async function continueAgentAfterPermission(room: Room, member: RoomMember, message: ChatMessage, decision: AgentPermissionDecision) {
     if (!message.permissionRequest) return;
-    const placeholder = makeAssistantPlaceholder(room.id, member);
-    appendMessagesToRoom(room.id, [placeholder]);
-    await streamHermesReply({
-      room,
-      member,
-      placeholderId: placeholder.id,
-      text: buildAgentPermissionDecisionPrompt(message.permissionRequest, decision),
-      attachments: [],
-      previousMessages: messagesByRoom[room.id] ?? [],
+    await agentTaskSchedulerRef.current.schedule({ roomId: room.id, connectionId: member.connectionId }, async () => {
+      const placeholder = makeAssistantPlaceholder(room.id, member);
+      appendMessagesToRoom(room.id, [placeholder]);
+      await streamHermesReply({
+        room,
+        member,
+        placeholderId: placeholder.id,
+        text: buildAgentPermissionDecisionPrompt(message.permissionRequest!, decision),
+        attachments: [],
+        previousMessages: messagesByRoom[room.id] ?? [],
+        delegationTaskId: message.delegationTaskId,
+      });
     });
   }
 
   function resolveAgentPermissionRequest(message: ChatMessage, decision: AgentPermissionDecision) {
     const request = message.permissionRequest;
     if (!request || request.status !== 'pending') return;
+    if (resolvingPermissionIdsRef.current.has(request.id)) return;
+    resolvingPermissionIdsRef.current.add(request.id);
 
     const nextRequest: AgentPermissionRequest = {
       ...request,
@@ -875,18 +888,27 @@ export default function App() {
       decidedAt: new Date().toISOString(),
     };
     if (decision === 'always') {
-      alwaysApprovedPermissionKeysRef.current.add(getAgentPermissionKey(request));
+      const permissionKey = getScopedAgentPermissionKey(message.authorId, request);
+      alwaysApprovedPermissionKeysRef.current.add(permissionKey);
+      updateAppPreferences({ alwaysApprovedPermissionKeys: [...alwaysApprovedPermissionKeysRef.current] });
     }
     updateMessageInRoom(message.roomId, message.id, { permissionRequest: nextRequest });
 
     const room = roomsRef.current.find((item) => item.id === message.roomId);
     const member = room?.members.find((item) => item.connectionId === message.authorId && item.enabled);
     if (!room || !member) {
+      resolvingPermissionIdsRef.current.delete(request.id);
       showNotice('无法继续权限请求', '对应的房间或 Agent 已不可用。');
       return;
     }
 
-    void continueAgentAfterPermission(room, member, { ...message, permissionRequest: nextRequest }, decision);
+    void continueAgentAfterPermission(room, member, { ...message, permissionRequest: nextRequest }, decision)
+      .catch((error) => {
+        showNotice('权限请求继续失败', getErrorMessage(error));
+      })
+      .finally(() => {
+        resolvingPermissionIdsRef.current.delete(request.id);
+      });
   }
 
   function toggleTargetSelection(connectionId: string) {
@@ -1098,6 +1120,9 @@ export default function App() {
   }
 
   function updateAppPreferences(patch: Partial<AppPreferences>) {
+    if (patch.alwaysApprovedPermissionKeys) {
+      alwaysApprovedPermissionKeysRef.current = new Set(patch.alwaysApprovedPermissionKeys);
+    }
     setAppPreferences((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }));
   }
 
@@ -1374,6 +1399,7 @@ export default function App() {
             runRitualCommand,
              selectedFontFamily,
              showReasoning: Boolean(appPreferences.showReasoning),
+             showMessageDate: Boolean(appPreferences.showMessageDate),
             selectedMessages,
             selectedRoom,
             selectedRoomCollaborationEvents,

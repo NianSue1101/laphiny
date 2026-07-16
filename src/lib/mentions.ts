@@ -1,6 +1,6 @@
 import { Room, RoomMember, TargetResolution } from '../types';
 
-const MENTION_BOUNDARY = /[\s([{（【「『]/u;
+const MENTION_BOUNDARY = /[\s([{（【「『,，:：;；、.!?！？"“”'‘’]/u;
 const MENTION_END = /[\s,，:：;；、.!?！？)\]）】」』]/u;
 const TASK_PREFIX = /^[,，:：;；、.!?！？\s]+/u;
 const MIN_ASSISTANT_DELEGATION_TASK_LENGTH = 6;
@@ -135,7 +135,7 @@ export function memberMatchesMention(member: RoomMember, mention: string): boole
 }
 
 export function normalizeMention(value: string): string {
-  return value.trim().replace(/^[@＠]/u, '').toLocaleLowerCase();
+  return value.trim().replace(/^[@＠]/u, '').normalize('NFKC').toLocaleLowerCase();
 }
 
 /**
@@ -156,7 +156,13 @@ export function resolveAssistantDelegations(
   const delegations: AssistantDelegation[] = [];
   const seen = new Set<string>();
 
+  let insideFence = false;
   for (const line of assistantText.split(/\r?\n/u)) {
+    if (/^\s*```/u.test(line)) {
+      insideFence = !insideFence;
+      continue;
+    }
+    if (insideFence || /^\s*>/u.test(line)) continue;
     const atIndex = getLineLeadingAtIndex(line);
     if (atIndex < 0) continue;
     const mentions = resolveLeadingDelegationMentions(line, atIndex, enabledMembers);
@@ -258,10 +264,10 @@ function resolveKnownMentionAt(text: string, atIndex: number, members: RoomMembe
   ].filter((candidate) => candidate.value.trim().length > 0)
     .sort((left, right) => right.value.length - left.value.length);
 
-  const lowerSuffix = suffix.toLocaleLowerCase();
+  const lowerSuffix = suffix.normalize('NFKC').toLocaleLowerCase();
   const matches = candidates.filter((candidate) => {
     const value = candidate.value.trim();
-    if (!lowerSuffix.startsWith(value.toLocaleLowerCase())) return false;
+    if (!lowerSuffix.startsWith(value.normalize('NFKC').toLocaleLowerCase())) return false;
     const next = suffix[value.length];
     return !next || MENTION_END.test(next);
   });
@@ -293,7 +299,7 @@ function stripMentionRanges(rawText: string, mentions: KnownMention[]): string {
 }
 
 function getLineLeadingAtIndex(line: string): number {
-  const match = line.match(/^[\t >*\-•]*[@＠]/u);
+  const match = line.match(/^[\t *\-•]*[@＠]/u);
   return match ? match[0].length - 1 : -1;
 }
 

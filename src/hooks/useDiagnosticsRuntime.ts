@@ -56,7 +56,7 @@ type UseDiagnosticsRuntimeOptions = {
 
 export function useDiagnosticsRuntime({ getDiagnosticContext, saveTextFile }: UseDiagnosticsRuntimeOptions) {
   const [diagnosticLogs, setDiagnosticLogs] = useState<DiagnosticLogEntry[]>([]);
-  const [diagnosticLogsOpen, setDiagnosticLogsOpen] = useState(true);
+  const [diagnosticLogsOpen, setDiagnosticLogsOpen] = useState(false);
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackConfig>({
     enabled: true,
     baseUrl: DEFAULT_FEEDBACK_BASE_URL,

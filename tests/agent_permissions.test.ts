@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildAgentPermissionDecisionPrompt, extractAgentPermissionRequest } from '../src/lib/agent_permissions';
+import { buildAgentPermissionDecisionPrompt, extractAgentPermissionRequest, getScopedAgentPermissionKey } from '../src/lib/agent_permissions';
 
 test('extracts structured laphiny permission blocks', () => {
   const result = extractAgentPermissionRequest([
@@ -15,6 +15,20 @@ test('extracts structured laphiny permission blocks', () => {
   assert.equal(result.request?.title, '允许写文件');
   assert.equal(result.request?.action, 'write result.txt');
   assert.equal(result.request?.status, 'pending');
+});
+
+test('scopes always-approved permissions to one normalized Agent connection', () => {
+  const result = extractAgentPermissionRequest('PERMISSION_REQUEST: {"title":"运行构建","action":"build"}');
+  assert.ok(result.request);
+
+  assert.equal(
+    getScopedAgentPermissionKey('Ａgent-1', result.request!),
+    getScopedAgentPermissionKey('Agent-1', result.request!),
+  );
+  assert.notEqual(
+    getScopedAgentPermissionKey('Agent-1', result.request!),
+    getScopedAgentPermissionKey('Agent-2', result.request!),
+  );
 });
 
 test('detects plain permission request text', () => {

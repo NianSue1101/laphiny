@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.32.3](#what-is-new-in-v0323)
 - [What Is New In v0.32.2](#what-is-new-in-v0322)
 - [What Is New In v0.32.1](#what-is-new-in-v0321)
 - [What Is New In v0.32.0](#what-is-new-in-v0320)
@@ -83,7 +84,8 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 
 ### Chat And Collaboration
 
-- Hermes SSE streaming, stop generation, and retry
+- Hermes SSE streaming, stop generation, and retry; Android uses a native streaming transport instead of waiting for the complete body
+- Explicit Hermes tool/system activity, such as memory or skill operations, appears as a separate small status line instead of being mixed into content or reasoning
 - Exact `@member` targeted replies, including aliases with spaces
 - `@all` parallel replies and `@all-seq` sequential handoff
 - Assistant-to-assistant delegation through line-start `@member task`
@@ -123,8 +125,10 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 ### Personalization And Feedback
 
 - Light and dark mode
+- Optional dates in message timestamps for cross-day conversations
 - System font and LXGW WenKai font selection, with room for more fonts later
 - Agent avatars can be changed from the connections page or the mobile room picker
+- User-facing toggles are grouped in Settings; diagnostic logs stay collapsed until requested and include full timestamps
 - Default feedback server for upload-only redacted diagnostics; server logs are not pulled back into the app
 
 ### Notifications And Permission Requests
@@ -133,6 +137,7 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Goal mode notifications only when the goal workflow completes or stops
 - Permission requests are recognized and rendered as action cards under the message
 - Users can allow, deny, or always allow directly from the card
+- Always Allow is stored locally and scoped to the exact Agent connection and normalized request
 - Permission requests also notify the user because they require action
 - When the app is in the foreground, system notifications are suppressed
 
@@ -142,6 +147,19 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.32.3
+
+- **Real Android streaming:** the native app now uses Expo's streaming fetch transport. Content deltas enter the message before request completion, while cancelled or failed partial replies remain explicitly unfinished.
+- **Hermes activity hints:** `hermes.tool.progress` and Responses tool lifecycles are rendered as small in-message activity rows for server-reported memory, skill, and tool operations. Laphiny does not infer or expose hidden chain of thought.
+- **Timestamp and settings cleanup:** message dates are optional; appearance, date, and reasoning toggles are grouped; diagnostic logs are collapsed by default and show full date/time after expansion.
+- **Reliable permission continuation:** allow, deny, and always allow resume the original session. Persistent approvals are scoped per Agent and request, duplicate taps are ignored, and a permission-blocked delegation is not completed prematurely.
+- **Delegation hardening:** full-width forms and Chinese/ASCII punctuation are normalized, ambiguous aliases are rejected, quoted or fenced examples do not dispatch, full task text is used for deduplication, and missing members or invalid tool payloads reach explicit terminal states.
+- **Device evidence:** an Android emulator verified mid-stream rendering, activity hints, timestamp dates, collapsed logs, permission continuation, `@all-seq`, and agent-to-agent result flow. The automated suite now contains 104 tests.
+- **Known boundaries:** structured tool delegation still depends on a compatible Hermes plugin receiving an exact room connection ID. Older plugins or missing IDs fail visibly and can use the line-start `@member task` compatibility path. One-tap reassignment and server-side stream resume remain future work.
+- **Unified version metadata:** in-app, Expo, npm, and Android versions report `0.32.3`; Android uses `versionCode 323`.
 
 ---
 
@@ -299,7 +317,7 @@ npm test
 npm run web:build
 ```
 
-The current test suite has 58 tests, mostly covering pure logic under `src/lib/*`.
+The current suite contains 104 tests covering stream events, permission continuation, delegation boundaries, scheduler isolation, Goal transitions, long-history paging, and index repair.
 
 ---
 

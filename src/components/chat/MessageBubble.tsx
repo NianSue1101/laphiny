@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react';
 import { TouchableOpacity, View, type TextProps } from 'react-native';
 
-import { formatTime, getStatusLabel } from '../../app/app_utils';
+import { formatMessageTimestamp, getStatusLabel } from '../../app/app_utils';
 import { normalizeHermesReplyText } from '../../lib/hermes_client';
 import { getAgentStreamPhaseLabel, shouldDisplayServiceReasoning } from '../../lib/stream_events';
 import type { AgentPermissionDecision, Attachment, ChatMessage } from '../../types';
@@ -23,6 +23,7 @@ interface MessageBubbleProps {
   isWideLayout: boolean;
   selectedFontFamily?: string;
   showReasoning: boolean;
+  showMessageDate: boolean;
   isLastEditableUserMessage: boolean;
   sending: boolean;
   stopping: boolean;
@@ -46,6 +47,7 @@ export function MessageBubble({
   isWideLayout,
   selectedFontFamily,
   showReasoning,
+  showMessageDate,
   isLastEditableUserMessage,
   sending,
   stopping,
@@ -93,10 +95,26 @@ export function MessageBubble({
         <Text style={[styles.status, message.status === 'error' && styles.statusError]}>
           {message.status === 'running' && message.streamPhase
             ? getAgentStreamPhaseLabel(message.streamPhase)
-            : getStatusLabel(message.status)} · {formatTime(message.createdAt)}
-          {message.error ? ` · ${message.error}` : ''}
+            : getStatusLabel(message.status)} · {formatMessageTimestamp(message.createdAt, showMessageDate)}
         </Text>
       </View>
+      {message.error ? <Text style={styles.messageErrorDetail}>{message.error}</Text> : null}
+      {message.activityNotices?.length ? (
+        <View style={styles.activityNoticeList}>
+          {message.activityNotices.map((notice) => (
+            <View key={notice.id} style={styles.activityNotice}>
+              <Ionicons
+                name={notice.status === 'completed' ? 'checkmark-circle-outline' : notice.status === 'failed' ? 'alert-circle-outline' : 'sparkles-outline'}
+                size={12}
+                color={notice.status === 'failed' ? '#b91c1c' : '#6b7280'}
+              />
+              <Text style={[styles.activityNoticeText, notice.status === 'failed' && styles.activityNoticeTextError]}>
+                {notice.label}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
       <MarkdownText content={displayContent} fontFamily={selectedFontFamily} />
       {shouldDisplayServiceReasoning(showReasoning, message.reasoning) ? (
         <View style={styles.reasoningPanel}>

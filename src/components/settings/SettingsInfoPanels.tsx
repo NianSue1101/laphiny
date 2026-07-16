@@ -109,33 +109,56 @@ export function PersonalizationSettingsPanel({
     <View style={styles.syncPanel}>
       <View style={styles.syncHeader}>
         <View style={styles.syncHeaderText}>
-          <Text style={styles.cardTitle}>个性化</Text>
+          <Text style={styles.cardTitle}>外观与功能开关</Text>
           <Text style={styles.help}>
-            夜间模式、字体和 Agent
-            头像会保存在当前设备；头像也可以在聊天选择页展开房间后快速替换。
+            可切换功能集中保存在当前设备。日期和 reasoning 只影响展示，不会改写消息内容。
           </Text>
         </View>
-        <TouchableOpacity
-          style={[
-            styles.syncToggle,
-            appPreferences.themeMode === "dark" && styles.syncToggleOn,
-          ]}
-          onPress={() =>
-            updateAppPreferences({
-              themeMode: appPreferences.themeMode === "dark" ? "light" : "dark",
-            })
-          }
-        >
-          <Text
-            style={[
-              styles.syncToggleText,
-              appPreferences.themeMode === "dark" && styles.syncToggleTextOn,
-            ]}
-          >
-            {appPreferences.themeMode === "dark" ? "夜间模式" : "日间模式"}
-          </Text>
-        </TouchableOpacity>
       </View>
+      <View style={styles.settingsToggleGroup}>
+        <SettingsToggleRow
+          icon="moon-outline"
+          label="夜间模式"
+          description="切换应用整体明暗配色"
+          enabled={appPreferences.themeMode === "dark"}
+          onPress={() => updateAppPreferences({ themeMode: appPreferences.themeMode === "dark" ? "light" : "dark" })}
+          styles={styles}
+          TextComponent={Text}
+        />
+        <SettingsToggleRow
+          icon="calendar-outline"
+          label="消息日期"
+          description="时间戳同时显示月、日和时刻"
+          enabled={Boolean(appPreferences.showMessageDate)}
+          onPress={() => updateAppPreferences({ showMessageDate: !appPreferences.showMessageDate })}
+          styles={styles}
+          TextComponent={Text}
+        />
+        <SettingsToggleRow
+          icon="analytics-outline"
+          label="服务端 reasoning"
+          description="只展示 Gateway 明确返回的 reasoning/thinking，不推断隐藏思维"
+          enabled={Boolean(appPreferences.showReasoning)}
+          onPress={() => updateAppPreferences({ showReasoning: !appPreferences.showReasoning })}
+          styles={styles}
+          TextComponent={Text}
+        />
+      </View>
+      {appPreferences.alwaysApprovedPermissionKeys?.length ? (
+        <View style={styles.storageInfoBox}>
+          <Text style={styles.storageInfoTitle}>已记住的 Agent 权限</Text>
+          <Text style={styles.storageInfoText}>
+            当前按 Agent 隔离保存 {appPreferences.alwaysApprovedPermissionKeys.length} 项“总是同意”。清除后，下次执行会重新询问。
+          </Text>
+          <View style={styles.toolActions}>
+            <MiniButton
+              icon="refresh-outline"
+              label="清除已记住权限"
+              onPress={() => updateAppPreferences({ alwaysApprovedPermissionKeys: [] })}
+            />
+          </View>
+        </View>
+      ) : null}
       <Text style={styles.panelLabel}>字体</Text>
       <View style={styles.segmentedRow}>
         <TouchableOpacity
@@ -197,17 +220,6 @@ export function PersonalizationSettingsPanel({
           : "后续可以继续扩展更多字体。"}
       </Text>
       <View style={styles.storageInfoBox}>
-        <Text style={styles.storageInfoTitle}>服务端 reasoning</Text>
-        <Text style={styles.storageInfoText}>仅在兼容 Hermes Gateway 明确返回 reasoning/thinking 字段时显示；不会要求或伪造模型内部思维。</Text>
-        <View style={styles.toolActions}>
-          <MiniButton
-            icon={appPreferences.showReasoning ? "eye-off-outline" : "eye-outline"}
-            label={appPreferences.showReasoning ? "隐藏 reasoning" : "显示 reasoning"}
-            onPress={() => updateAppPreferences({ showReasoning: !appPreferences.showReasoning })}
-          />
-        </View>
-      </View>
-      <View style={styles.storageInfoBox}>
         <Text style={styles.storageInfoTitle}>下载目录</Text>
         <Text style={styles.storageInfoText}>
           {Platform.OS === "android"
@@ -234,6 +246,39 @@ export function PersonalizationSettingsPanel({
         ) : null}
       </View>
     </View>
+  );
+}
+
+function SettingsToggleRow({
+  icon,
+  label,
+  description,
+  enabled,
+  onPress,
+  styles,
+  TextComponent: Text,
+}: {
+  icon: any;
+  label: string;
+  description: string;
+  enabled: boolean;
+  onPress: () => void;
+  styles: Styles;
+  TextComponent: ComponentType<TextProps>;
+}) {
+  return (
+    <TouchableOpacity style={styles.settingsToggleRow} onPress={onPress} accessibilityRole="switch" accessibilityState={{ checked: enabled }}>
+      <View style={styles.settingsToggleInfo}>
+        <Ionicons name={icon} size={18} color={enabled ? "#2563eb" : "#6b7280"} />
+        <View style={styles.settingsToggleCopy}>
+          <Text style={styles.storageInfoTitle}>{label}</Text>
+          <Text style={styles.storageInfoText}>{description}</Text>
+        </View>
+      </View>
+      <View style={[styles.compactSwitch, enabled && styles.compactSwitchOn]}>
+        <View style={[styles.compactSwitchThumb, enabled && styles.compactSwitchThumbOn]} />
+      </View>
+    </TouchableOpacity>
   );
 }
 

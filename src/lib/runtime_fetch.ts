@@ -1,0 +1,3 @@
+export function getRuntimeFetch(): typeof globalThis.fetch {
+  return globalThis.fetch.bind(globalThis);
+}

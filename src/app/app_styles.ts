@@ -454,6 +454,9 @@ export const styles = StyleSheet.create({
     fontWeight: '900',
   },
   panel: {
+    width: '100%',
+    maxWidth: 1120,
+    alignSelf: 'center',
     padding: 20,
     gap: 12,
   },
@@ -1155,6 +1158,72 @@ export const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
   },
+  settingsToggleGroup: {
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    backgroundColor: '#f9fafb',
+  },
+  settingsToggleRow: {
+    minHeight: 58,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e5e7eb',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  settingsToggleInfo: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  settingsToggleCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  compactSwitch: {
+    width: 38,
+    height: 22,
+    padding: 2,
+    borderRadius: 999,
+    backgroundColor: '#d1d5db',
+  },
+  compactSwitchOn: {
+    backgroundColor: '#2563eb',
+  },
+  compactSwitchThumb: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#ffffff',
+  },
+  compactSwitchThumbOn: {
+    alignSelf: 'flex-end',
+  },
+  activityNoticeList: {
+    gap: 3,
+    marginBottom: 7,
+  },
+  activityNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  activityNoticeText: {
+    flexShrink: 1,
+    color: '#6b7280',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  activityNoticeTextError: {
+    color: '#b91c1c',
+  },
   reasoningLabel: {
     marginBottom: 5,
     color: '#6b7280',
@@ -1196,6 +1265,12 @@ export const styles = StyleSheet.create({
   },
   statusError: {
     color: '#b91c1c',
+  },
+  messageErrorDetail: {
+    marginBottom: 7,
+    color: '#b91c1c',
+    fontSize: 11,
+    lineHeight: 16,
   },
   messageText: {
     color: '#1f2937',
