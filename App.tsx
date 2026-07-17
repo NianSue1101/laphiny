@@ -51,6 +51,7 @@ Notifications.setNotificationHandler({
 import { buildAgentPermissionDecisionPrompt, getScopedAgentPermissionKey } from './src/lib/agent_permissions';
 import { AgentTaskScheduler } from './src/lib/agent_scheduler';
 import { resolveChatRetryRequest } from './src/lib/chat_retry';
+import { resolveChatViewState } from './src/lib/chat_view_state';
 import { COLLABORATION_RITUALS, type CollaborationRitualId } from './src/lib/collaboration_rituals';
 import { parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { buildGoalMemoryCapsule } from './src/lib/goal_session';
@@ -571,16 +572,18 @@ export default function App() {
   const latestVisibleMessage = visibleSelectedMessages.length > 0
     ? visibleSelectedMessages[visibleSelectedMessages.length - 1] ?? null
     : null;
-  const chatViewKey = `${tab}:${selectedRoomId ?? 'none'}:${width >= 900 ? 'wide' : mobileFocusedRoomId === selectedRoomId ? 'focused' : 'picker'}`;
+  const { key: chatViewKey, listVisible: chatListVisible } = resolveChatViewState({
+    tab,
+    selectedRoomId,
+    mobileFocusedRoomId,
+    width,
+  });
 
   useEffect(() => {
     const previous = messageListSignatureRef.current;
     const roomChanged = selectedRoomId !== previous.roomId;
     const chatOpened = tab === 'chat' && previous.tab !== 'chat';
     const chatViewChanged = chatViewKey !== previous.viewKey;
-    const chatListVisible = tab === 'chat'
-      && Boolean(selectedRoomId)
-      && (width >= 900 || mobileFocusedRoomId === selectedRoomId);
     const messageAppended = selectedRoomId === previous.roomId && visibleSelectedMessages.length > previous.messageCount;
     const latestMessageChanged = selectedRoomId === previous.roomId && latestVisibleMessage?.id !== previous.lastMessageId;
 
@@ -599,7 +602,7 @@ export default function App() {
       messageCount: visibleSelectedMessages.length,
       lastMessageId: latestVisibleMessage?.id ?? null,
     };
-  }, [chatViewKey, mobileFocusedRoomId, selectedRoomId, tab, visibleSelectedMessages.length, latestVisibleMessage?.id, width]);
+  }, [chatListVisible, chatViewKey, selectedRoomId, tab, visibleSelectedMessages.length, latestVisibleMessage?.id]);
 
   function scrollMessagesToEnd(animated: boolean) {
     requestAnimationFrame(() => {

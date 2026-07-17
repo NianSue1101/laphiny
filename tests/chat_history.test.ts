@@ -88,7 +88,10 @@ describe('chat prompt collaboration protocol', () => {
   });
 
   it('can produce a no-delegation protocol for future auxiliary agents', () => {
-    const protocol = buildCollaborationProtocol({ allowDelegation: false }).join('\n');
+    const protocol = buildCollaborationProtocol({
+      allowDelegation: false,
+      maxDelegationsPerRound: 1,
+    }).join('\n');
 
     assert.match(protocol, /当前不应继续发起委托/);
     assert.match(protocol, /直接完成任务或说明缺少什么输入/);

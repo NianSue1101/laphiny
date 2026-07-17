@@ -30,8 +30,8 @@ interface ChatComposerProps {
   onToggleTargetSelection: (connectionId: string) => void;
   onPreviewAttachment: (attachment: Attachment) => void;
   onRemoveAttachment: (attachmentId: string) => void;
-  onAttachImages: () => void;
-  onAttachDocuments: () => void;
+  onAttachImages: () => void | Promise<void>;
+  onAttachDocuments: () => void | Promise<void>;
   onChangeDraft: (text: string) => void;
   onFocusInput: () => void;
   onSendMessage: () => void;
@@ -66,6 +66,14 @@ export function ChatComposer({
   const enabledMembers = room?.members.filter((member) => member.enabled) ?? [];
   const allTargetsSelected = Boolean(room && selectedTargetIds.length === enabledMembers.length);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+
+  async function runAttachmentAction(action: () => void | Promise<void>) {
+    try {
+      await action();
+    } finally {
+      setAttachmentMenuOpen(false);
+    }
+  }
 
   return (
     <View style={[styles.composer, isDarkMode && styles.composerDark, androidKeyboardLift > 0 && { marginBottom: androidKeyboardLift }]}>
@@ -128,12 +136,10 @@ export function ChatComposer({
           <Text style={styles.mentionHint}>添加附件</Text>
           <View style={styles.toolActions}>
             <MiniButton icon="image-outline" label="图片" onPress={() => {
-              setAttachmentMenuOpen(false);
-              onAttachImages();
+              void runAttachmentAction(onAttachImages);
             }} />
             <MiniButton icon="document-attach-outline" label="文件" onPress={() => {
-              setAttachmentMenuOpen(false);
-              onAttachDocuments();
+              void runAttachmentAction(onAttachDocuments);
             }} />
           </View>
         </View>

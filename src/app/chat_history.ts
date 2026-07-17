@@ -255,11 +255,11 @@ export function buildDelegationSystemPrompt(room: Room, member: RoomMember, dele
 export function buildCollaborationProtocol({
   allowDelegation,
   delegatedFrom,
-  maxDelegationsPerRound = DEFAULT_DELEGATIONS_PER_ROUND,
+  maxDelegationsPerRound,
 }: {
   allowDelegation: boolean;
   delegatedFrom?: string;
-  maxDelegationsPerRound?: number;
+  maxDelegationsPerRound: number;
 }): string[] {
   return [
     '1. 先判断用户真正要完成的交付物，再直接完成你最擅长、最确定的部分。',

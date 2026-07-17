@@ -39,8 +39,11 @@ export function ComposerModeBar({
       </TouchableOpacity>
       {quickCommandsOpen ? items.slice(0, isWideLayout ? 7 : 5).map((command) => (
         <TouchableOpacity key={command.id} style={styles.modeShortcut} onPress={() => {
-          onInsertCommand(command);
-          onToggleQuickCommands();
+          try {
+            onInsertCommand(command);
+          } finally {
+            onToggleQuickCommands();
+          }
         }}>
           <Ionicons name={command.kind === 'roleplay' ? 'game-controller-outline' : 'sparkles-outline'} size={14} color="#4b5563" />
           <Text style={styles.modeShortcutText}>{command.command}</Text>
