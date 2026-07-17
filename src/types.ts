@@ -330,6 +330,10 @@ export interface SyncConfig {
   lastPulledAt?: string;
   lastPushedAt?: string;
   lastEventPulledAt?: string;
+  /** Stable local identifier used for per-device proactive message acknowledgements. */
+  deviceId?: string;
+  /** Last durable proactive Agent message sequence consumed by this device. */
+  lastAgentMessageSequence?: number;
   updatedAt: string;
 }
 
@@ -545,7 +549,50 @@ export interface ChatMessage {
   delegatedFrom?: string;
   delegationTaskId?: string;
   delegationAttemptId?: string;
+  /** Whether the message completed an App request or arrived later through the sync relay. */
+  origin?: 'request' | 'proactive';
+  /** Durable relay event used to deduplicate proactive Agent delivery. */
+  inboundEventId?: string;
+  replyToMessageId?: string;
+  scheduledTaskId?: string;
+  receivedAt?: string;
   createdAt: string;
+}
+
+export interface ProactiveAgentMessageEvent {
+  protocol: 'laphiny.proactive-message.v1';
+  sequence: number;
+  eventId: string;
+  roomId: string;
+  connectionId: string;
+  authorName: string;
+  idempotencyKey: string;
+  message: ChatMessage;
+  createdAt: string;
+}
+
+export interface ProactiveAgentMessagePage {
+  events: ProactiveAgentMessageEvent[];
+  nextCursor: number;
+  hasMore: boolean;
+}
+
+export interface AgentReplyBinding {
+  id: string;
+  roomId: string;
+  connectionId: string;
+  authorName: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
+  revokedAt?: string;
+}
+
+export interface CreatedAgentReplyBinding {
+  binding: AgentReplyBinding;
+  token: string;
+  endpoint: string;
+  protocol: 'laphiny.proactive-message.v1';
 }
 
 export interface HermesHealthResponse {

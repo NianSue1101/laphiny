@@ -95,6 +95,7 @@ export const MessageBubble = memo(function MessageBubble({
           ) : null}
           <Text style={styles.author}>{message.authorName}</Text>
           {isAgentMessage ? <Text style={styles.messageRoleBadge}>{getMessageRoleBadge(message)}</Text> : null}
+          {message.origin === 'proactive' ? <Text style={styles.messageRoleBadge}>主动回复</Text> : null}
         </View>
         <Text style={[styles.status, message.status === 'error' && styles.statusError]}>
           {message.status === 'running' && message.streamPhase
@@ -159,9 +160,9 @@ export const MessageBubble = memo(function MessageBubble({
           <MiniButton icon="copy-outline" label="复制" onPress={() => onCopyAgentReply(message)} />
           {message.status === 'running' ? (
             <MiniButton icon="stop-circle-outline" label={stopping ? '停止中' : '停止'} onPress={() => onStopMessage(message.id)} />
-          ) : (
+          ) : message.origin !== 'proactive' ? (
             <MiniButton icon="refresh-outline" label="重试" onPress={() => onRetryMessage(message)} />
-          )}
+          ) : null}
         </View>
       ) : null}
       {message.authorId === 'user' && isLastEditableUserMessage && !sending ? (

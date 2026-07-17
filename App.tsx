@@ -79,6 +79,7 @@ import { useReplyNotifications } from './src/hooks/useReplyNotifications';
 import { useStreamRegistry } from './src/hooks/useStreamRegistry';
 import { useSyncEffects } from './src/hooks/useSyncEffects';
 import { useSyncRuntime } from './src/hooks/useSyncRuntime';
+import { useProactiveAgentMessages } from './src/hooks/useProactiveAgentMessages';
 import { AgentPermissionDecision, AgentPermissionRequest, AgentProfileVersion, AppPreferences, Attachment, ChatMessage, CollaborationEvent, DelegationTask, GoalSession, HermesConnection, Room, RoomMember, SquareEvent, SyncConfig, SyncSnapshot, TeamTemplate, RoomModeId } from './src/types';
 
 const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
@@ -286,6 +287,15 @@ export default function App() {
     squareEvents,
     syncConfig,
     tab,
+  });
+  useProactiveAgentMessages({
+    appendDiagnosticLog,
+    appendMessagesToRoom,
+    hydrated,
+    messagesByRoom,
+    rooms,
+    setSyncConfig,
+    syncConfig,
   });
   const maxWindowHeightRef = useRef(height);
   const isDarkMode = appPreferences.themeMode === 'dark';
@@ -1659,6 +1669,7 @@ export default function App() {
           appPreferences={appPreferences}
           fontsLoaded={fontsLoaded}
           syncConfig={syncConfig}
+          rooms={rooms}
           syncing={syncing}
           checkingSyncConflicts={checkingSyncConflicts}
           syncConflictReport={syncConflictReport}
