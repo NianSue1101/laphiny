@@ -21,6 +21,7 @@ import type {
   DiagnosticLogEntry,
   FeedbackConfig,
   FeedbackLogEntry,
+  Room,
   SyncConfig,
 } from '../../types';
 import type { SyncConflictReport } from '../../lib/sync_conflicts';
@@ -32,6 +33,7 @@ import {
   SyncBackendSettingsPanel,
 } from './SettingsInfoPanels';
 import { SyncConflictReportPanel } from './SyncConflictReportPanel';
+import { AgentReplyBindingsPanel } from './AgentReplyBindingsPanel';
 
 type Styles = Record<string, any>;
 
@@ -61,6 +63,7 @@ interface SettingsTabProps {
   appPreferences: AppPreferences;
   fontsLoaded: boolean;
   syncConfig: SyncConfig;
+  rooms: Room[];
   syncing: boolean;
   checkingSyncConflicts: boolean;
   syncConflictReport: SyncConflictReport | null;
@@ -106,6 +109,7 @@ export function SettingsTab({
   appPreferences,
   fontsLoaded,
   syncConfig,
+  rooms,
   syncing,
   checkingSyncConflicts,
   syncConflictReport,
@@ -211,6 +215,12 @@ export function SettingsTab({
           checkSyncConflicts={checkSyncConflicts}
           pullSyncSnapshot={pullSyncSnapshot}
           pushSyncSnapshot={pushSyncSnapshot}
+        />
+        <AgentReplyBindingsPanel
+          rooms={rooms}
+          styles={styles}
+          syncConfig={syncConfig}
+          TextComponent={Text}
         />
       </DisclosureSection>
 

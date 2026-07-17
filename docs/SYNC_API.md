@@ -1,7 +1,8 @@
 # Laphiny Sync API
 
-This is the lightweight contract for a future SQLite-backed sync service running on Laper's tablet or another trusted device.
-The reference implementation lives in `scripts/sync-server.mjs`.
+This file documents the legacy in-repository reference server. New production deployments use the standalone `laphiny-sync` project, which preserves the endpoints below and adds durable Agent-initiated room messages, room-scoped bindings, cursor recovery, acknowledgements, and SSE.
+
+`scripts/sync-server.mjs` remains available for compatibility tests and local snapshot development, but it does not implement proactive Agent replies.
 
 ## Run The Reference Server
 

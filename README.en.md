@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.35.0](#what-is-new-in-v0350)
 - [What Is New In v0.34.0](#what-is-new-in-v0340)
 - [What Is New In v0.33.0](#what-is-new-in-v0330)
 - [What Is New In v0.32.3](#what-is-new-in-v0323)
@@ -148,7 +149,18 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Global search
 - Full backup and merge restore
 - PWA offline support
-- Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+- Optional self-hosted `laphiny-sync` service for snapshots, settings, conflict preflight, events, and Agent-initiated replies to an exact room
+
+---
+
+## What Is New In v0.35.0
+
+- **Proactive Agent replies:** scheduled tasks, background scripts, and long-running work can deliver results after the original chat request has ended. Each result returns to an exact Laphiny room under the bound Agent identity.
+- **Durable delivery and recovery:** foreground SSE provides real-time delivery with a 15-second recovery pull. Messages are committed to server-side SQLite and local chat history before the device cursor is acknowledged. Event IDs, monotonic sequences, and idempotency keys prevent reconnects and retries from losing or duplicating messages.
+- **Least-privilege bindings:** Settings can create, copy, and revoke an exact “room × Agent” delivery configuration. A binding cannot read chat history, snapshots, or settings, target another room, or impersonate another member.
+- **Standalone self-hosted backend:** production sync now lives at [`Lovely-Laper/laphiny-sync`](https://github.com/Lovely-Laper/laphiny-sync), with Docker Compose, automatic key generation, health checks, and a one-sentence deployment protocol that a server Agent can execute.
+- **Boundary:** this release does not provide Android/iOS system-level remote push. Messages arrive in real time while Laphiny is active and are recovered when the app starts or returns to the foreground.
+- **Unified version metadata:** in-app, Expo, npm, and Android versions report `0.35.0`; Android uses `versionCode 350`. The automated suite contains 132 tests.
 
 ---
 
@@ -343,7 +355,7 @@ npm test
 npm run web:build
 ```
 
-The current suite contains 104 tests covering stream events, permission continuation, delegation boundaries, scheduler isolation, Goal transitions, long-history paging, and index repair.
+The current suite contains 132 tests covering proactive-message recovery, SSE parsing, stream events, permission continuation, delegation boundaries, scheduler isolation, Goal transitions, long-history paging, and index repair.
 
 ---
 
@@ -384,21 +396,32 @@ Both Windows and Unix builds go through `scripts/run-gradle.mjs`.
 
 ## Sync Server
 
-The sync server is optional. It can store remote snapshots on your own cloud server and let the app sync on startup or foreground resume.
+The production sync backend is now a separate `laphiny-sync` project that users can deploy on their own server with Docker Compose. In addition to remote snapshots, it issues least-privilege “room × Agent” reply bindings. A scheduled Agent task can therefore deliver its result after the original chat request has already ended.
 
 ```bash
-LAPHINY_SYNC_API_KEY='your-secret' LAPHINY_SYNC_PORT=8787 node scripts/sync-server.mjs
+git clone https://github.com/Lovely-Laper/laphiny-sync.git
+cd laphiny-sync
+sh scripts/install.sh
 ```
 
-Endpoints:
+While active, Laphiny receives proactive messages over SSE, performs a recovery pull every 15 seconds, and immediately recovers after startup or foreground resume. A message is committed to server-side SQLite and local chat history before its cursor is acknowledged, so reconnects and retries neither lose nor duplicate it.
+
+Main endpoints:
 
 - `GET /v1/health`
 - `GET /v1/snapshot`
 - `PUT /v1/snapshot`
 - `GET /v1/events`
 - `POST /v1/events`
+- `POST /v1/agent-bindings`
+- `POST /v1/agent/messages`
+- `GET /v1/agent/messages?after=<cursor>`
+- `GET /v1/agent/stream?after=<cursor>`
+- `POST /v1/agent/acks`
 
-For production, run it under systemd and expose it through HTTPS reverse proxy.
+The Settings tab can create and copy a delivery configuration for an exact room member and revoke it later. Production deployments must use HTTPS and protect both `.env` and the SQLite volume; a complete snapshot may contain Hermes API keys.
+
+The repository-local `npm run sync:server` remains only as a legacy-compatible development reference. New deployments should use the standalone project.
 
 ---
 
