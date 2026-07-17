@@ -3,7 +3,9 @@ import type { QuickCommand } from '../app/app_types';
 export const DEFAULT_MODEL = 'hermes-agent';
 export const DEFAULT_CONTEXT_LIMIT = 20;
 export const MAX_DELEGATION_DEPTH = 3;
-export const APP_VERSION = '0.33.0';
+export const DEFAULT_DELEGATIONS_PER_ROUND = 1;
+export const MAX_DELEGATIONS_PER_ROUND = 6;
+export const APP_VERSION = '0.34.0';
 
 export const QUICK_COMMANDS: QuickCommand[] = [
   {

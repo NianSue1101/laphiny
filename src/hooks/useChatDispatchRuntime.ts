@@ -1,6 +1,8 @@
 ﻿import { DEFAULT_CONTEXT_LIMIT, MAX_DELEGATION_DEPTH } from '../config/app_config';
 import { useRef } from 'react';
 
+import { DEFAULT_DELEGATIONS_PER_ROUND } from '../config/app_config';
+
 import {
   buildChatHistory,
   buildChatHistoryForDelegation,
@@ -247,7 +249,7 @@ export function useChatDispatchRuntime(options: any) {
         status: 'sent',
         createdAt: now,
       };
-      appendMessagesToRoom(room.id, [userMessage, makeLocalNotice(room.id, '桌游店 RP 模式已关闭。群聊恢复普通协作触发规则。')]);
+      appendMessagesToRoom(room.id, [userMessage, makeLocalNotice(room.id, '桌游店 RP 模式已关闭。群聊恢复普通协作触发规则。', 'roleplay')]);
       updateRoomById(room.id, { roleplay: { ...(room.roleplay ?? makeDefaultRoleplayConfig()), enabled: false, updatedAt: now } });
       appendCollaborationEvent({
         kind: 'roleplay_updated',
@@ -664,13 +666,23 @@ export function useChatDispatchRuntime(options: any) {
             ? toolDelegations
             : resolveAssistantDelegations(room, answer, reply.member.connectionId);
           if (hasDelegationToolCall && toolDelegations.length === 0) {
-            appendMessagesToRoom(room.id, [makeLocalNotice(room.id, `${reply.member.alias} 提交的工具委托无有效任务，已拒绝且不会回退解析正文中的 @ 示例。`)]);
+            appendMessagesToRoom(room.id, [makeLocalNotice(
+              room.id,
+              `${reply.member.alias} 提交的工具委托无有效任务，已拒绝且不会回退解析正文中的 @ 示例。`,
+              'delegation-tools',
+            )]);
           }
-          const delegationLimit = reply.goalMode ? MAX_GOAL_DELEGATIONS_PER_ROUND : 1;
+          const delegationLimit = reply.goalMode
+            ? MAX_GOAL_DELEGATIONS_PER_ROUND
+            : room.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND;
           const acceptedDelegations = delegations.slice(0, delegationLimit);
           if (delegations.length > acceptedDelegations.length) {
             appendMessagesToRoom(room.id, [
-              makeLocalNotice(room.id, `${reply.goalMode ? '目标模式' : '普通模式'}本轮最多接收 ${delegationLimit} 个委托，已忽略 ${delegations.length - acceptedDelegations.length} 个额外委托。`),
+              makeLocalNotice(
+                room.id,
+                `${reply.goalMode ? '目标模式' : '普通模式'}本轮最多接收 ${delegationLimit} 个委托，已忽略 ${delegations.length - acceptedDelegations.length} 个额外委托。`,
+                reply.goalMode ? 'goal' : 'delegation-limit',
+              ),
             ]);
           }
           for (const delegation of acceptedDelegations) {
@@ -856,9 +868,9 @@ export function useChatDispatchRuntime(options: any) {
 
     if (goalMode && goalShouldContinue && goalReviewRound >= MAX_GOAL_REVIEW_ROUNDS) {
       goalPausedBySafety = true;
-      appendMessagesToRoom(room.id, [makeLocalNotice(room.id, `目标已达到 ${MAX_GOAL_REVIEW_ROUNDS} 轮安全上限，等待用户确认是否继续。`)]);
+      appendMessagesToRoom(room.id, [makeLocalNotice(room.id, `目标已达到 ${MAX_GOAL_REVIEW_ROUNDS} 轮安全上限，等待用户确认是否继续。`, 'goal')]);
     } else if (goalMode && goalPausedBySafety && lastGoalSignal !== 'done' && lastGoalSignal !== 'blocked') {
-      appendMessagesToRoom(room.id, [makeLocalNotice(room.id, '目标连续两轮没有结构化进展，已暂停并等待用户调整。')]);
+      appendMessagesToRoom(room.id, [makeLocalNotice(room.id, '目标连续两轮没有结构化进展，已暂停并等待用户调整。', 'goal')]);
     }
 
     if (ritual?.definition.autoConsensus) {

@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import {
   ScrollView,
   TouchableOpacity,
@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 
 import type { Attachment, Room } from '../../types';
-import { AttachmentPreview, IconButton } from '../Primitives';
+import { AttachmentPreview, IconButton, MiniButton } from '../Primitives';
 
 type Styles = Record<string, any>;
 
@@ -65,6 +65,7 @@ export function ChatComposer({
   const TextInput = TextInputComponent;
   const enabledMembers = room?.members.filter((member) => member.enabled) ?? [];
   const allTargetsSelected = Boolean(room && selectedTargetIds.length === enabledMembers.length);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
 
   return (
     <View style={[styles.composer, isDarkMode && styles.composerDark, androidKeyboardLift > 0 && { marginBottom: androidKeyboardLift }]}>
@@ -122,9 +123,29 @@ export function ChatComposer({
         </View>
       ) : null}
 
+      {attachmentMenuOpen ? (
+        <View style={styles.composerAttachmentMenu}>
+          <Text style={styles.mentionHint}>添加附件</Text>
+          <View style={styles.toolActions}>
+            <MiniButton icon="image-outline" label="图片" onPress={() => {
+              setAttachmentMenuOpen(false);
+              onAttachImages();
+            }} />
+            <MiniButton icon="document-attach-outline" label="文件" onPress={() => {
+              setAttachmentMenuOpen(false);
+              onAttachDocuments();
+            }} />
+          </View>
+        </View>
+      ) : null}
+
       <View style={styles.composerInputRow}>
-        <IconButton icon="image-outline" label="添加图片" onPress={onAttachImages} disabled={!room} />
-        <IconButton icon="document-attach-outline" label="添加文件" onPress={onAttachDocuments} disabled={!room} />
+        <IconButton
+          icon={attachmentMenuOpen ? 'close-outline' : 'attach-outline'}
+          label={attachmentMenuOpen ? '收起附件菜单' : '添加附件'}
+          onPress={() => setAttachmentMenuOpen((open) => !open)}
+          disabled={!room}
+        />
         <TextInput
           style={[styles.composerInput, isDarkMode && styles.inputDark]}
           placeholder={getComposerPlaceholder(room)}

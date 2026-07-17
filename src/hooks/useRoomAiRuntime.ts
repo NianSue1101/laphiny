@@ -309,7 +309,11 @@ export function useRoomAiRuntime({
         previousVersion: selectedRoom.memoryCapsule?.version ?? 0,
       });
       updateSelectedRoom({ pendingMemoryCapsule: capsule });
-      appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(selectedRoom.id, `房间记忆草案已生成（v${capsule.version}），请在房间工具里确认后再沉淀：\n${summarizeRoomMemory(capsule)}`)]);
+      appendMessagesToRoom(selectedRoom.id, [makeLocalNotice(
+        selectedRoom.id,
+        `房间记忆草案已生成（v${capsule.version}），请在房间工具里确认后再沉淀：\n${summarizeRoomMemory(capsule)}`,
+        'memory',
+      )]);
       appendCollaborationEvent({
         kind: 'memory_updated',
         roomId: selectedRoom.id,

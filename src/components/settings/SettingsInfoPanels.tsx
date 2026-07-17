@@ -27,6 +27,7 @@ type StorageSummary = {
 type PreferencesPatch = Partial<Omit<AppPreferences, "updatedAt">>;
 
 interface ProjectInfoSettingsPanelProps {
+  embedded?: boolean;
   appVersion: string;
   layoutMode: string;
   width: number;
@@ -47,6 +48,7 @@ interface PersonalizationSettingsPanelProps {
 }
 
 export function ProjectInfoSettingsPanel({
+  embedded = false,
   appVersion,
   layoutMode,
   width,
@@ -58,7 +60,7 @@ export function ProjectInfoSettingsPanel({
   TextComponent: Text,
 }: ProjectInfoSettingsPanelProps) {
   return (
-    <View style={styles.syncPanel}>
+    <View style={embedded ? styles.settingsEmbeddedPanel : styles.syncPanel}>
       <View style={styles.syncHeader}>
         <View style={styles.syncHeaderText}>
           <Text style={styles.cardTitle}>项目信息</Text>
@@ -283,6 +285,7 @@ function SettingsToggleRow({
 }
 
 interface SyncBackendSettingsPanelProps {
+  embedded?: boolean;
   syncConfig: SyncConfig;
   syncing: boolean;
   checkingSyncConflicts: boolean;
@@ -298,6 +301,7 @@ interface SyncBackendSettingsPanelProps {
 }
 
 export function SyncBackendSettingsPanel({
+  embedded = false,
   syncConfig,
   syncing,
   checkingSyncConflicts,
@@ -312,7 +316,7 @@ export function SyncBackendSettingsPanel({
   pushSyncSnapshot,
 }: SyncBackendSettingsPanelProps) {
   return (
-    <View style={styles.syncPanel}>
+    <View style={embedded ? styles.settingsEmbeddedPanel : styles.syncPanel}>
       <View style={styles.syncHeader}>
         <View style={styles.syncHeaderText}>
           <Text style={styles.cardTitle}>SQLite 同步后端</Text>

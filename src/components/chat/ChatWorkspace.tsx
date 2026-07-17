@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 
 import { DEFAULT_CONTEXT_LIMIT, MAX_DELEGATION_DEPTH } from '../../config/app_config';
 import { getRenderableMessageArtifacts } from '../../lib/chat_rendering';
+import type { ChatNoticeAction } from '../../lib/chat_notice_actions';
 import type { ChatMessage, GoalSession, RoomMember } from '../../types';
 import { ActiveGoalPanel } from '../ActiveGoalPanel';
 import { ChatSidebar } from '../ChatSidebar';
@@ -20,14 +22,17 @@ import { TaskBoardPanel } from '../TaskBoardPanel';
 import { RoomToolsPanel } from '../rooms';
 import {
   ChatComposer,
+  ChatQuickSettingsSheet,
   ChatMessagesList,
   ChatRoomHeader,
   FocusedChatHeader,
   MessageBubble,
   MobileRoomDetailsDrawer,
+  InlineDelegationTaskCard,
 } from './index';
 
 export function ChatWorkspace(props: any) {
+  const [quickSettingsAction, setQuickSettingsAction] = useState<ChatNoticeAction | null>(null);
   const {
     activeStreamIds,
     addMemberToSelectedRoom,
@@ -155,6 +160,7 @@ export function ChatWorkspace(props: any) {
     Text,
     TextInput,
     toggleRoomAutoDelegation,
+    toggleRoomToolDelegation,
     toggleRoomMemberEnabledInline,
     toggleSelectedRoomRoleplay,
     toggleTargetSelection,
@@ -162,6 +168,7 @@ export function ChatWorkspace(props: any) {
     updateRoomBlackboardItemStatus,
     updateRoomDecisionStatus,
     updateRoomDelegationDepth,
+    updateRoomDelegationsPerRound,
     updateSelectedRoomMember,
     updateSelectedRoomRoleplay,
     unreadByRoom,
@@ -180,30 +187,43 @@ export function ChatWorkspace(props: any) {
   // needs more room, so it uses a separate, explicit breakpoint.
   const isCollaborationLayout = isWideLayout && width >= 1200;
   function renderMessageBubble(message: ChatMessage) {
+    const inlineDelegations = selectedRoomDelegationTasks.filter((task: any) => task.sourceMessageId === message.id);
     return (
-      <MessageBubble
-        message={message}
-        renderable={getRenderableMessageArtifacts(message)}
-        isDarkMode={isDarkMode}
-        isWideLayout={isCollaborationLayout}
+      <View style={styles.messageThreadItem}>
+        <MessageBubble
+          message={message}
+          renderable={getRenderableMessageArtifacts(message)}
+          isDarkMode={isDarkMode}
+          isWideLayout={isCollaborationLayout}
           selectedFontFamily={selectedFontFamily}
           showReasoning={showReasoning}
           showMessageDate={showMessageDate}
-        isLastEditableUserMessage={message.id === lastEditableUserMessage?.id}
-        sending={sending}
-        stopping={Boolean(stoppingStreamIds[message.id])}
-        styles={styles}
-        TextComponent={Text}
-        getConnectionAvatarUri={getConnectionAvatarUri}
-        getMessageBubbleStyle={getMessageBubbleStyle}
-        getMessageRoleBadge={getMessageRoleBadge}
-        onPreviewAttachment={setPreviewAttachment}
-        onResolvePermissionRequest={resolveAgentPermissionRequest}
-        onCopyAgentReply={copyAgentReply}
-        onStopMessage={stopMessage}
-        onRetryMessage={retryMessage}
-        onEditLastUserMessage={beginEditLastUserMessage}
-      />
+          isLastEditableUserMessage={message.id === lastEditableUserMessage?.id}
+          sending={sending}
+          stopping={Boolean(stoppingStreamIds[message.id])}
+          styles={styles}
+          TextComponent={Text}
+          getConnectionAvatarUri={getConnectionAvatarUri}
+          getMessageBubbleStyle={getMessageBubbleStyle}
+          getMessageRoleBadge={getMessageRoleBadge}
+          onPreviewAttachment={setPreviewAttachment}
+          onResolvePermissionRequest={resolveAgentPermissionRequest}
+          onCopyAgentReply={copyAgentReply}
+          onStopMessage={stopMessage}
+          onRetryMessage={retryMessage}
+          onEditLastUserMessage={beginEditLastUserMessage}
+          onOpenNoticeAction={setQuickSettingsAction}
+        />
+        {inlineDelegations.map((task: any) => (
+          <InlineDelegationTaskCard
+            key={task.id}
+            task={task}
+            styles={styles}
+            TextComponent={Text}
+            onRetry={(item) => void retryDelegationTask(item)}
+          />
+        ))}
+      </View>
     );
   }
 
@@ -343,6 +363,41 @@ export function ChatWorkspace(props: any) {
         {renderChatMessagesList()}
 
         {renderChatComposer()}
+        <ChatQuickSettingsSheet
+          action={quickSettingsAction}
+          room={selectedRoom}
+          sending={sending}
+          styles={styles}
+          TextComponent={Text}
+          onClose={() => setQuickSettingsAction(null)}
+          onUpdateDelegationsPerRound={updateRoomDelegationsPerRound}
+          onToggleAutoDelegation={toggleRoomAutoDelegation}
+          onToggleToolDelegation={toggleRoomToolDelegation}
+          onConfirmMemory={() => {
+            confirmPendingRoomMemoryCapsule();
+            setQuickSettingsAction(null);
+          }}
+          onDiscardMemory={() => {
+            discardPendingRoomMemoryCapsule();
+            setQuickSettingsAction(null);
+          }}
+          onGenerateMemory={() => {
+            generateRoomMemoryCapsule();
+            setQuickSettingsAction(null);
+          }}
+          onContinueGoal={() => {
+            if (selectedRoom?.activeGoal) continueActiveGoalFromPanel(selectedRoom.activeGoal);
+            setQuickSettingsAction(null);
+          }}
+          onAdjustGoal={() => {
+            if (selectedRoom?.activeGoal) {
+              const activeGoal = selectedRoom.activeGoal;
+              setDraft(`/goal @${activeGoal.leadAlias} ${activeGoal.goal} `);
+            }
+            setQuickSettingsAction(null);
+          }}
+          onToggleRoleplay={toggleSelectedRoomRoleplay}
+        />
         </KeyboardAvoidingView>
         {isCollaborationLayout && collaborationDrawerOpen ? renderCollaborationDrawer() : null}
       </View>
@@ -648,6 +703,8 @@ export function ChatWorkspace(props: any) {
         onOpenRoomManagement={openRoomManagement}
         onSetDefaultCollaborationMode={setRoomDefaultCollaborationMode}
         onToggleRoomAutoDelegation={toggleRoomAutoDelegation}
+        onToggleRoomToolDelegation={toggleRoomToolDelegation}
+        onUpdateRoomDelegationsPerRound={updateRoomDelegationsPerRound}
         onUpdateRoomDelegationDepth={updateRoomDelegationDepth}
         onToggleRoomRoleplay={toggleSelectedRoomRoleplay}
         onUpdateRoomRoleplay={updateSelectedRoomRoleplay}

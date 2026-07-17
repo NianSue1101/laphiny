@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.34.0](#what-is-new-in-v0340)
 - [What Is New In v0.33.0](#what-is-new-in-v0330)
 - [What Is New In v0.32.3](#what-is-new-in-v0323)
 - [What Is New In v0.32.2](#what-is-new-in-v0322)
@@ -148,6 +149,17 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Full backup and merge restore
 - PWA offline support
 - Optional Node.js + SQLite sync server for snapshots, events, and conflict preflight
+
+---
+
+## What Is New In v0.34.0
+
+- **Lower-density UI:** connections, room tools, mobile details, settings, onboarding, and the composer now prioritize frequent actions and disclose secondary controls on demand. Existing capabilities remain available, while destructive actions are separated from everyday work.
+- **Open at the latest message:** every chat entry returns to the newest message. A compact “Latest” control appears only when at least 20 newer messages are below the viewport.
+- **Inline delegation sheets:** every Agent delegation is shown directly after its source reply with source, assignee, state, task, deliverable/acceptance, error, and retry details. Users no longer have to discover a hidden collaboration drawer to confirm that a delegation exists.
+- **Actionable notices:** delegation limits, tool delegation, memory drafts, paused goals, and RP notices expose focused actions in an in-chat bottom sheet that preserves scroll position and applies changes immediately. The ordinary per-reply delegation limit is now a room setting from 1 to 6 and is carried into Agent collaboration prompts and team templates.
+- **Android device evidence:** a production-signed Release upgrade on an Android 16 emulator verified latest-message entry, inline delegation sheets, legacy-notice compatibility, focused settings, and immediate updates. The automated suite now contains 124 tests.
+- **Unified version metadata:** in-app, Expo, npm, and Android versions report `0.34.0`; Android uses `versionCode 340`.
 
 ---
 

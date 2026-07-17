@@ -331,7 +331,7 @@ export function makeAssistantPlaceholder(roomId: string, member: RoomMember): Ch
   };
 }
 
-export function makeLocalNotice(roomId: string, content: string): ChatMessage {
+export function makeLocalNotice(roomId: string, content: string, noticeActionId?: ChatMessage['noticeActionId']): ChatMessage {
   return {
     id: makeId('msg'),
     roomId,
@@ -339,6 +339,7 @@ export function makeLocalNotice(roomId: string, content: string): ChatMessage {
     authorId: 'system',
     authorName: 'Laphiny',
     content,
+    noticeActionId,
     status: 'local',
     createdAt: new Date().toISOString(),
   };

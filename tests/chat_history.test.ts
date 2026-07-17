@@ -66,7 +66,7 @@ describe('chat prompt collaboration protocol', () => {
     const prompt = buildGroupSystemPrompt(room, room.members[0]!, connections);
 
     assert.match(prompt, /增量推进/);
-    assert.match(prompt, /一次最多委托 1 个最关键的子任务/);
+    assert.match(prompt, /普通模式下一次最多委托 1 个必要且彼此独立的子任务/);
     assert.match(prompt, /目标、输入材料、期望产物和边界/);
     assert.match(prompt, /不要带 @ 提到成员/);
     assert.match(prompt, /审查员/);
@@ -78,7 +78,13 @@ describe('chat prompt collaboration protocol', () => {
 
     assert.match(prompt, /优先处理委托任务/);
     assert.match(prompt, /避免把任务再委托回 规划师/);
-    assert.match(prompt, /一次最多委托 1 个最关键的子任务/);
+    assert.match(prompt, /普通模式下一次最多委托 1 个必要且彼此独立的子任务/);
+  });
+
+  it('writes the room delegation limit into the collaboration protocol', () => {
+    const prompt = buildGroupSystemPrompt({ ...room, maxDelegationsPerRound: 3 }, room.members[0]!, connections);
+
+    assert.match(prompt, /普通模式下一次最多委托 3 个必要且彼此独立的子任务/);
   });
 
   it('can produce a no-delegation protocol for future auxiliary agents', () => {

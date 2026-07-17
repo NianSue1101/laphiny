@@ -1,7 +1,12 @@
 import type { ComponentType } from 'react';
 import { ScrollView, TouchableOpacity, View, type TextInputProps, type TextProps } from 'react-native';
 
-import { DEFAULT_CONTEXT_LIMIT, MAX_DELEGATION_DEPTH } from '../config/app_config';
+import {
+  DEFAULT_CONTEXT_LIMIT,
+  DEFAULT_DELEGATIONS_PER_ROUND,
+  MAX_DELEGATION_DEPTH,
+  MAX_DELEGATIONS_PER_ROUND,
+} from '../config/app_config';
 import type { HermesConnection, Room, RoomMember, RoomModeId } from '../types';
 import { ROOM_MODES } from '../lib/stage4_plus';
 import { summarizeRoomGrowth } from '../lib/room_growth';
@@ -108,6 +113,11 @@ export function RoomManagementPanel({
             <MiniButton icon="git-branch-outline" label={room.defaultCollaborationMode === 'sequential' ? '默认：接力' : '切接力'} onPress={() => updateRoomInline(room.id, { defaultCollaborationMode: 'sequential' })} />
             <MiniButton icon={room.autoDelegationEnabled === false ? 'flash-off-outline' : 'flash-outline'} label={room.autoDelegationEnabled === false ? '自动委托关' : '自动委托开'} onPress={() => updateRoomInline(room.id, { autoDelegationEnabled: room.autoDelegationEnabled === false })} />
             <MiniButton icon={room.agentToolDelegationEnabled === false ? 'construct-outline' : 'construct'} label={room.agentToolDelegationEnabled === false ? '工具委托关' : '工具委托开'} onPress={() => updateRoomInline(room.id, { agentToolDelegationEnabled: room.agentToolDelegationEnabled === false })} />
+          </View>
+          <View style={styles.stepper}>
+            <MiniButton icon="remove-outline" label="每轮 -1" onPress={() => updateRoomInline(room.id, { maxDelegationsPerRound: Math.max(1, (room.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND) - 1) })} />
+            <Text style={styles.help}>普通模式每轮委托数：{room.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND}</Text>
+            <MiniButton icon="add-outline" label="每轮 +1" onPress={() => updateRoomInline(room.id, { maxDelegationsPerRound: Math.min(MAX_DELEGATIONS_PER_ROUND, (room.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND) + 1) })} />
           </View>
           <View style={styles.stepper}>
             <MiniButton icon="remove-outline" label="深度 -1" onPress={() => updateRoomInline(room.id, { maxDelegationDepth: Math.max(0, Math.min(6, (room.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) - 1)) })} />

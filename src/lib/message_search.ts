@@ -52,3 +52,16 @@ export function shouldAutoLoadOlderMessages({
 }): boolean {
   return offsetY <= 72 && hasOlderMessages && !loading && !searching;
 }
+
+export function shouldShowJumpToLatest({
+  messageCount,
+  lastVisibleIndex,
+  threshold = 20,
+}: {
+  messageCount: number;
+  lastVisibleIndex: number;
+  threshold?: number;
+}): boolean {
+  if (messageCount <= 0 || lastVisibleIndex < 0) return false;
+  return messageCount - 1 - lastVisibleIndex >= threshold;
+}

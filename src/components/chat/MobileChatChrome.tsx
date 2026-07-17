@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import {
   ScrollView,
   TouchableOpacity,
@@ -10,7 +10,7 @@ import { formatDateTime } from '../../app/app_utils';
 import { summarizeRoomMemory } from '../../lib/room_memory';
 import type { Room } from '../../types';
 import { MarkdownText } from '../MarkdownText';
-import { MiniButton } from '../Primitives';
+import { DisclosureSection, MiniButton } from '../Primitives';
 import { Ionicons } from '../SafeIcon';
 
 type Styles = Record<string, any>;
@@ -98,6 +98,13 @@ export function MobileRoomDetailsDrawer({
   onExportCollaborationReport,
 }: MobileRoomDetailsDrawerProps) {
   const Text = TextComponent;
+  const [openSection, setOpenSection] = useState<'memory' | 'growth' | 'collaboration' | null>(
+    () => room.pendingMemoryCapsule ? 'memory' : null,
+  );
+
+  function toggleSection(section: NonNullable<typeof openSection>) {
+    setOpenSection((current) => current === section ? null : section);
+  }
 
   return (
     <View style={styles.mobileDetailsLayer} pointerEvents="box-none">
@@ -136,47 +143,79 @@ export function MobileRoomDetailsDrawer({
         >
           {leadContent}
 
-          {room.lastSummary ? (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>最近共识 · {room.lastSummary.authorName}</Text>
-              <MarkdownText content={room.lastSummary.content} fontFamily={selectedFontFamily} />
-            </View>
-          ) : null}
-
-          {room.kind === 'group' ? (
-            <View style={styles.roomEditPanel}>
-              <Text style={styles.panelLabel}>房间记忆胶囊</Text>
-              {room.pendingMemoryCapsule ? (
+          {room.kind === 'group' || room.lastSummary ? (
+            <DisclosureSection
+              icon="library-outline"
+              title="记忆与共识"
+              summary={room.pendingMemoryCapsule
+                ? `有待确认的 v${room.pendingMemoryCapsule.version} 草稿`
+                : room.memoryCapsule
+                  ? `已沉淀 v${room.memoryCapsule.version} 房间记忆`
+                  : room.lastSummary
+                    ? `最近由 ${room.lastSummary.authorName} 总结`
+                    : '尚未生成房间记忆'}
+              open={openSection === 'memory'}
+              onToggle={() => toggleSection('memory')}
+            >
+              {room.lastSummary ? (
                 <View style={styles.summaryBox}>
-                  <Text style={styles.summaryTitle}>待确认记忆草稿 · v{room.pendingMemoryCapsule.version}</Text>
-                  <Text style={styles.help}>{summarizeRoomMemory(room.pendingMemoryCapsule)}</Text>
+                  <Text style={styles.summaryTitle}>最近共识 · {room.lastSummary.authorName}</Text>
+                  <MarkdownText content={room.lastSummary.content} fontFamily={selectedFontFamily} />
+                </View>
+              ) : null}
+              {room.kind === 'group' ? (
+                <View style={styles.roomEditPanel}>
+                  <Text style={styles.panelLabel}>房间记忆胶囊</Text>
+                  {room.pendingMemoryCapsule ? (
+                    <View style={styles.summaryBox}>
+                      <Text style={styles.summaryTitle}>待确认记忆草稿 · v{room.pendingMemoryCapsule.version}</Text>
+                      <Text style={styles.help}>{summarizeRoomMemory(room.pendingMemoryCapsule)}</Text>
+                      <View style={styles.toolActions}>
+                        <MiniButton icon="checkmark-circle-outline" label="确认沉淀" onPress={onConfirmPendingMemory} />
+                        <MiniButton icon="close-circle-outline" label="丢弃草稿" tone="danger" onPress={onDiscardPendingMemory} />
+                      </View>
+                    </View>
+                  ) : null}
+                  {room.memoryCapsule ? (
+                    <View style={styles.summaryBox}>
+                      <Text style={styles.summaryTitle}>v{room.memoryCapsule.version} · {room.memoryCapsule.authorName ?? 'Laphiny'} · {formatDateTime(room.memoryCapsule.updatedAt)}</Text>
+                      <Text style={styles.help}>{summarizeRoomMemory(room.memoryCapsule)}</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.help}>还没有房间记忆。生成并确认后，会进入后续群聊上下文。</Text>
+                  )}
                   <View style={styles.toolActions}>
-                    <MiniButton icon="checkmark-circle-outline" label="确认沉淀" onPress={onConfirmPendingMemory} />
-                    <MiniButton icon="close-circle-outline" label="丢弃草稿" onPress={onDiscardPendingMemory} />
+                    <MiniButton
+                      icon="sparkles-outline"
+                      label={memoryGenerating ? '生成中...' : room.memoryCapsule ? '更新记忆' : '生成记忆'}
+                      onPress={onGenerateMemory}
+                    />
                   </View>
                 </View>
               ) : null}
-              {room.memoryCapsule ? (
-                <View style={styles.summaryBox}>
-                  <Text style={styles.summaryTitle}>v{room.memoryCapsule.version} · {room.memoryCapsule.authorName ?? 'Laphiny'} · {formatDateTime(room.memoryCapsule.updatedAt)}</Text>
-                  <Text style={styles.help}>{summarizeRoomMemory(room.memoryCapsule)}</Text>
-                </View>
-              ) : (
-                <Text style={styles.help}>还没有房间记忆。生成并确认后，会沉淀到成长层并进入后续群聊上下文。</Text>
-              )}
-              <View style={styles.toolActions}>
-                <MiniButton
-                  icon="sparkles-outline"
-                  label={memoryGenerating ? '生成中...' : room.memoryCapsule ? '更新记忆' : '生成记忆'}
-                  onPress={onGenerateMemory}
-                />
-              </View>
-            </View>
+            </DisclosureSection>
           ) : null}
 
-          {roomGrowthPanel}
-          {taskBoardPanel}
-          {!isWideLayout ? collaborationDashboard : null}
+          <DisclosureSection
+            icon="leaf-outline"
+            title="成长与知识"
+            summary="知识库、黑板、决策与房间成长"
+            open={openSection === 'growth'}
+            onToggle={() => toggleSection('growth')}
+          >
+            {roomGrowthPanel}
+          </DisclosureSection>
+
+          <DisclosureSection
+            icon="people-outline"
+            title="任务与协作"
+            summary="任务看板、委托进度和协作事件"
+            open={openSection === 'collaboration'}
+            onToggle={() => toggleSection('collaboration')}
+          >
+            {taskBoardPanel}
+            {!isWideLayout ? collaborationDashboard : null}
+          </DisclosureSection>
         </ScrollView>
       </View>
     </View>

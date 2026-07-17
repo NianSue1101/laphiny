@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import {
   ScrollView,
   TouchableOpacity,
@@ -65,31 +65,60 @@ export function ChatRoomHeader({
   const Text = TextComponent;
   const enabledMembers = room.members.filter((member) => member.enabled);
   const allTargetsSelected = selectedTargetIds.length === enabledMembers.length;
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+  const secondaryActionActive = roomToolsOpen || collaborationDrawerOpen || roomDetailsOpen;
+
+  function runSecondaryAction(action: () => void) {
+    action();
+    setMoreActionsOpen(false);
+  }
 
   return (
     <View style={styles.chatHeader}>
-      <View style={styles.roomTitleBlock}>
-        <Text style={styles.roomTitle}>{room.name}</Text>
-        <Text style={styles.roomSummary}>
-          {room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes · 上下文 {room.contextLimit ?? contextLimitFallback} 条
-        </Text>
+      <View style={styles.chatHeaderMain}>
+        <View style={styles.roomTitleBlock}>
+          <Text style={styles.roomTitle} numberOfLines={1}>{room.name}</Text>
+          <Text style={styles.roomSummary} numberOfLines={1}>
+            {room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes · 上下文 {room.contextLimit ?? contextLimitFallback} 条
+          </Text>
+        </View>
+        <View style={styles.roomHeaderPrimaryActions}>
+          <MiniButton
+            icon={quickCommandsOpen ? 'flash' : 'flash-outline'}
+            label="模式"
+            active={quickCommandsOpen}
+            onPress={onToggleQuickCommands}
+          />
+          <MiniButton
+            icon={moreActionsOpen ? 'close-outline' : 'ellipsis-horizontal'}
+            label={moreActionsOpen ? '收起' : '更多'}
+            active={moreActionsOpen || secondaryActionActive}
+            onPress={() => setMoreActionsOpen((open) => !open)}
+          />
+        </View>
       </View>
-      <View style={styles.roomHeaderActions}>
-        <MiniButton icon={quickCommandsOpen ? 'flash' : 'flash-outline'} label="模式" onPress={onToggleQuickCommands} />
-        <MiniButton icon={roomToolsOpen ? 'options' : 'options-outline'} label="工具" onPress={onToggleRoomTools} />
+      {moreActionsOpen ? <View style={styles.roomHeaderActions}>
+        <MiniButton
+          icon={roomToolsOpen ? 'options' : 'options-outline'}
+          label={roomToolsOpen ? '收起工具' : '房间工具'}
+          active={roomToolsOpen}
+          onPress={() => runSecondaryAction(onToggleRoomTools)}
+        />
         {isWideLayout && room.kind === 'group' ? (
           <MiniButton
             icon={collaborationDrawerOpen ? 'albums' : 'albums-outline'}
             label={collaborationDrawerOpen ? '收起侧栏' : '协作侧栏'}
-            onPress={onToggleCollaborationDrawer}
+            active={collaborationDrawerOpen}
+            onPress={() => runSecondaryAction(onToggleCollaborationDrawer)}
           />
         ) : null}
         <MiniButton
           icon={roomDetailsOpen ? 'chevron-up-outline' : 'chevron-down-outline'}
           label={roomDetailsOpen ? '收起详情' : '展开详情'}
-          onPress={onToggleRoomDetails}
+          active={roomDetailsOpen}
+          onPress={() => runSecondaryAction(onToggleRoomDetails)}
         />
-      </View>
+      </View> : null}
       {roomDetailsOpen ? (
         <ScrollView
           style={[styles.roomDetailsScroll, { maxHeight: roomDetailsMaxHeight }]}
