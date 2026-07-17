@@ -3,6 +3,7 @@ import { TouchableOpacity, View, type TextProps } from 'react-native';
 
 import { formatMessageTimestamp, getStatusLabel } from '../../app/app_utils';
 import { normalizeHermesReplyText } from '../../lib/hermes_client';
+import { getChatNoticeAction, type ChatNoticeAction } from '../../lib/chat_notice_actions';
 import { getAgentStreamPhaseLabel, shouldDisplayServiceReasoning } from '../../lib/stream_events';
 import type { AgentPermissionDecision, Attachment, ChatMessage } from '../../types';
 import { MarkdownText } from '../MarkdownText';
@@ -38,6 +39,7 @@ interface MessageBubbleProps {
   onStopMessage: (messageId: string) => void;
   onRetryMessage: (message: ChatMessage) => void;
   onEditLastUserMessage: () => void;
+  onOpenNoticeAction: (action: ChatNoticeAction) => void;
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -62,12 +64,14 @@ export const MessageBubble = memo(function MessageBubble({
   onStopMessage,
   onRetryMessage,
   onEditLastUserMessage,
+  onOpenNoticeAction,
 }: MessageBubbleProps) {
   const Text = TextComponent;
   const isAgentMessage = message.authorId !== 'user' && message.authorId !== 'system';
   const displayContent = message.authorId === 'user'
     ? renderable.content
     : normalizeHermesReplyText(renderable.content);
+  const noticeAction = getChatNoticeAction(message);
 
   return (
     <View
@@ -140,6 +144,16 @@ export const MessageBubble = memo(function MessageBubble({
         TextComponent={TextComponent}
         onResolvePermissionRequest={onResolvePermissionRequest}
       />
+      {noticeAction ? (
+        <View style={styles.messageActions}>
+          <MiniButton
+            icon="options-outline"
+            label={noticeAction.label}
+            active
+            onPress={() => onOpenNoticeAction(noticeAction)}
+          />
+        </View>
+      ) : null}
       {isAgentMessage ? (
         <View style={styles.messageActions}>
           <MiniButton icon="copy-outline" label="复制" onPress={() => onCopyAgentReply(message)} />
@@ -173,7 +187,8 @@ function areMessageBubblePropsEqual(previous: MessageBubbleProps, next: MessageB
     && previous.sending === next.sending
     && previous.stopping === next.stopping
     && previous.styles === next.styles
-    && previous.TextComponent === next.TextComponent;
+    && previous.TextComponent === next.TextComponent
+    && previous.onOpenNoticeAction === next.onOpenNoticeAction;
 }
 
 function AgentPermissionPanel({

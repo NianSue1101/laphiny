@@ -1,8 +1,8 @@
-import type { ComponentType } from 'react';
+import { useState, type ComponentType } from 'react';
 import { View, type TextProps } from 'react-native';
 
 import type { OnboardingStep } from '../../lib/stage4_plus';
-import { SecondaryButton } from '../Primitives';
+import { DisclosureSection, SecondaryButton } from '../Primitives';
 
 type OnboardingPanelProps = {
   steps: OnboardingStep[];
@@ -12,15 +12,18 @@ type OnboardingPanelProps = {
 };
 
 export function OnboardingPanel({ steps, styles, TextComponent: Text, onDismiss }: OnboardingPanelProps) {
+  const [open, setOpen] = useState(false);
+  const completedSteps = steps.filter((step) => step.done).length;
+
   return (
-    <View style={styles.onboardingPanel}>
-      <View style={styles.syncHeader}>
-        <View>
-          <Text style={styles.cardTitle}>第一次启动：把 Soul 小队带进房间</Text>
-          <Text style={styles.help}>跟着这几步完成连接、协作卡片、房间和记忆胶囊。完成后这里会自动隐藏。</Text>
-        </View>
-        <SecondaryButton icon="close-outline" label="稍后" onPress={onDismiss} />
-      </View>
+    <DisclosureSection
+      icon="compass-outline"
+      title="新手引导"
+      summary={`${completedSteps}/${steps.length} 已完成 · 连接、协作卡片、房间与记忆`}
+      open={open}
+      onToggle={() => setOpen((current) => !current)}
+    >
+      <Text style={styles.help}>按需查看剩余步骤；全部完成后会自动隐藏。</Text>
       {steps.map((step, index) => (
         <View key={step.id} style={styles.onboardingStep}>
           <Text style={[styles.onboardingIndex, step.done && styles.onboardingIndexDone]}>{step.done ? 'OK' : index + 1}</Text>
@@ -30,6 +33,9 @@ export function OnboardingPanel({ steps, styles, TextComponent: Text, onDismiss 
           </View>
         </View>
       ))}
-    </View>
+      <View style={styles.toolActions}>
+        <SecondaryButton icon="close-outline" label="暂时隐藏引导" onPress={onDismiss} />
+      </View>
+    </DisclosureSection>
   );
 }

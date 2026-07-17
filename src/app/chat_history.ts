@@ -7,7 +7,7 @@ import { formatRoomMemoryForPrompt } from '../lib/room_memory';
 import { buildRoleplaySystemAppendix } from '../lib/roleplay';
 import { formatRoleplayArchiveForPrompt, getRoomModePrompt } from '../lib/stage4_plus';
 import type { Attachment, ChatMessage, HermesChatMessage, HermesConnection, Room, RoomMember } from '../types';
-import { DEFAULT_CONTEXT_LIMIT } from '../config/app_config';
+import { DEFAULT_CONTEXT_LIMIT, DEFAULT_DELEGATIONS_PER_ROUND } from '../config/app_config';
 
 export function buildSummaryMessages(
   room: Room,
@@ -205,7 +205,11 @@ export function buildGroupSystemPrompt(room: Room, member: RoomMember, connectio
     buildMemberCapabilityGuide(room, member, connections),
     '',
     '协作协议：',
-    ...buildCollaborationProtocol({ allowDelegation: true, delegatedFrom: undefined }),
+    ...buildCollaborationProtocol({
+      allowDelegation: true,
+      delegatedFrom: undefined,
+      maxDelegationsPerRound: room.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND,
+    }),
     room.roleplay?.enabled ? ['当前 RP 剧本档案：', formatRoleplayArchiveForPrompt(room.roleplay.archive)].join('\n') : '',
     buildRoleplaySystemAppendix(room, member),
   ].filter(Boolean).join('\n');
@@ -238,7 +242,11 @@ export function buildDelegationSystemPrompt(room: Room, member: RoomMember, dele
     buildMemberCapabilityGuide(room, member, connections),
     '',
     '被委托时的执行协议：',
-    ...buildCollaborationProtocol({ allowDelegation: true, delegatedFrom }),
+    ...buildCollaborationProtocol({
+      allowDelegation: true,
+      delegatedFrom,
+      maxDelegationsPerRound: room.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND,
+    }),
     room.roleplay?.enabled ? ['当前 RP 剧本档案：', formatRoleplayArchiveForPrompt(room.roleplay.archive)].join('\n') : '',
     buildRoleplaySystemAppendix(room, member),
   ].filter(Boolean).join('\n');
@@ -247,9 +255,11 @@ export function buildDelegationSystemPrompt(room: Room, member: RoomMember, dele
 export function buildCollaborationProtocol({
   allowDelegation,
   delegatedFrom,
+  maxDelegationsPerRound,
 }: {
   allowDelegation: boolean;
   delegatedFrom?: string;
+  maxDelegationsPerRound: number;
 }): string[] {
   return [
     '1. 先判断用户真正要完成的交付物，再直接完成你最擅长、最确定的部分。',
@@ -259,7 +269,7 @@ export function buildCollaborationProtocol({
       ? '4. 只有某个独立子任务明显更适合其他成员、且你无法高质量完成时，才发起委托。如果当前工具列表中有 laphiny_delegate_tasks，必须调用它创建委托；assignee_id 只能逐字复制“稳定 connection 目录”里的 connection_id，禁止猜测、改写或使用别名代替。没有这个工具时才使用下方结构化块作为兼容。'
       : '4. 当前不应继续发起委托；请尽量直接完成任务或说明缺少什么输入。',
     '5. 委托必须写清楚：目标、输入材料、期望产物和边界；不要只写成员名或泛泛地说“帮忙看看”。',
-    '6. 一次最多委托 1 个最关键的子任务；不要 @自己，不要使用 @all，不要为了寒暄、赞同、总结或甩锅而委托。',
+    `6. 普通模式下一次最多委托 ${maxDelegationsPerRound} 个必要且彼此独立的子任务；不要 @自己，不要使用 @all，不要为了寒暄、赞同、总结或甩锅而委托。`,
     '6a. 例外：当当前用户消息明确进入 /goal 目标模式时，主 AI 可以一次发起多条必要且独立的委托。有 laphiny_delegate_tasks 工具时，每项必须使用精确 connection ID，并填写 task、deliverable、acceptance；没有工具时才用 ```laphiny-delegation JSON 块作为兼容。不要在同一段自然语言里连续 @ 多名成员来猜测任务归属。',
     buildAgentFilePromptAppendix(),
     delegatedFrom

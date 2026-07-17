@@ -1,4 +1,4 @@
-import type { ComponentType, Dispatch, SetStateAction } from 'react';
+import { useState, type ComponentType, type Dispatch, type SetStateAction } from 'react';
 import {
   ScrollView,
   TouchableOpacity,
@@ -24,7 +24,7 @@ import type {
   SyncConfig,
 } from '../../types';
 import type { SyncConflictReport } from '../../lib/sync_conflicts';
-import { HealthMetric, PrimaryButton, SecondaryButton } from '../Primitives';
+import { DisclosureSection, HealthMetric, PrimaryButton, SecondaryButton } from '../Primitives';
 import { Ionicons } from '../SafeIcon';
 import {
   PersonalizationSettingsPanel,
@@ -139,6 +139,12 @@ export function SettingsTab({
   exportDiagnosticBundle,
   clearDiagnosticLogs,
 }: SettingsTabProps) {
+  const [openSection, setOpenSection] = useState<'info' | 'sync' | 'data' | null>(null);
+
+  function toggleSection(section: NonNullable<typeof openSection>) {
+    setOpenSection((current) => current === section ? null : section);
+  }
+
   return (
     <ScrollView style={styles.content} contentContainerStyle={styles.panel}>
       <View style={styles.squareHeader}>
@@ -149,18 +155,6 @@ export function SettingsTab({
         <Text style={styles.squareCount}>v{appVersion}</Text>
       </View>
 
-      <ProjectInfoSettingsPanel
-        appVersion={appVersion}
-        layoutMode={layoutMode}
-        width={width}
-        networkOnline={networkOnline}
-        connectionsCount={connectionsCount}
-        roomsCount={roomsCount}
-        storageSummary={storageSummary}
-        styles={styles}
-        TextComponent={Text}
-      />
-
       <PersonalizationSettingsPanel
         appPreferences={appPreferences}
         fontsLoaded={fontsLoaded}
@@ -169,28 +163,65 @@ export function SettingsTab({
         updateAppPreferences={updateAppPreferences}
       />
 
-      <SyncBackendSettingsPanel
-        syncConfig={syncConfig}
-        syncing={syncing}
-        checkingSyncConflicts={checkingSyncConflicts}
-        syncConflictReport={(
-          <SyncConflictReportPanel
-            report={syncConflictReport}
-            styles={styles}
-            TextComponent={Text}
-          />
-        )}
-        styles={styles}
-        TextComponent={Text}
-        TextInputComponent={TextInput}
-        setSyncConfig={setSyncConfig}
-        testSyncBackend={testSyncBackend}
-        checkSyncConflicts={checkSyncConflicts}
-        pullSyncSnapshot={pullSyncSnapshot}
-        pushSyncSnapshot={pushSyncSnapshot}
-      />
+      <DisclosureSection
+        icon="information-circle-outline"
+        title="项目与运行信息"
+        summary={`v${appVersion} · ${connectionsCount} 个连接 · ${roomsCount} 个房间 · ${storageSummary.messageCount} 条消息`}
+        open={openSection === 'info'}
+        onToggle={() => toggleSection('info')}
+      >
+        <ProjectInfoSettingsPanel
+          embedded
+          appVersion={appVersion}
+          layoutMode={layoutMode}
+          width={width}
+          networkOnline={networkOnline}
+          connectionsCount={connectionsCount}
+          roomsCount={roomsCount}
+          storageSummary={storageSummary}
+          styles={styles}
+          TextComponent={Text}
+        />
+      </DisclosureSection>
 
-      <View style={styles.syncPanel}>
+      <DisclosureSection
+        icon="cloud-outline"
+        title="多设备同步"
+        summary={`${syncConfig.enabled ? '已启用' : '未启用'} · SQLite 轻后端 · 手动拉取与推送`}
+        open={openSection === 'sync'}
+        onToggle={() => toggleSection('sync')}
+      >
+        <SyncBackendSettingsPanel
+          embedded
+          syncConfig={syncConfig}
+          syncing={syncing}
+          checkingSyncConflicts={checkingSyncConflicts}
+          syncConflictReport={(
+            <SyncConflictReportPanel
+              report={syncConflictReport}
+              styles={styles}
+              TextComponent={Text}
+            />
+          )}
+          styles={styles}
+          TextComponent={Text}
+          TextInputComponent={TextInput}
+          setSyncConfig={setSyncConfig}
+          testSyncBackend={testSyncBackend}
+          checkSyncConflicts={checkSyncConflicts}
+          pullSyncSnapshot={pullSyncSnapshot}
+          pushSyncSnapshot={pushSyncSnapshot}
+        />
+      </DisclosureSection>
+
+      <DisclosureSection
+        icon="archive-outline"
+        title="数据、备份与日志"
+        summary={`${storageSummary.messageSizeLabel} 本地消息 · ${diagnosticSummary.errors} 错误 · ${diagnosticSummary.warnings} 警告`}
+        open={openSection === 'data'}
+        onToggle={() => toggleSection('data')}
+      >
+      <View style={styles.settingsEmbeddedPanel}>
         <View style={styles.syncHeader}>
           <View style={styles.syncHeaderText}>
             <Text style={styles.cardTitle}>数据、备份与日志</Text>
@@ -388,6 +419,7 @@ export function SettingsTab({
           ) : null}
         </View>
       </View>
+      </DisclosureSection>
     </ScrollView>
   );
 }

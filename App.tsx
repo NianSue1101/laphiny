@@ -51,6 +51,7 @@ Notifications.setNotificationHandler({
 import { buildAgentPermissionDecisionPrompt, getScopedAgentPermissionKey } from './src/lib/agent_permissions';
 import { AgentTaskScheduler } from './src/lib/agent_scheduler';
 import { resolveChatRetryRequest } from './src/lib/chat_retry';
+import { resolveChatViewState } from './src/lib/chat_view_state';
 import { COLLABORATION_RITUALS, type CollaborationRitualId } from './src/lib/collaboration_rituals';
 import { parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { buildGoalMemoryCapsule } from './src/lib/goal_session';
@@ -85,6 +86,7 @@ const MESSAGE_AUTO_SCROLL_THRESHOLD = 96;
 type MessageListSignature = {
   roomId: string | null;
   tab: Tab;
+  viewKey: string;
   messageCount: number;
   lastMessageId: string | null;
 };
@@ -129,7 +131,7 @@ export default function App() {
   const messageScrollRef = useRef<FlatList<ChatMessage> | null>(null);
   const messageListAtBottomRef = useRef(true);
   const pendingMessageScrollToEndRef = useRef(false);
-  const messageListSignatureRef = useRef<MessageListSignature>({ roomId: null, tab: 'chat', messageCount: 0, lastMessageId: null });
+  const messageListSignatureRef = useRef<MessageListSignature>({ roomId: null, tab: 'chat', viewKey: '', messageCount: 0, lastMessageId: null });
   const saveMessagesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const delayedGoalMessageIdsRef = useRef<Set<string>>(new Set());
   const alwaysApprovedPermissionKeysRef = useRef<Set<string>>(new Set());
@@ -447,12 +449,14 @@ export default function App() {
     setRoomSummaryConnection,
     setTeamTemplateName,
     toggleRoomAutoDelegation,
+    toggleRoomToolDelegation,
     toggleSelectedRoomRoleplay,
     updateContextLimit,
     updateRoomBlackboardItemStatus,
     updateRoomById,
     updateRoomDecisionStatus,
     updateRoomDelegationDepth,
+    updateRoomDelegationsPerRound,
     updateSelectedRoom,
     updateSelectedRoomMember,
     updateSelectedRoomRoleplay,
@@ -568,15 +572,22 @@ export default function App() {
   const latestVisibleMessage = visibleSelectedMessages.length > 0
     ? visibleSelectedMessages[visibleSelectedMessages.length - 1] ?? null
     : null;
+  const { key: chatViewKey, listVisible: chatListVisible } = resolveChatViewState({
+    tab,
+    selectedRoomId,
+    mobileFocusedRoomId,
+    width,
+  });
 
   useEffect(() => {
     const previous = messageListSignatureRef.current;
     const roomChanged = selectedRoomId !== previous.roomId;
     const chatOpened = tab === 'chat' && previous.tab !== 'chat';
+    const chatViewChanged = chatViewKey !== previous.viewKey;
     const messageAppended = selectedRoomId === previous.roomId && visibleSelectedMessages.length > previous.messageCount;
     const latestMessageChanged = selectedRoomId === previous.roomId && latestVisibleMessage?.id !== previous.lastMessageId;
 
-    if ((roomChanged && tab === 'chat') || chatOpened) {
+    if (chatListVisible && (roomChanged || chatOpened || chatViewChanged)) {
       messageListAtBottomRef.current = true;
       pendingMessageScrollToEndRef.current = true;
       scrollMessagesToEnd(false);
@@ -587,10 +598,11 @@ export default function App() {
     messageListSignatureRef.current = {
       roomId: selectedRoomId,
       tab,
+      viewKey: chatViewKey,
       messageCount: visibleSelectedMessages.length,
       lastMessageId: latestVisibleMessage?.id ?? null,
     };
-  }, [selectedRoomId, tab, visibleSelectedMessages.length, latestVisibleMessage?.id]);
+  }, [chatListVisible, chatViewKey, selectedRoomId, tab, visibleSelectedMessages.length, latestVisibleMessage?.id]);
 
   function scrollMessagesToEnd(animated: boolean) {
     requestAnimationFrame(() => {
@@ -1535,6 +1547,7 @@ export default function App() {
             Text,
             TextInput,
             toggleRoomAutoDelegation,
+            toggleRoomToolDelegation,
             toggleRoomMemberEnabledInline,
             toggleSelectedRoomRoleplay,
             toggleTargetSelection,
@@ -1542,6 +1555,7 @@ export default function App() {
             updateRoomBlackboardItemStatus,
             updateRoomDecisionStatus,
             updateRoomDelegationDepth,
+            updateRoomDelegationsPerRound,
             updateSelectedRoomMember,
             updateSelectedRoomRoleplay,
             unreadByRoom,

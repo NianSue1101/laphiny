@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import {
   TouchableOpacity,
   View,
@@ -6,6 +6,7 @@ import {
   type TextProps,
 } from 'react-native';
 
+import { DEFAULT_DELEGATIONS_PER_ROUND } from '../../config/app_config';
 import { formatDateTime } from '../../app/app_utils';
 import { formatRoomMemoryForPrompt, summarizeRoomMemory } from '../../lib/room_memory';
 import { summarizeRoleplayConfig } from '../../lib/roleplay';
@@ -18,7 +19,7 @@ import type {
   TeamTemplate,
 } from '../../types';
 import { MarkdownText } from '../MarkdownText';
-import { MiniButton } from '../Primitives';
+import { DisclosureSection, MiniButton } from '../Primitives';
 
 type Styles = Record<string, any>;
 
@@ -42,6 +43,8 @@ interface RoomToolsPanelProps {
   onOpenRoomManagement: (roomId: string) => void;
   onSetDefaultCollaborationMode: (mode: 'manual' | 'parallel' | 'sequential') => void;
   onToggleRoomAutoDelegation: () => void;
+  onToggleRoomToolDelegation: () => void;
+  onUpdateRoomDelegationsPerRound: (delta: number) => void;
   onUpdateRoomDelegationDepth: (delta: number) => void;
   onToggleRoomRoleplay: () => void;
   onUpdateRoomRoleplay: (patch: Partial<RoleplayConfig>) => void;
@@ -84,6 +87,8 @@ export function RoomToolsPanel({
   onOpenRoomManagement,
   onSetDefaultCollaborationMode,
   onToggleRoomAutoDelegation,
+  onToggleRoomToolDelegation,
+  onUpdateRoomDelegationsPerRound,
   onUpdateRoomDelegationDepth,
   onToggleRoomRoleplay,
   onUpdateRoomRoleplay,
@@ -110,6 +115,18 @@ export function RoomToolsPanel({
     0,
   );
   const enabledMembers = room.members.filter((member) => member.enabled);
+  const [openSection, setOpenSection] = useState<'collaboration' | 'workspace' | 'team' | 'memory' | 'maintenance' | null>(
+    () => room.pendingMemoryCapsule ? 'memory' : null,
+  );
+  const collaborationModeLabel = room.defaultCollaborationMode === 'parallel'
+    ? '并行'
+    : room.defaultCollaborationMode === 'sequential'
+      ? '接力'
+      : '手动';
+
+  function toggleSection(section: NonNullable<typeof openSection>) {
+    setOpenSection((current) => current === section ? null : section);
+  }
 
   return (
     <View style={styles.toolsPanel}>
@@ -129,11 +146,11 @@ export function RoomToolsPanel({
       </View>
 
       <View style={styles.roomEditPanel}>
-        <Text style={styles.panelLabel}>聊天内工具</Text>
-        <Text style={styles.help}>
-          聊天页只保留协作、记忆和导出等工具；房间名称、成员、模式、上下文等基础设置请在房间页统一管理，避免两套入口状态错乱。
-        </Text>
-        <View style={styles.toolActions}>
+        <View style={styles.roomToolLead}>
+          <View style={styles.rowMain}>
+            <Text style={styles.panelLabel}>房间工具</Text>
+            <Text style={styles.help}>基础设置统一在房间页管理，这里聚焦当前聊天。</Text>
+          </View>
           <MiniButton
             icon="options-outline"
             label="打开房间管理"
@@ -143,7 +160,14 @@ export function RoomToolsPanel({
       </View>
 
       {room.kind === 'group' ? (
-        <View style={styles.roomEditPanel}>
+        <DisclosureSection
+          icon="git-network-outline"
+          title="协作与角色"
+          summary={`${collaborationModeLabel}模式 · 每轮 ${room.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND} 单 · 深度 ${room.maxDelegationDepth ?? maxDelegationDepthFallback}`}
+          open={openSection === 'collaboration'}
+          onToggle={() => toggleSection('collaboration')}
+        >
+          <View style={styles.roomEditPanel}>
           <Text style={styles.panelLabel}>Soul 协作策略</Text>
           <View style={styles.toolActions}>
             <MiniButton
@@ -166,6 +190,16 @@ export function RoomToolsPanel({
               label={room.autoDelegationEnabled === false ? '自动委托关' : '自动委托开'}
               onPress={onToggleRoomAutoDelegation}
             />
+            <MiniButton
+              icon={room.agentToolDelegationEnabled === false ? 'construct-outline' : 'construct'}
+              label={room.agentToolDelegationEnabled === false ? '工具委托关' : '工具委托开'}
+              onPress={onToggleRoomToolDelegation}
+            />
+          </View>
+          <View style={styles.stepper}>
+            <MiniButton icon="remove-outline" label="每轮 -1" onPress={() => onUpdateRoomDelegationsPerRound(-1)} />
+            <Text style={styles.help}>每轮委托数：{room.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND}</Text>
+            <MiniButton icon="add-outline" label="每轮 +1" onPress={() => onUpdateRoomDelegationsPerRound(1)} />
           </View>
           <View style={styles.stepper}>
             <MiniButton icon="remove-outline" label="深度 -1" onPress={() => onUpdateRoomDelegationDepth(-1)} />
@@ -175,11 +209,8 @@ export function RoomToolsPanel({
           <Text style={styles.help}>
             默认模式会在群聊无 @ 时自动决定是否叫全员；手动模式保持“无 @ 不回复”。
           </Text>
-        </View>
-      ) : null}
-
-      {room.kind === 'group' ? (
-        <View style={styles.roomEditPanel}>
+          </View>
+          <View style={styles.roomEditPanel}>
           <Text style={styles.panelLabel}>角色扮演 RP 模式</Text>
           <Text style={styles.help}>
             桌游店式多人 RP：选择一位主 Agent 作为 GM/主持人负责推进剧情，其他 Agent 作为角色、NPC 或氛围补充依次入戏。
@@ -247,15 +278,31 @@ export function RoomToolsPanel({
           <Text style={styles.help}>
             输入 /rp 开始或继续故事，/scene 更新场景，/ooc 进行场外规则讨论。RP 开启后，普通输入也会自动进入“GM → 其他 Agent”的接力回合。
           </Text>
-        </View>
+          </View>
+        </DisclosureSection>
       ) : null}
 
-      {roleplayArchivePanel}
-      {taskBoardPanel}
-      {roomGrowthPanel}
+      <DisclosureSection
+        icon="grid-outline"
+        title="协作工作区"
+        summary="角色档案、任务看板与房间成长"
+        open={openSection === 'workspace'}
+        onToggle={() => toggleSection('workspace')}
+      >
+        {roleplayArchivePanel}
+        {taskBoardPanel}
+        {roomGrowthPanel}
+      </DisclosureSection>
 
       {room.kind === 'group' ? (
-        <View style={styles.roomEditPanel}>
+        <DisclosureSection
+          icon="people-outline"
+          title="成员与团队"
+          summary={`${enabledMembers.length}/${room.members.length} 位成员启用 · ${selectedRoomTeamTemplates.length} 个可用模板`}
+          open={openSection === 'team'}
+          onToggle={() => toggleSection('team')}
+        >
+          <View style={styles.roomEditPanel}>
           <Text style={styles.panelLabel}>群成员</Text>
           {room.members.map((member) => (
             <View key={member.connectionId} style={styles.memberEditorRow}>
@@ -290,11 +337,8 @@ export function RoomToolsPanel({
           ) : (
             <Text style={styles.help}>没有可加入的新连接。</Text>
           )}
-        </View>
-      ) : null}
-
-      {room.kind === 'group' ? (
-        <View style={styles.roomEditPanel}>
+          </View>
+          <View style={styles.roomEditPanel}>
           <Text style={styles.panelLabel}>团队模板与总结</Text>
           <View style={styles.inlineFormRow}>
             <TextInput
@@ -337,11 +381,23 @@ export function RoomToolsPanel({
               onPress={onGenerateSummary}
             />
           </View>
-        </View>
+          </View>
+        </DisclosureSection>
       ) : null}
 
       {room.kind === 'group' ? (
-        <View style={styles.roomEditPanel}>
+        <DisclosureSection
+          icon="library-outline"
+          title="房间记忆"
+          summary={room.pendingMemoryCapsule
+            ? `有待确认的 v${room.pendingMemoryCapsule.version} 记忆草案`
+            : room.memoryCapsule
+              ? `已沉淀 v${room.memoryCapsule.version} 房间记忆`
+              : '尚未生成房间记忆'}
+          open={openSection === 'memory'}
+          onToggle={() => toggleSection('memory')}
+        >
+          <View style={styles.roomEditPanel}>
           <Text style={styles.panelLabel}>房间记忆胶囊</Text>
           {room.pendingMemoryCapsule ? (
             <View style={styles.summaryBox}>
@@ -373,19 +429,37 @@ export function RoomToolsPanel({
               label={memoryGenerating ? '生成中...' : room.memoryCapsule ? '更新记忆' : '生成记忆'}
               onPress={onGenerateMemory}
             />
-            <MiniButton icon="trash-outline" label="清空记忆胶囊" onPress={onClearMemory} />
+            <MiniButton icon="trash-outline" label="清空记忆胶囊" tone="danger" onPress={onClearMemory} />
           </View>
-        </View>
+          </View>
+        </DisclosureSection>
       ) : null}
 
-      <View style={styles.toolActions}>
-        {room.kind === 'group' ? <MiniButton icon="shield-checkmark-outline" label="导出脱敏协作报告" onPress={onExportCollaborationReport} /> : null}
-        <MiniButton icon="download-outline" label="导出 JSON" onPress={() => onExportRoom('json')} />
-        <MiniButton icon="document-text-outline" label="导出 MD" onPress={() => onExportRoom('markdown')} />
-        <MiniButton icon="refresh-circle-outline" label="清空记忆" onPress={onResetSession} />
-        <MiniButton icon="trash-outline" label="清空记录" onPress={onClearMessages} />
-        <MiniButton icon="close-circle-outline" label="删除房间" onPress={onDeleteRoom} />
-      </View>
+      <DisclosureSection
+        icon="archive-outline"
+        title="导出与维护"
+        summary="备份房间内容，或执行清空与删除操作"
+        open={openSection === 'maintenance'}
+        onToggle={() => toggleSection('maintenance')}
+      >
+        <View style={styles.roomEditPanel}>
+          <Text style={styles.panelLabel}>导出</Text>
+          <View style={styles.toolActions}>
+            {room.kind === 'group' ? <MiniButton icon="shield-checkmark-outline" label="导出脱敏协作报告" onPress={onExportCollaborationReport} /> : null}
+            <MiniButton icon="download-outline" label="导出 JSON" onPress={() => onExportRoom('json')} />
+            <MiniButton icon="document-text-outline" label="导出 MD" onPress={() => onExportRoom('markdown')} />
+          </View>
+        </View>
+        <View style={styles.roomDangerZone}>
+          <Text style={styles.panelLabel}>危险操作</Text>
+          <Text style={styles.help}>以下操作会清空当前状态或删除房间，请确认后再使用。</Text>
+          <View style={styles.toolActions}>
+            <MiniButton icon="refresh-circle-outline" label="清空记忆" tone="danger" onPress={onResetSession} />
+            <MiniButton icon="trash-outline" label="清空记录" tone="danger" onPress={onClearMessages} />
+            <MiniButton icon="close-circle-outline" label="删除房间" tone="danger" onPress={onDeleteRoom} />
+          </View>
+        </View>
+      </DisclosureSection>
     </View>
   );
 }

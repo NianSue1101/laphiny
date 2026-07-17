@@ -33,14 +33,22 @@ export function ComposerModeBar({
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modeShortcutList}>
       <TouchableOpacity style={[styles.modeShortcut, quickCommandsOpen && styles.modeShortcutActive]} onPress={onToggleQuickCommands}>
         <Ionicons name="apps-outline" size={14} color={quickCommandsOpen ? '#ffffff' : '#4b5563'} />
-        <Text style={[styles.modeShortcutText, quickCommandsOpen && styles.modeShortcutTextActive]}>模式</Text>
+        <Text style={[styles.modeShortcutText, quickCommandsOpen && styles.modeShortcutTextActive]}>
+          {quickCommandsOpen ? '收起模式' : '协作模式'}
+        </Text>
       </TouchableOpacity>
-      {items.slice(0, isWideLayout ? 7 : 5).map((command) => (
-        <TouchableOpacity key={command.id} style={styles.modeShortcut} onPress={() => onInsertCommand(command)}>
+      {quickCommandsOpen ? items.slice(0, isWideLayout ? 7 : 5).map((command) => (
+        <TouchableOpacity key={command.id} style={styles.modeShortcut} onPress={() => {
+          try {
+            onInsertCommand(command);
+          } finally {
+            onToggleQuickCommands();
+          }
+        }}>
           <Ionicons name={command.kind === 'roleplay' ? 'game-controller-outline' : 'sparkles-outline'} size={14} color="#4b5563" />
           <Text style={styles.modeShortcutText}>{command.command}</Text>
         </TouchableOpacity>
-      ))}
+      )) : null}
     </ScrollView>
   );
 }

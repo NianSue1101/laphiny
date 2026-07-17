@@ -288,6 +288,8 @@ export interface Room {
   summaryConnectionId?: string;
   autoDelegationEnabled?: boolean;
   agentToolDelegationEnabled?: boolean;
+  /** Maximum Agent-to-Agent tasks accepted from one ordinary reply. */
+  maxDelegationsPerRound?: number;
   maxDelegationDepth?: number;
   lastSummary?: RoomSummary;
   memoryCapsule?: RoomMemoryCapsule;
@@ -436,6 +438,7 @@ export interface TeamTemplate {
   defaultMode: 'manual' | 'parallel' | 'sequential';
   summaryConnectionId?: string;
   autoDelegationEnabled: boolean;
+  maxDelegationsPerRound?: number;
   maxDelegationDepth: number;
   createdAt: string;
   updatedAt: string;
@@ -465,6 +468,7 @@ export interface Attachment {
 }
 
 export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopped' | 'error';
+export type ChatNoticeActionId = 'delegation-limit' | 'delegation-tools' | 'memory' | 'goal' | 'roleplay';
 export type AgentStreamPhase = 'queued' | 'connecting' | 'thinking' | 'responding' | 'delegating' | 'reviewing' | 'completed' | 'cancelled' | 'failed';
 export type AgentStreamEventKind = 'status' | 'content' | 'reasoning' | 'delegation' | 'review' | 'terminal';
 
@@ -537,6 +541,7 @@ export interface ChatMessage {
   permissionRequest?: AgentPermissionRequest;
   status: ChatMessageStatus;
   error?: string;
+  noticeActionId?: ChatNoticeActionId;
   delegatedFrom?: string;
   delegationTaskId?: string;
   delegationAttemptId?: string;

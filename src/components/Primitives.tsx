@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import type { AgentProfile, Attachment, Room } from '../types';
@@ -189,12 +190,86 @@ export function ConnectionHealthDetails({ health }: { health?: ConnectionHealth 
   );
 }
 
-export function MiniButton({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
+export function MiniButton({
+  icon,
+  label,
+  onPress,
+  active = false,
+  disabled = false,
+  tone = 'default',
+}: {
+  icon: IconName;
+  label: string;
+  onPress: () => void;
+  active?: boolean;
+  disabled?: boolean;
+  tone?: 'default' | 'danger';
+}) {
+  const iconColor = tone === 'danger' ? '#b91c1c' : active ? '#9f4969' : '#4b5563';
   return (
-    <TouchableOpacity style={styles.miniButton} onPress={onPress}>
-      <Ionicons name={icon} size={13} color="#4b5563" />
-      <Text style={styles.miniButtonText}>{label}</Text>
+    <TouchableOpacity
+      accessibilityRole="button"
+      style={[
+        styles.miniButton,
+        active && styles.miniButtonActive,
+        disabled && styles.miniButtonDisabled,
+        tone === 'danger' && styles.miniButtonDanger,
+      ]}
+      onPress={onPress}
+      disabled={disabled}
+    >
+      <Ionicons name={icon} size={13} color={iconColor} />
+      <Text style={[
+        styles.miniButtonText,
+        active && styles.miniButtonTextActive,
+        tone === 'danger' && styles.miniButtonTextDanger,
+      ]}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+export function DisclosureSection({
+  icon,
+  title,
+  summary,
+  open,
+  onToggle,
+  children,
+  tone = 'default',
+}: {
+  icon: IconName;
+  title: string;
+  summary?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  tone?: 'default' | 'danger';
+}) {
+  const danger = tone === 'danger';
+  const accent = danger ? '#b91c1c' : open ? '#9f4969' : '#6b7280';
+  return (
+    <View style={[
+      styles.disclosureSection,
+      open && styles.disclosureSectionOpen,
+      danger && styles.disclosureSectionDanger,
+    ]}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        style={styles.disclosureHeader}
+        onPress={onToggle}
+      >
+        <View style={[styles.disclosureIcon, open && styles.disclosureIconOpen, danger && styles.disclosureIconDanger]}>
+          <Ionicons name={icon} size={16} color={accent} />
+        </View>
+        <View style={styles.disclosureTitleBlock}>
+          <Text style={[styles.disclosureTitle, danger && styles.disclosureTitleDanger]}>{title}</Text>
+          {summary ? <Text style={styles.disclosureSummary} numberOfLines={open ? undefined : 1}>{summary}</Text> : null}
+        </View>
+        <Ionicons name={open ? 'chevron-up-outline' : 'chevron-down-outline'} size={16} color={accent} />
+      </TouchableOpacity>
+      {open ? <View style={styles.disclosureBody}>{children}</View> : null}
+    </View>
   );
 }
 
@@ -381,8 +456,25 @@ const styles = StyleSheet.create({
   healthDetails: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
   healthDetailText: { color: '#374151' },
   healthCheckedAt: { color: '#9ca3af', fontSize: 12 },
-  miniButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, backgroundColor: '#f3f4f6' },
+  miniButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: 'transparent' },
+  miniButtonActive: { backgroundColor: '#fff1f6', borderColor: '#f3c4d4' },
+  miniButtonDisabled: { opacity: 0.45 },
+  miniButtonDanger: { backgroundColor: '#fff7f7', borderColor: '#fecaca' },
   miniButtonText: { color: '#4b5563', fontSize: 12, fontWeight: '700' },
+  miniButtonTextActive: { color: '#9f4969' },
+  miniButtonTextDanger: { color: '#b91c1c' },
+  disclosureSection: { borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#ffffff', overflow: 'hidden' },
+  disclosureSectionOpen: { borderColor: '#efd1dc', backgroundColor: '#fffafb' },
+  disclosureSectionDanger: { borderColor: '#fecaca', backgroundColor: '#fffafa' },
+  disclosureHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10 },
+  disclosureIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f3f4f6' },
+  disclosureIconOpen: { backgroundColor: '#fff1f6' },
+  disclosureIconDanger: { backgroundColor: '#fee2e2' },
+  disclosureTitleBlock: { flex: 1, minWidth: 0, gap: 2 },
+  disclosureTitle: { color: '#1f2937', fontWeight: '800' },
+  disclosureTitleDanger: { color: '#991b1b' },
+  disclosureSummary: { color: '#6b7280', fontSize: 12, lineHeight: 17 },
+  disclosureBody: { gap: 10, paddingHorizontal: 12, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#f3e3e9', paddingTop: 12 },
   iconButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 8, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb' },
   iconButtonPrimary: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
   emptyState: { alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, borderRadius: 20, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#ffffff' },

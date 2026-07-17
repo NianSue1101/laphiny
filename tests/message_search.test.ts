@@ -5,6 +5,7 @@ import {
   buildMessageSearchDocuments,
   findMessageSearchDocumentIds,
   shouldAutoLoadOlderMessages,
+  shouldShowJumpToLatest,
 } from '../src/lib/message_search';
 import { getInitialPageStart, splitMessagePages } from '../src/storage/message_pages';
 import type { ChatMessage } from '../src/types';
@@ -46,6 +47,12 @@ test('auto-load only triggers near the top while idle and outside search', () =>
   assert.equal(shouldAutoLoadOlderMessages({ offsetY: 100, hasOlderMessages: true, loading: false, searching: false }), false);
   assert.equal(shouldAutoLoadOlderMessages({ offsetY: 40, hasOlderMessages: true, loading: true, searching: false }), false);
   assert.equal(shouldAutoLoadOlderMessages({ offsetY: 40, hasOlderMessages: true, loading: false, searching: true }), false);
+});
+
+test('jump-to-latest only appears when at least twenty messages are newer', () => {
+  assert.equal(shouldShowJumpToLatest({ messageCount: 50, lastVisibleIndex: 29 }), true);
+  assert.equal(shouldShowJumpToLatest({ messageCount: 50, lastVisibleIndex: 30 }), false);
+  assert.equal(shouldShowJumpToLatest({ messageCount: 0, lastVisibleIndex: -1 }), false);
 });
 
 test('large history keeps the initial read window fixed at two pages', () => {

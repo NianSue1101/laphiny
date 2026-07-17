@@ -1,7 +1,12 @@
 import { useEffect, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import * as Clipboard from 'expo-clipboard';
 
-import { DEFAULT_CONTEXT_LIMIT, MAX_DELEGATION_DEPTH } from '../config/app_config';
+import {
+  DEFAULT_CONTEXT_LIMIT,
+  DEFAULT_DELEGATIONS_PER_ROUND,
+  MAX_DELEGATION_DEPTH,
+  MAX_DELEGATIONS_PER_ROUND,
+} from '../config/app_config';
 import { buildMarkdownExport, makeId, makeLocalNotice, requestConfirm, showNotice } from '../app/app_utils';
 import { applyMemoryCapsuleToRoomGrowth, applyRoomStatePatchFromText } from '../lib/room_growth';
 import { summarizeRoomMemory } from '../lib/room_memory';
@@ -468,6 +473,23 @@ export function useRoomToolsRuntime({
     updateSelectedRoom({ autoDelegationEnabled: selectedRoom.autoDelegationEnabled === false });
   }
 
+  function toggleRoomToolDelegation() {
+    if (!selectedRoom) return;
+    updateSelectedRoom({ agentToolDelegationEnabled: selectedRoom.agentToolDelegationEnabled === false });
+  }
+
+  function updateRoomDelegationsPerRound(delta: number) {
+    if (!selectedRoom) return;
+    const next = Math.max(
+      1,
+      Math.min(
+        MAX_DELEGATIONS_PER_ROUND,
+        (selectedRoom.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND) + delta,
+      ),
+    );
+    updateSelectedRoom({ maxDelegationsPerRound: next });
+  }
+
   function updateRoomDelegationDepth(delta: number) {
     if (!selectedRoom) return;
     const next = Math.max(0, Math.min(6, (selectedRoom.maxDelegationDepth ?? MAX_DELEGATION_DEPTH) + delta));
@@ -490,6 +512,7 @@ export function useRoomToolsRuntime({
       defaultMode: selectedRoom.defaultCollaborationMode ?? 'manual',
       summaryConnectionId: selectedRoom.summaryConnectionId,
       autoDelegationEnabled: selectedRoom.autoDelegationEnabled !== false,
+      maxDelegationsPerRound: selectedRoom.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND,
       maxDelegationDepth: selectedRoom.maxDelegationDepth ?? MAX_DELEGATION_DEPTH,
       createdAt: now,
       updatedAt: now,
@@ -518,6 +541,7 @@ export function useRoomToolsRuntime({
       defaultCollaborationMode: template.defaultMode,
       summaryConnectionId: template.summaryConnectionId,
       autoDelegationEnabled: template.autoDelegationEnabled,
+      maxDelegationsPerRound: template.maxDelegationsPerRound ?? DEFAULT_DELEGATIONS_PER_ROUND,
       maxDelegationDepth: template.maxDelegationDepth,
     });
     appendCollaborationEvent({
@@ -674,12 +698,14 @@ export function useRoomToolsRuntime({
     setRoomSummaryConnection,
     setTeamTemplateName,
     toggleRoomAutoDelegation,
+    toggleRoomToolDelegation,
     toggleSelectedRoomRoleplay,
     updateContextLimit,
     updateRoomBlackboardItemStatus,
     updateRoomById,
     updateRoomDecisionStatus,
     updateRoomDelegationDepth,
+    updateRoomDelegationsPerRound,
     updateSelectedRoom,
     updateSelectedRoomMember,
     updateSelectedRoomRoleplay,
