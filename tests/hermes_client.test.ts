@@ -135,6 +135,9 @@ test('responseStreamEvents preserves structured Hermes function calls', async ()
     'event: response.output_text.delta',
     'data: {"delta":"已委托。"}',
     '',
+    'event: response.completed',
+    'data: {"response":{"status":"completed"}}',
+    '',
   ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
 
   const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' });
@@ -249,4 +252,45 @@ test('normalizeHermesReplyText cleans stored raw SSE replies', () => {
   ].join('\n');
 
   assert.equal(normalizeHermesReplyText(raw), '任务完成');
+});
+
+test('chat stream rejects an unexpected EOF instead of completing partial text', async () => {
+  const encoder = new TextEncoder();
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' }, (async () => new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}\n\n'));
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } },
+  )) as typeof fetch);
+
+  await assert.rejects(async () => {
+    for await (const _event of client.chatCompletionStreamEvents({ model: 'test', messages: [], stream: true })) {
+      // consume until the transport proves completion
+    }
+  }, /closed before/);
+});
+
+test('chat and Responses terminal failure events reject the stream', async () => {
+  const encoder = new TextEncoder();
+  const bodies = [
+    'data: {"choices":[{"delta":{},"finish_reason":"error"}],"error":{"message":"agent failed"}}\n\n',
+    'event: response.failed\ndata: {"error":{"message":"response failed"}}\n\n',
+  ];
+  const fetchImpl = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(bodies.shift() ?? ''));
+      controller.close();
+    },
+  }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
+  const client = new HermesClient({ baseUrl: 'https://example.invalid', apiKey: '' }, fetchImpl);
+
+  await assert.rejects(async () => {
+    for await (const _event of client.chatCompletionStreamEvents({ model: 'test', messages: [], stream: true })) { /* consume */ }
+  }, /agent failed/);
+  await assert.rejects(async () => {
+    for await (const _event of client.responseStreamEvents({ model: 'test', input: 'hello' })) { /* consume */ }
+  }, /response failed/);
 });

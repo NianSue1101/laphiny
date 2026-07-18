@@ -471,9 +471,9 @@ export interface Attachment {
   kind: 'image' | 'text' | 'file';
 }
 
-export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopped' | 'error';
+export type ChatMessageStatus = 'local' | 'queued' | 'running' | 'sent' | 'stopped' | 'error' | 'interrupted';
 export type ChatNoticeActionId = 'delegation-limit' | 'delegation-tools' | 'memory' | 'goal' | 'roleplay';
-export type AgentStreamPhase = 'queued' | 'connecting' | 'thinking' | 'responding' | 'delegating' | 'reviewing' | 'completed' | 'cancelled' | 'failed';
+export type AgentStreamPhase = 'queued' | 'connecting' | 'thinking' | 'responding' | 'delegating' | 'reviewing' | 'completed' | 'cancelled' | 'failed' | 'interrupted';
 export type AgentStreamEventKind = 'status' | 'content' | 'reasoning' | 'delegation' | 'review' | 'terminal';
 
 export interface AgentActivityNotice {
@@ -541,6 +541,14 @@ export interface ChatMessage {
   streamPhase?: AgentStreamPhase;
   streamUpdatedAt?: string;
   retryOfMessageId?: string;
+  /** Durable Hermes run identifier used to reconcile a reply after reconnect or app restart. */
+  hermesRunId?: string;
+  /** Transport selected for this reply; only `runs` can be reattached without starting new work. */
+  hermesTransport?: 'runs' | 'stream';
+  /** Last durable run state observed by the client. */
+  hermesRunStatus?: 'submitted' | 'streaming' | 'reconnecting' | 'completed' | 'failed' | 'cancelled';
+  /** Bounded recovery counter used to prevent reconnect storms. */
+  recoveryAttempts?: number;
   attachments?: Attachment[];
   permissionRequest?: AgentPermissionRequest;
   status: ChatMessageStatus;

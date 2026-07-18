@@ -123,9 +123,30 @@ test('marks an unfinished hydrated agent reply as interrupted and retryable', ()
   }], '2026-07-15T00:01:00.000Z');
 
   assert.equal(message?.content, '已经收到一部分');
-  assert.equal(message?.status, 'stopped');
-  assert.equal(message?.streamPhase, 'cancelled');
-  assert.match(message?.error ?? '', /可以安全重试/);
+  assert.equal(message?.status, 'interrupted');
+  assert.equal(message?.streamPhase, 'interrupted');
+  assert.match(message?.error ?? '', /旧版 Hermes 流已中断/);
+});
+
+test('preserves a durable Hermes run for restart reconciliation', () => {
+  const [message] = normalizeInterruptedChatMessages([{
+    id: 'msg_run',
+    roomId: 'room_1',
+    role: 'assistant',
+    authorId: 'conn_1',
+    authorName: 'Agent',
+    content: '部分正文',
+    status: 'running',
+    hermesTransport: 'runs',
+    hermesRunId: 'run_123',
+    hermesRunStatus: 'streaming',
+    createdAt: '2026-07-15T00:00:00.000Z',
+  }], '2026-07-15T00:01:00.000Z');
+
+  assert.equal(message?.status, 'interrupted');
+  assert.equal(message?.hermesRunId, 'run_123');
+  assert.equal(message?.hermesRunStatus, 'reconnecting');
+  assert.match(message?.error ?? '', /重新连接 Hermes 运行/);
 });
 
 test('does not reinterpret queued user messages as interrupted agent work', () => {

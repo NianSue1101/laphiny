@@ -5,6 +5,44 @@ export type ChatViewState = {
   listVisible: boolean;
 };
 
+export type ChatScrollLifecycle = {
+  generation: number;
+  viewKey: string;
+  visible: boolean;
+};
+
+export function advanceChatScrollLifecycle(
+  current: ChatScrollLifecycle,
+  next: Pick<ChatScrollLifecycle, 'viewKey' | 'visible'>,
+): ChatScrollLifecycle {
+  if (current.viewKey === next.viewKey && current.visible === next.visible) {
+    return current;
+  }
+  return {
+    ...next,
+    generation: current.generation + 1,
+  };
+}
+
+export function canExecuteChatScroll(
+  scheduledGeneration: number,
+  current: ChatScrollLifecycle,
+): boolean {
+  return current.visible && current.generation === scheduledGeneration;
+}
+
+export function shouldAutoScrollChat({
+  listVisible,
+  pendingScrollToEnd,
+  listAtBottom,
+}: {
+  listVisible: boolean;
+  pendingScrollToEnd: boolean;
+  listAtBottom: boolean;
+}): boolean {
+  return listVisible && (pendingScrollToEnd || listAtBottom);
+}
+
 export function resolveChatViewState({
   tab,
   selectedRoomId,

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import test from 'node:test';
 
@@ -19,6 +20,11 @@ test('sync server merges snapshots into sqlite tables', () => {
   assert.equal(snapshot.connections[0].profile?.publicPersona, '公开协作卡片');
   assert.equal(snapshot.messagesByRoom.room_1.length, 1);
   assert.equal(snapshot.messagesByRoom.room_1[0].attachments?.[0].name, 'note.txt');
+  assert.equal(snapshot.messagesByRoom.room_1[0].hermesRunId, 'run_1');
+  assert.equal(snapshot.messagesByRoom.room_1[0].hermesTransport, 'runs');
+  assert.equal(snapshot.messagesByRoom.room_1[0].hermesRunStatus, 'reconnecting');
+  assert.equal(snapshot.messagesByRoom.room_1[0].recoveryAttempts, 2);
+  assert.equal(snapshot.messagesByRoom.room_1[0].status, 'interrupted');
   assert.equal(snapshot.squareEvents.length, 1);
   assert.equal(snapshot.rooms[0].defaultCollaborationMode, 'sequential');
   assert.equal(snapshot.rooms[0].lastSummary?.authorName, 'Flor');
@@ -67,6 +73,51 @@ test('sync server exposes authenticated snapshot and event endpoints', async () 
   }).then((response) => response.json());
   assert.equal(events.length, 1);
   assert.equal(events[0].source, 'Flor');
+
+  await close(server);
+  db.close();
+});
+
+test('legacy reference server atomically commits resumable large snapshot transfers', async () => {
+  const db = openDatabase(':memory:');
+  const server = createServer(createApp({ db, apiKey: 'secret', now: () => now }));
+  await listen(server);
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const headers = { authorization: 'Bearer secret' };
+  const snapshot: any = makeSnapshot();
+  snapshot.messagesByRoom.room_1[0].content = 'large/'.repeat(60_000);
+  const payload = Buffer.from(JSON.stringify(snapshot));
+  const sha256 = createHash('sha256').update(payload).digest('hex');
+  const transferId = `snapshot_${sha256}`;
+  const parts: Buffer[] = [];
+  for (let offset = 0; offset < payload.length; offset += 96_000) parts.push(payload.subarray(offset, offset + 96_000));
+
+  const health: any = await fetch(`${baseUrl}/v1/health`, { headers }).then((response) => response.json());
+  assert.equal(health.capabilities.snapshotTransfers.protocol, 'laphiny.snapshot-transfer.v1');
+  const initialized = await fetch(`${baseUrl}/v1/snapshot-transfers`, {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ transferId, sha256, totalBytes: payload.length, totalParts: parts.length, baseRevision: health.syncRevision }),
+  });
+  assert.equal(initialized.status, 200);
+  for (let index = 0; index < parts.length; index += 1) {
+    const uploaded = await fetch(`${baseUrl}/v1/snapshot-transfers/${transferId}/parts/${index}`, {
+      method: 'PUT', headers: { ...headers, 'content-type': 'application/octet-stream' }, body: parts[index] as unknown as BodyInit,
+    });
+    assert.equal(uploaded.status, 200);
+  }
+  assert.equal((readSnapshot(db) as any).connections.length, 0);
+  const committed = await fetch(`${baseUrl}/v1/snapshot-transfers/${transferId}/commit`, { method: 'POST', headers });
+  const receipt: any = await committed.json();
+  assert.equal(committed.status, 200);
+  assert.equal(receipt.state, 'committed');
+  assert.equal(receipt.committedRevision, 1);
+  assert.equal(receipt.messagesByRoom, undefined);
+  assert.equal((readSnapshot(db) as any).messagesByRoom.room_1[0].content, snapshot.messagesByRoom.room_1[0].content);
+  const repeated: any = await fetch(`${baseUrl}/v1/snapshot-transfers/${transferId}/commit`, { method: 'POST', headers }).then((response) => response.json());
+  assert.equal(repeated.committedRevision, 1);
 
   await close(server);
   db.close();
@@ -160,7 +211,11 @@ function makeSnapshot(options: { connectionName?: string; updatedAt?: string } =
           text: 'hello',
           kind: 'text',
         }],
-        status: 'sent',
+        hermesRunId: 'run_1',
+        hermesTransport: 'runs',
+        hermesRunStatus: 'reconnecting',
+        recoveryAttempts: 2,
+        status: 'interrupted',
         createdAt: now,
       }],
     },

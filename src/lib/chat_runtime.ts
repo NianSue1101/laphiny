@@ -1,8 +1,9 @@
 import type { AgentActivityNotice, AgentPermissionRequest, Attachment, HermesChatMessage, HermesConnection } from '../types';
 import { shouldStreamHermesReplies } from './background_agent';
 import { extractAgentReplyArtifacts, getAgentReplyFallback } from './chat_rendering';
-import { HermesClient, HermesTransportError } from './hermes_client';
+import { HermesClient, HermesHttpError, HermesTransportError } from './hermes_client';
 import { runHermesCompletion } from './hermes_completion';
+import { connectionSupportsDurableRuns, runOrResumeHermesDurableCompletion } from './hermes_runs';
 
 export interface HermesMemberCompletionResult {
   rawText: string;
@@ -12,6 +13,8 @@ export interface HermesMemberCompletionResult {
   permissionRequest?: AgentPermissionRequest;
   activityNotices?: AgentActivityNotice[];
   toolCalls?: Array<{ name: string; arguments: string; callId?: string }>;
+  hermesRunId?: string;
+  hermesTransport: 'runs' | 'stream';
 }
 
 export async function runHermesMemberCompletion({
@@ -23,6 +26,8 @@ export async function runHermesMemberCompletion({
   signal,
   onChunk,
   onProgress,
+  onRunSubmitted,
+  resumeRunId,
   useToolDelegation = false,
 }: {
   connection: HermesConnection;
@@ -33,20 +38,70 @@ export async function runHermesMemberCompletion({
   signal: AbortSignal;
   onChunk?: (content: string) => void;
   onProgress?: (progress: { content: string; reasoning?: string; activityNotices?: AgentActivityNotice[] }) => void;
+  onRunSubmitted?: (runId: string) => void;
+  resumeRunId?: string;
   useToolDelegation?: boolean;
 }): Promise<HermesMemberCompletionResult> {
   const client = new HermesClient(connection);
+  const connectTimeoutMs = Math.min(30_000, timeoutMs);
+  const idleTimeoutMs = timeoutMs;
   let reasoning = '';
   let activityNotices: AgentActivityNotice[] | undefined;
   const responseToolCalls = new Map<string, { name: string; arguments: string; callId?: string }>();
   let rawText = '';
+  let hermesRunId: string | undefined;
+  let hermesTransport: HermesMemberCompletionResult['hermesTransport'] = 'stream';
+
+  const durableRunsSupported = Boolean(resumeRunId) || await connectionSupportsDurableRuns(connection, signal);
+  if (durableRunsSupported) {
+    try {
+      const durableResult = await runOrResumeHermesDurableCompletion({
+        connection,
+        messages: resumeRunId ? undefined : messages,
+        runId: resumeRunId,
+        sessionId,
+        sessionKey,
+        signal,
+        onRunSubmitted: (runId) => {
+          hermesRunId = runId;
+          onRunSubmitted?.(runId);
+        },
+        onProgress: (progress) => {
+          reasoning = progress.reasoning ?? reasoning;
+          activityNotices = progress.activityNotices ?? activityNotices;
+          onChunk?.(progress.content);
+          onProgress?.(progress);
+        },
+      });
+      rawText = durableResult.content;
+      reasoning = durableResult.reasoning ?? reasoning;
+      activityNotices = durableResult.activityNotices ?? activityNotices;
+      for (const toolCall of durableResult.toolCalls) {
+        responseToolCalls.set(toolCall.callId || `${toolCall.name}:${toolCall.arguments}`, toolCall);
+      }
+      hermesRunId = durableResult.runId;
+      hermesTransport = 'runs';
+    } catch (error) {
+      const endpointUnavailable = !resumeRunId
+        && error instanceof HermesHttpError
+        && [404, 405, 501].includes(error.status);
+      if (!endpointUnavailable) throw error;
+      // Capability data may be stale after a Gateway downgrade. A definitive
+      // method-not-supported response occurs before a run exists, so fallback
+      // does not risk duplicating accepted work.
+    }
+  }
+
+  if (!rawText && hermesTransport !== 'runs') {
   if (useToolDelegation) {
     try {
       rawText = await runHermesResponsesCompletion(client, messages, {
         model: connection.model,
         sessionId,
         sessionKey,
-        timeoutMs,
+          timeoutMs,
+          connectTimeoutMs,
+          idleTimeoutMs,
         signal,
         onChunk,
         onProgress,
@@ -73,6 +128,8 @@ export async function runHermesMemberCompletion({
         sessionId,
         sessionKey,
         timeoutMs,
+        connectTimeoutMs,
+        idleTimeoutMs,
         signal,
         stream: shouldStreamHermesReplies(),
         onChunk,
@@ -92,6 +149,8 @@ export async function runHermesMemberCompletion({
     sessionId,
     sessionKey,
     timeoutMs,
+    connectTimeoutMs,
+    idleTimeoutMs,
     signal,
     stream: shouldStreamHermesReplies(),
     onChunk,
@@ -101,6 +160,7 @@ export async function runHermesMemberCompletion({
       onProgress?.(progress);
     },
     });
+  }
   }
 
   const parsedReply = extractAgentReplyArtifacts(rawText.trim());
@@ -112,6 +172,8 @@ export async function runHermesMemberCompletion({
     attachments: parsedReply.attachments,
     permissionRequest: parsedReply.permissionRequest,
     toolCalls: [...responseToolCalls.values()],
+    hermesRunId,
+    hermesTransport,
   };
 }
 
@@ -128,7 +190,7 @@ function mergeActivityNotices(
 
 function isResponsesCompatibilityFailure(error: unknown): boolean {
   if (error instanceof HermesTransportError) return false;
-  if (error instanceof DOMException && error.name === 'AbortError') return false;
+  if (error instanceof Error && error.name === 'AbortError') return false;
   const message = error instanceof Error ? error.message : String(error);
   return /Responses API failed:\s*(400|404|405|415|422)\b|did not return a readable stream/iu.test(message);
 }
@@ -141,6 +203,8 @@ async function runHermesResponsesCompletion(
     sessionId?: string;
     sessionKey?: string;
     timeoutMs: number;
+    connectTimeoutMs?: number;
+    idleTimeoutMs?: number;
     signal: AbortSignal;
     onChunk?: (content: string) => void;
     onProgress?: (progress: { content: string; reasoning?: string; activityNotices?: AgentActivityNotice[] }) => void;
@@ -151,7 +215,14 @@ async function runHermesResponsesCompletion(
   const input = messages.filter((message) => message.role !== 'system').map((message) => ({ role: message.role, content: message.content }));
   let text = '';
   const activityNotices = new Map<string, AgentActivityNotice>();
-  for await (const event of client.responseStreamEvents({ model: options.model, input, instructions }, options)) {
+  for await (const event of client.responseStreamEvents({ model: options.model, input, instructions }, {
+    sessionId: options.sessionId,
+    sessionKey: options.sessionKey,
+    timeoutMs: options.timeoutMs,
+    connectTimeoutMs: options.connectTimeoutMs,
+    idleTimeoutMs: options.idleTimeoutMs,
+    signal: options.signal,
+  })) {
     if (event.content) {
       text += event.content;
       options.onChunk?.(text);

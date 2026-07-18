@@ -1,6 +1,6 @@
 import 'react-native-url-polyfill/auto';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, AppStateStatus, BackHandler, FlatList, NativeScrollEvent, NativeSyntheticEvent, Platform, Keyboard, SafeAreaView, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
@@ -51,7 +51,13 @@ Notifications.setNotificationHandler({
 import { buildAgentPermissionDecisionPrompt, getScopedAgentPermissionKey } from './src/lib/agent_permissions';
 import { AgentTaskScheduler } from './src/lib/agent_scheduler';
 import { resolveChatRetryRequest } from './src/lib/chat_retry';
-import { resolveChatViewState } from './src/lib/chat_view_state';
+import {
+  advanceChatScrollLifecycle,
+  canExecuteChatScroll,
+  resolveChatViewState,
+  shouldAutoScrollChat,
+  type ChatScrollLifecycle,
+} from './src/lib/chat_view_state';
 import { COLLABORATION_RITUALS, type CollaborationRitualId } from './src/lib/collaboration_rituals';
 import { parseGoalPlanItems, parseGoalStatusSignal } from './src/lib/goal_mode';
 import { buildGoalMemoryCapsule } from './src/lib/goal_session';
@@ -59,6 +65,7 @@ import { applyGoalAssistantReview, collectGoalDelegationEvidence } from './src/l
 import { beginDelegationAttempt, normalizeDelegationTask, transitionDelegationAttempt } from './src/lib/delegation_tasks';
 import { summarizeRoomGrowth } from './src/lib/room_growth';
 import { summarizeActiveAgentStreams, summarizeGlobalAgentStreams } from './src/lib/stream_events';
+import { getInterruptedRecoveryKind } from './src/lib/stream_recovery';
 import { makeDefaultRoleplayConfig } from './src/lib/roleplay';
 import { buildOnboardingSteps, buildSoulRelations, buildTaskBoard, getRoomModeDefinition } from './src/lib/stage4_plus';
 import { getSlashCommandSuggestions, type UXCommandDefinition } from './src/lib/ux';
@@ -77,6 +84,7 @@ import { useRoomCreationRuntime } from './src/hooks/useRoomCreationRuntime';
 import { useRoomToolsRuntime } from './src/hooks/useRoomToolsRuntime';
 import { useReplyNotifications } from './src/hooks/useReplyNotifications';
 import { useStreamRegistry } from './src/hooks/useStreamRegistry';
+import { useStreamRecovery } from './src/hooks/useStreamRecovery';
 import { useSyncEffects } from './src/hooks/useSyncEffects';
 import { useSyncRuntime } from './src/hooks/useSyncRuntime';
 import { useProactiveAgentMessages } from './src/hooks/useProactiveAgentMessages';
@@ -132,6 +140,7 @@ export default function App() {
   const messageScrollRef = useRef<FlatList<ChatMessage> | null>(null);
   const messageListAtBottomRef = useRef(true);
   const pendingMessageScrollToEndRef = useRef(false);
+  const chatScrollLifecycleRef = useRef<ChatScrollLifecycle>({ generation: 0, viewKey: '', visible: false });
   const messageListSignatureRef = useRef<MessageListSignature>({ roomId: null, tab: 'chat', viewKey: '', messageCount: 0, lastMessageId: null });
   const saveMessagesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const delayedGoalMessageIdsRef = useRef<Set<string>>(new Set());
@@ -508,9 +517,11 @@ export default function App() {
   });
   const {
     dispatchMessage,
+    resumeInterruptedReply,
     retryDelegationTask,
     streamHermesReply,
   } = useChatDispatchRuntime({
+    activeStreamIds,
     appendCollaborationEvent,
     appendDiagnosticLog,
     appendMessagesToRoom,
@@ -546,6 +557,13 @@ export default function App() {
     updateMessageInRoom,
     updateRoomById,
     schedulerRef: agentTaskSchedulerRef,
+  });
+
+  useStreamRecovery({
+    rooms,
+    messagesByRoom,
+    activeStreamIds,
+    onRecoverInterruptedMessage: resumeInterruptedReply,
   });
 
   useEffect(() => {
@@ -589,6 +607,13 @@ export default function App() {
     width,
   });
 
+  useLayoutEffect(() => {
+    chatScrollLifecycleRef.current = advanceChatScrollLifecycle(chatScrollLifecycleRef.current, {
+      viewKey: chatViewKey,
+      visible: chatListVisible,
+    });
+  }, [chatListVisible, chatViewKey]);
+
   useEffect(() => {
     const previous = messageListSignatureRef.current;
     const roomChanged = selectedRoomId !== previous.roomId;
@@ -615,7 +640,9 @@ export default function App() {
   }, [chatListVisible, chatViewKey, selectedRoomId, tab, visibleSelectedMessages.length, latestVisibleMessage?.id]);
 
   function scrollMessagesToEnd(animated: boolean) {
+    const scheduledGeneration = chatScrollLifecycleRef.current.generation;
     requestAnimationFrame(() => {
+      if (!canExecuteChatScroll(scheduledGeneration, chatScrollLifecycleRef.current)) return;
       messageScrollRef.current?.scrollToEnd({ animated });
     });
   }
@@ -627,7 +654,11 @@ export default function App() {
   }
 
   function handleMessagesContentSizeChange() {
-    const shouldScrollToEnd = pendingMessageScrollToEndRef.current || messageListAtBottomRef.current;
+    const shouldScrollToEnd = shouldAutoScrollChat({
+      listVisible: chatScrollLifecycleRef.current.visible,
+      pendingScrollToEnd: pendingMessageScrollToEndRef.current,
+      listAtBottom: messageListAtBottomRef.current,
+    });
     if (!shouldScrollToEnd) return;
 
     const animated = !pendingMessageScrollToEndRef.current;
@@ -840,6 +871,12 @@ export default function App() {
   }
 
   function leaveFocusedChat() {
+    chatScrollLifecycleRef.current = advanceChatScrollLifecycle(chatScrollLifecycleRef.current, {
+      viewKey: chatScrollLifecycleRef.current.viewKey,
+      visible: false,
+    });
+    pendingMessageScrollToEndRef.current = false;
+    messageListAtBottomRef.current = true;
     setMobileRoomDetailsOpen(false);
     setMobileFocusedRoomId(null);
     Keyboard.dismiss();
@@ -974,6 +1011,14 @@ export default function App() {
   async function retryMessage(message: ChatMessage) {
     if (!selectedRoom || message.authorId === 'user' || message.authorId === 'system') return;
     if (activeStreamIds[message.id]) return;
+    if (message.status === 'interrupted') {
+      if (getInterruptedRecoveryKind(message) === 'manual') {
+        showNotice('需要手动确认', '这次中断前可能已执行工具或已经尝试过兼容续写。为避免重复副作用，请检查现有结果后再发送一条明确的新指令。');
+        return;
+      }
+      await resumeInterruptedReply(selectedRoom, message);
+      return;
+    }
     const resolution = resolveChatRetryRequest(selectedRoom, selectedMessages, message);
     if (!resolution.ok) {
       showNotice('无法重试', resolution.error);
@@ -1421,6 +1466,7 @@ export default function App() {
           enabledConnectionsCount={enabledConnections.length}
           totalUnread={totalUnread}
           streamSummary={globalStreamSummary}
+          compact={width < 700}
           isDarkMode={isDarkMode}
           styles={styles}
           TextComponent={Text}

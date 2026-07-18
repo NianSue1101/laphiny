@@ -6,6 +6,8 @@ export interface RunHermesCompletionOptions {
   sessionId?: string;
   sessionKey?: string;
   timeoutMs?: number;
+  connectTimeoutMs?: number;
+  idleTimeoutMs?: number;
   signal?: AbortSignal;
   stream: boolean;
   onChunk?: (content: string) => void;
@@ -17,10 +19,14 @@ export async function runHermesCompletion(
   options: RunHermesCompletionOptions,
 ): Promise<string> {
   const request = { ...options.request, stream: options.stream };
+  const connectTimeoutMs = options.connectTimeoutMs ?? Math.min(30_000, options.timeoutMs ?? 30_000);
+  const idleTimeoutMs = options.idleTimeoutMs ?? options.timeoutMs;
   const transportOptions = {
     sessionId: options.sessionId,
     sessionKey: options.sessionKey,
     timeoutMs: options.timeoutMs,
+    connectTimeoutMs,
+    idleTimeoutMs,
     signal: options.signal,
   };
 
@@ -71,7 +77,7 @@ function makeActivityNotice(activity: HermesActivityEvent): AgentActivityNotice 
 async function* legacyStreamEvents(
   client: HermesClient,
   request: HermesChatCompletionRequest,
-  transportOptions: { sessionId?: string; sessionKey?: string; timeoutMs?: number; signal?: AbortSignal },
+  transportOptions: { sessionId?: string; sessionKey?: string; timeoutMs?: number; connectTimeoutMs?: number; idleTimeoutMs?: number; signal?: AbortSignal },
 ): AsyncGenerator<HermesStreamEvent, void, undefined> {
   for await (const content of client.chatCompletionStream(request, transportOptions)) {
     yield { content };
