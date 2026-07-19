@@ -133,28 +133,26 @@ jobs:
           - 不要因为"可能被截断"就模糊结论：可见 diff 的部分要给出确切判断，不可见的部分单独列出。
           PROMPT
 
-          PROMPT_TEXT=$(jq -n -r \
+          jq -n \
+            --arg model "hermes-agent" \
             --rawfile instructions /tmp/review-instructions.md \
             --rawfile title /tmp/pr-title.md \
             --rawfile body /tmp/pr-body.md \
             --rawfile files /tmp/pr-files.md \
             --arg truncation "$TRUNCATION_NOTE" \
             --rawfile diff /tmp/pr.diff.truncated \
-            '$instructions
-              + "\n## PR 标题\n" + $title
-              + "\n## PR 描述\n" + $body
-              + $truncation
-              + "\n## 变更文件清单\n" + $files
-              + "\n## 代码变更\n```diff\n" + $diff + "\n```"')
-
-          jq -n \
-            --arg model "hermes-agent" \
-            --arg prompt "$PROMPT_TEXT" \
             '{
               model: $model,
               messages: [
                 {role: "system", content: "你是 Laper，Laphiny 项目的专业代码审查 Agent。用中文给出建设性的、具体的审查意见。"},
-                {role: "user", content: $prompt}
+                {role: "user", content: (
+                  $instructions
+                  + "\n## PR 标题\n" + $title
+                  + "\n## PR 描述\n" + $body
+                  + $truncation
+                  + "\n## 变更文件清单\n" + $files
+                  + "\n## 代码变更\n```diff\n" + $diff + "\n```"
+                )}
               ],
               stream: false
             }' > /tmp/laper-request.json
