@@ -4,10 +4,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+# Diff 上限：约 480KB ≈ 120k token，覆盖大多数现代对话模型上下文窗口。
+# 默认按行截断，避免把多字节 UTF-8（含中文、emoji）切成乱码。
+env:
+  DIFF_MAX_BYTES: "491520"
+
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
@@ -19,15 +24,58 @@ jobs:
         run: |
           set -euo pipefail
           pr_number='${{ github.event.pull_request.number }}'
+
           gh pr view "$pr_number" --json title --jq '.title' > /tmp/pr-title.md
           gh pr view "$pr_number" --json body --jq '.body // "(no description)"' > /tmp/pr-body.md
-          timeout 45s gh pr diff "$pr_number" > /tmp/pr.diff || {
-            echo "PR diff collection timed out; using changed file summary." > /tmp/pr.diff
-            gh pr view "$pr_number" --json files --jq '.files[].path' >> /tmp/pr.diff
-          }
-          head -c 35000 /tmp/pr.diff > /tmp/pr.diff.truncated
-          echo "diff_lines=$(wc -l < /tmp/pr.diff)" >> "$GITHUB_OUTPUT"
-          echo "diff_bytes=$(wc -c < /tmp/pr.diff.truncated)" >> "$GITHUB_OUTPUT"
+
+          # 变更文件清单 + 行数统计（即使 diff 被截断，也保证 Laper 看到完整文件列表）
+          gh pr view "$pr_number" --json files --jq '
+            .files
+            | sort_by(.path)
+            | map("| `" + .path + "` | +" + (.additions|tostring) + " / -" + (.deletions|tostring) + " |")
+            | ["| 文件 | +/- |", "| --- | --- |"] + .
+            | join("\n")
+          ' > /tmp/pr-files.md
+
+          # 收集完整 diff，超时放宽到 90 秒（大 PR 收集慢）
+          if ! timeout 90s gh pr diff "$pr_number" > /tmp/pr.diff; then
+            {
+              echo "> ⚠️ PR diff collection timed out after 90s; 仅使用变更文件清单代替。"
+              echo ""
+              gh pr view "$pr_number" --json files --jq '.files[].path'
+            } > /tmp/pr.diff
+          fi
+
+          total_lines=$(wc -l < /tmp/pr.diff)
+          total_bytes=$(wc -c < /tmp/pr.diff)
+
+          # 按行截断：完整保留多字节字符，避免乱码
+          : > /tmp/pr.diff.truncated
+          kept_bytes=0
+          kept_lines=0
+          while IFS= read -r line; do
+            line_bytes=$(printf '%s\n' "$line" | wc -c)
+            if [ $((kept_bytes + line_bytes)) -gt "$DIFF_MAX_BYTES" ]; then
+              break
+            fi
+            printf '%s\n' "$line" >> /tmp/pr.diff.truncated
+            kept_bytes=$((kept_bytes + line_bytes))
+            kept_lines=$((kept_lines + 1))
+          done < /tmp/pr.diff
+
+          if [ "$kept_lines" -lt "$total_lines" ]; then
+            truncated=1
+          else
+            truncated=0
+          fi
+          pct=$(awk -v k="$kept_bytes" -v t="$total_bytes" 'BEGIN { if (t==0) print "100.0"; else printf "%.1f", k*100/t }')
+
+          echo "diff_total_lines=$total_lines" >> "$GITHUB_OUTPUT"
+          echo "diff_total_bytes=$total_bytes" >> "$GITHUB_OUTPUT"
+          echo "diff_kept_lines=$kept_lines" >> "$GITHUB_OUTPUT"
+          echo "diff_kept_bytes=$kept_bytes" >> "$GITHUB_OUTPUT"
+          echo "diff_truncated=$truncated" >> "$GITHUB_OUTPUT"
+          echo "diff_kept_pct=$pct" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -35,6 +83,21 @@ jobs:
         id: laper
         run: |
           set -euo pipefail
+
+          # 构造 diff 完整性说明，明确告诉 Laper 她能看到多少、看不到多少
+          if [ "${{ steps.pr.outputs.diff_truncated }}" = "1" ]; then
+            TRUNCATION_NOTE=$(printf '\n## ⚠️ Diff 截断说明\n本次 PR diff 共 %s 行 / %s 字节，已按行截断保留前 %s 行 / %s 字节（保留 %s%%）。\n剩余部分未发送给你，完整 diff 已作为 workflow artifact 上传（名称：pr-context）。\n**重要**：请在结论中明确区分「基于可见 diff 的审查结论」与「因截断无法验证的部分」。对于文件清单中出现、但代码变更段落未出现其内容的文件，请直接说明"该文件 diff 被截断，无法验证"，不要臆测其内容。\n' \
+              "${{ steps.pr.outputs.diff_total_lines }}" \
+              "${{ steps.pr.outputs.diff_total_bytes }}" \
+              "${{ steps.pr.outputs.diff_kept_lines }}" \
+              "${{ steps.pr.outputs.diff_kept_bytes }}" \
+              "${{ steps.pr.outputs.diff_kept_pct }}")
+          else
+            TRUNCATION_NOTE=$(printf '\n## Diff 完整性\n本次 PR diff 共 %s 行 / %s 字节，已完整发送，未截断。\n' \
+              "${{ steps.pr.outputs.diff_total_lines }}" \
+              "${{ steps.pr.outputs.diff_total_bytes }}")
+          fi
+
           cat > /tmp/review-instructions.md <<'PROMPT'
           你是 Laper，Laphiny 项目的代码审查 Agent。请审查以下 PR。
 
@@ -63,16 +126,25 @@ jobs:
           - 使用 Markdown
           - 每条意见前用 emoji（🐛 bug / 💡 建议 / ⚠️ 风险 / ✅ 好的做法）
           - 最后给出明确结论
+
+          ## 关键规则
+          - 「变更文件清单」段落包含 PR 触及的所有文件（即使 diff 被截断）。请先用清单核对 PR 描述中声称的改动是否对得上。
+          - 若某文件在清单中但「代码变更」段落里完全没出现，说明它的 diff 被截断，请明确写"该文件 diff 被截断，无法验证"，不要臆测其内容。
+          - 不要因为"可能被截断"就模糊结论：可见 diff 的部分要给出确切判断，不可见的部分单独列出。
           PROMPT
 
           PROMPT_TEXT=$(jq -n -r \
             --rawfile instructions /tmp/review-instructions.md \
             --rawfile title /tmp/pr-title.md \
             --rawfile body /tmp/pr-body.md \
+            --rawfile files /tmp/pr-files.md \
+            --arg truncation "$TRUNCATION_NOTE" \
             --rawfile diff /tmp/pr.diff.truncated \
             '$instructions
               + "\n## PR 标题\n" + $title
               + "\n## PR 描述\n" + $body
+              + $truncation
+              + "\n## 变更文件清单\n" + $files
               + "\n## 代码变更\n```diff\n" + $diff + "\n```"')
 
           jq -n \
@@ -94,20 +166,31 @@ jobs:
             -H "X-Hermes-Session-Key: laphiny-pr-review" \
             --data-binary @/tmp/laper-request.json \
             --connect-timeout 20 \
-            --max-time 300 \
+            --max-time 450 \
             --retry 2 \
             --retry-delay 8 \
-            --retry-max-time 60 \
+            --retry-max-time 90 \
             -o /tmp/laper-response.json
           curl_status=$?
           set -e
 
           if [ "$curl_status" -ne 0 ]; then
-            REVIEW="Laper 无法完成审查：请求失败或超时（curl exit $curl_status）。本次已将 diff 压缩到 ${{ steps.pr.outputs.diff_bytes }} bytes；如果经常发生，请检查平板 Hermes 是否在前台、网络是否稳定，以及服务端是否允许 300 秒请求。"
+            REVIEW=$(printf 'Laper 无法完成审查：请求失败或超时（curl exit %s）。\n\n- diff 总计：%s 行 / %s 字节\n- 已发送：%s 行 / %s 字节（%s%%）\n- 完整 diff、PR 上下文与响应体已作为 artifact 上传（pr-context）\n\n请检查平板 Hermes 是否在前台、网络是否稳定，以及服务端是否允许 450 秒请求。' \
+              "$curl_status" \
+              "${{ steps.pr.outputs.diff_total_lines }}" \
+              "${{ steps.pr.outputs.diff_total_bytes }}" \
+              "${{ steps.pr.outputs.diff_kept_lines }}" \
+              "${{ steps.pr.outputs.diff_kept_bytes }}" \
+              "${{ steps.pr.outputs.diff_kept_pct }}")
           elif jq -e . >/dev/null 2>&1 < /tmp/laper-response.json; then
             REVIEW=$(jq -r '.choices[0].message.content // "Laper 无法完成审查：" + (.error.message // "unknown error")' < /tmp/laper-response.json)
           else
-            REVIEW="Laper 无法完成审查：响应不是 JSON。"
+            # 保留响应体前 1500 字符便于排查（避免再次出现"响应不是 JSON"无法定位的问题）
+            RESP_HEAD=$(head -c 1500 /tmp/laper-response.json | tr -d '\000' | sed 's/`/\\`/g' | sed 's/$/\\n/' | tr -d '\n')
+            REVIEW=$(printf 'Laper 无法完成审查：响应不是 JSON。\n\n响应前 1500 字符（完整响应体见 artifact pr-context/laper-response.json）：\n```\n%s\n```\n\n- diff 总计：%s 行 / %s 字节\n- 完整上下文见 artifact：pr-context' \
+              "$RESP_HEAD" \
+              "${{ steps.pr.outputs.diff_total_lines }}" \
+              "${{ steps.pr.outputs.diff_total_bytes }}")
           fi
 
           REVIEW_EVENT="COMMENT"
@@ -117,8 +200,11 @@ jobs:
             REVIEW_EVENT="APPROVE"
           fi
 
+          # 在 review 头部明示 diff 规模，方便读者判断 Laper 是否"看不到全文"
           {
             echo "### Laper 自动审查"
+            echo
+            echo "> 📋 **Diff 规模**：${{ steps.pr.outputs.diff_total_lines }} 行 / ${{ steps.pr.outputs.diff_total_bytes }} 字节 | 已发送 ${{ steps.pr.outputs.diff_kept_lines }} 行 / ${{ steps.pr.outputs.diff_kept_bytes }} 字节（${{ steps.pr.outputs.diff_kept_pct }}%） | 完整上下文见 workflow artifact \`pr-context\`"
             echo
             echo "$REVIEW"
           } > /tmp/laper-review.md
@@ -148,3 +234,20 @@ jobs:
           esac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload PR context artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-context
+          path: |
+            /tmp/pr.diff
+            /tmp/pr.diff.truncated
+            /tmp/pr-title.md
+            /tmp/pr-body.md
+            /tmp/pr-files.md
+            /tmp/laper-request.json
+            /tmp/laper-response.json
+            /tmp/laper-review.md
+          retention-days: 14
+          if-no-files-found: ignore
