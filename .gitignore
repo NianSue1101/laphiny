@@ -15,3 +15,5 @@ local.properties
 *.log
 .DS_Store
 laphiny-v0.11.0-web.zip
+releases/
+

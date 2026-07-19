@@ -5,7 +5,7 @@ export const DEFAULT_CONTEXT_LIMIT = 20;
 export const MAX_DELEGATION_DEPTH = 3;
 export const DEFAULT_DELEGATIONS_PER_ROUND = 1;
 export const MAX_DELEGATIONS_PER_ROUND = 6;
-export const APP_VERSION = '0.35.0';
+export const APP_VERSION = '0.35.1';
 
 export const QUICK_COMMANDS: QuickCommand[] = [
   {
@@ -45,5 +45,6 @@ export const STATUS_LABELS: Record<ChatMessage['status'], string> = {
   sent: '已发送',
   stopped: '已停止',
   error: '失败',
+  interrupted: '已中断',
 };
 

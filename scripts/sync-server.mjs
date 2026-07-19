@@ -1,14 +1,32 @@
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 
 const DEFAULT_PORT = 8787;
+const MAX_JSON_BYTES = 256 * 1024;
+const SNAPSHOT_TRANSFER_PROTOCOL = 'laphiny.snapshot-transfer.v1';
+const MAX_TRANSFER_PART_BYTES = 128 * 1024;
+const MAX_TRANSFER_BYTES = 128 * 1024 * 1024;
+const MAX_TRANSFER_PARTS = 4096;
+const MAX_ACTIVE_TRANSFER_BYTES = 256 * 1024 * 1024;
+const TRANSFER_TTL_MS = 24 * 60 * 60 * 1000;
+const TRANSFER_RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+class HttpError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
 
 export function openDatabase(path = process.env.LAPHINY_SYNC_DB || 'laphiny-sync.sqlite') {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   migrate(db);
+  cleanupSnapshotTransfers(db);
   return db;
 }
 
@@ -89,7 +107,21 @@ export function migrate(db) {
       value_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS snapshot_transfers (
+      id TEXT PRIMARY KEY, digest TEXT NOT NULL, total_bytes INTEGER NOT NULL,
+      total_parts INTEGER NOT NULL, base_revision INTEGER NOT NULL, state TEXT NOT NULL,
+      received_bytes INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL, expires_at TEXT NOT NULL, committed_revision INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS snapshot_transfer_parts (
+      transfer_id TEXT NOT NULL, part_index INTEGER NOT NULL, size INTEGER NOT NULL,
+      digest TEXT NOT NULL, payload BLOB NOT NULL, PRIMARY KEY (transfer_id, part_index),
+      FOREIGN KEY(transfer_id) REFERENCES snapshot_transfers(id) ON DELETE CASCADE
+    );
   `);
+  db.prepare("INSERT OR IGNORE INTO sync_meta (key, value) VALUES ('revision', 0)").run();
 
   ensureColumn(db, 'connections', 'profile_json', 'TEXT');
   ensureColumn(db, 'rooms', 'session_ids', "TEXT NOT NULL DEFAULT '{}'");
@@ -102,6 +134,10 @@ export function migrate(db) {
   ensureColumn(db, 'rooms', 'last_summary_json', 'TEXT');
   ensureColumn(db, 'rooms', 'memory_capsule_json', 'TEXT');
   ensureColumn(db, 'rooms', 'roleplay_json', 'TEXT');
+  ensureColumn(db, 'messages', 'hermes_run_id', 'TEXT');
+  ensureColumn(db, 'messages', 'hermes_transport', 'TEXT');
+  ensureColumn(db, 'messages', 'hermes_run_status', 'TEXT');
+  ensureColumn(db, 'messages', 'recovery_attempts', 'INTEGER');
 }
 
 
@@ -111,7 +147,7 @@ function ensureColumn(db, tableName, columnName, definition) {
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }
 
-export function createApp({ db, apiKey = process.env.LAPHINY_SYNC_API_KEY || '' }) {
+export function createApp({ db, apiKey = process.env.LAPHINY_SYNC_API_KEY || '', now = () => new Date().toISOString() }) {
   return async function app(request, response) {
     setCors(response);
     if (request.method === 'OPTIONS') {
@@ -130,7 +166,48 @@ export function createApp({ db, apiKey = process.env.LAPHINY_SYNC_API_KEY || '' 
       const path = url.pathname;
 
       if (request.method === 'GET' && path === '/v1/health') {
-        sendJson(response, 200, { status: 'ok', updatedAt: latestUpdatedAt(db) });
+        sendJson(response, 200, {
+          status: 'ok',
+          updatedAt: latestUpdatedAt(db),
+          syncRevision: readSyncRevision(db),
+          capabilities: {
+            snapshotTransfers: {
+              protocol: SNAPSHOT_TRANSFER_PROTOCOL,
+              maxPartBytes: MAX_TRANSFER_PART_BYTES,
+              maxTransferBytes: MAX_TRANSFER_BYTES,
+              maxParts: MAX_TRANSFER_PARTS,
+              ttlMs: TRANSFER_TTL_MS,
+            },
+          },
+        });
+        return;
+      }
+
+      if (request.method === 'POST' && path === '/v1/snapshot-transfers') {
+        cleanupSnapshotTransfers(db, now());
+        sendJson(response, 200, initializeSnapshotTransfer(db, await readJson(request), now()));
+        return;
+      }
+
+      const statusMatch = path.match(/^\/v1\/snapshot-transfers\/([^/]+)$/u);
+      if (request.method === 'GET' && statusMatch) {
+        cleanupSnapshotTransfers(db, now());
+        sendJson(response, 200, readSnapshotTransferStatus(db, decodeURIComponent(statusMatch[1]), now()));
+        return;
+      }
+
+      const partMatch = path.match(/^\/v1\/snapshot-transfers\/([^/]+)\/parts\/(\d+)$/u);
+      if (request.method === 'PUT' && partMatch) {
+        cleanupSnapshotTransfers(db, now());
+        const payload = await readBody(request, MAX_TRANSFER_PART_BYTES);
+        sendJson(response, 200, storeSnapshotTransferPart(db, decodeURIComponent(partMatch[1]), Number(partMatch[2]), payload, now()));
+        return;
+      }
+
+      const commitMatch = path.match(/^\/v1\/snapshot-transfers\/([^/]+)\/commit$/u);
+      if (request.method === 'POST' && commitMatch) {
+        cleanupSnapshotTransfers(db, now());
+        sendJson(response, 200, commitSnapshotTransfer(db, decodeURIComponent(commitMatch[1]), now()));
         return;
       }
 
@@ -160,7 +237,10 @@ export function createApp({ db, apiKey = process.env.LAPHINY_SYNC_API_KEY || '' 
 
       sendJson(response, 404, { error: 'Not found' });
     } catch (error) {
-      sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      sendJson(response, error instanceof HttpError ? error.status : 500, {
+        error: error instanceof HttpError ? error.code : 'internal_error',
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 }
@@ -178,23 +258,166 @@ export function startServer(options = {}) {
 }
 
 export function mergeSnapshot(db, snapshot) {
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
-    for (const connection of snapshot.connections ?? []) upsertConnection(db, connection);
-    for (const room of snapshot.rooms ?? []) upsertRoom(db, room);
-    for (const [roomId, messages] of Object.entries(snapshot.messagesByRoom ?? {})) {
-      for (const message of messages) upsertMessage(db, { ...message, roomId: message.roomId ?? roomId });
-    }
-    for (const event of snapshot.squareEvents ?? []) upsertSquareEvent(db, event);
-    upsertExtraState(db, 'collaborationEvents', snapshot.collaborationEvents ?? []);
-    upsertExtraState(db, 'delegationTasks', snapshot.delegationTasks ?? []);
-    upsertExtraState(db, 'teamTemplates', snapshot.teamTemplates ?? []);
-    upsertExtraState(db, 'profileVersions', snapshot.profileVersions ?? []);
+    mergeSnapshotInTransaction(db, snapshot);
+    bumpSyncRevision(db);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
+}
+
+function mergeSnapshotInTransaction(db, snapshot) {
+  for (const connection of snapshot.connections ?? []) upsertConnection(db, connection);
+  for (const room of snapshot.rooms ?? []) upsertRoom(db, room);
+  for (const [roomId, messages] of Object.entries(snapshot.messagesByRoom ?? {})) {
+    for (const message of messages) upsertMessage(db, { ...message, roomId: message.roomId ?? roomId });
+  }
+  for (const event of snapshot.squareEvents ?? []) upsertSquareEvent(db, event);
+  upsertExtraState(db, 'collaborationEvents', snapshot.collaborationEvents ?? []);
+  upsertExtraState(db, 'delegationTasks', snapshot.delegationTasks ?? []);
+  upsertExtraState(db, 'teamTemplates', snapshot.teamTemplates ?? []);
+  upsertExtraState(db, 'profileVersions', snapshot.profileVersions ?? []);
+}
+
+function readSyncRevision(db) {
+  return Number(db.prepare("SELECT value FROM sync_meta WHERE key = 'revision'").get()?.value ?? 0);
+}
+
+function bumpSyncRevision(db) {
+  db.prepare("UPDATE sync_meta SET value = value + 1 WHERE key = 'revision'").run();
+  return readSyncRevision(db);
+}
+
+function initializeSnapshotTransfer(db, input, timestamp) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invalid_payload', 'Snapshot transfer must be an object');
+  if (input.protocol != null && input.protocol !== SNAPSHOT_TRANSFER_PROTOCOL) throw new HttpError(400, 'unsupported_protocol', `Expected ${SNAPSHOT_TRANSFER_PROTOCOL}`);
+  const id = requireTransferId(input.transferId);
+  const digest = requireSha256(input.sha256);
+  const totalBytes = requirePositiveInteger(input.totalBytes, 'totalBytes');
+  const totalParts = requirePositiveInteger(input.totalParts, 'totalParts');
+  const baseRevision = requireNonNegativeInteger(input.baseRevision, 'baseRevision');
+  if (totalBytes > MAX_TRANSFER_BYTES) throw new HttpError(413, 'transfer_too_large', `Snapshot transfer exceeds ${MAX_TRANSFER_BYTES} bytes`);
+  if (totalParts > MAX_TRANSFER_PARTS) throw new HttpError(413, 'too_many_parts', `Snapshot transfer exceeds ${MAX_TRANSFER_PARTS} parts`);
+  const existing = db.prepare('SELECT * FROM snapshot_transfers WHERE id = ?').get(id);
+  if (existing) {
+    if (existing.digest !== digest || Number(existing.total_bytes) !== totalBytes || Number(existing.total_parts) !== totalParts || (existing.state !== 'committed' && Number(existing.base_revision) !== baseRevision)) {
+      throw new HttpError(409, 'transfer_conflict', 'transferId is already used by a different snapshot');
+    }
+    return mapSnapshotTransferStatus(db, existing);
+  }
+  const activeBytes = Number(db.prepare("SELECT COALESCE(SUM(total_bytes), 0) AS value FROM snapshot_transfers WHERE state = 'uploading'").get().value);
+  if (activeBytes + totalBytes > MAX_ACTIVE_TRANSFER_BYTES) throw new HttpError(507, 'active_transfer_limit', 'Active snapshot transfers exceed the server storage limit');
+  const expiresAt = new Date(Date.parse(timestamp) + TRANSFER_TTL_MS).toISOString();
+  db.prepare(`INSERT INTO snapshot_transfers
+    (id,digest,total_bytes,total_parts,base_revision,state,received_bytes,created_at,updated_at,expires_at,committed_revision)
+    VALUES (?,?,?,?,?,'uploading',0,?,?,?,NULL)`)
+    .run(id, digest, totalBytes, totalParts, baseRevision, timestamp, timestamp, expiresAt);
+  return mapSnapshotTransferStatus(db, db.prepare('SELECT * FROM snapshot_transfers WHERE id = ?').get(id));
+}
+
+function readSnapshotTransferStatus(db, rawId, timestamp) {
+  const id = requireTransferId(rawId);
+  const row = db.prepare('SELECT * FROM snapshot_transfers WHERE id = ?').get(id);
+  if (!row) throw new HttpError(404, 'transfer_not_found', 'Snapshot transfer was not found or has expired');
+  if (row.state === 'uploading' && Date.parse(row.expires_at) <= Date.parse(timestamp)) throw new HttpError(410, 'transfer_expired', 'Snapshot transfer has expired');
+  return mapSnapshotTransferStatus(db, row);
+}
+
+function storeSnapshotTransferPart(db, rawId, partIndex, payload, timestamp) {
+  const id = requireTransferId(rawId);
+  const row = db.prepare('SELECT * FROM snapshot_transfers WHERE id = ?').get(id);
+  if (!row) throw new HttpError(404, 'transfer_not_found', 'Snapshot transfer was not found or has expired');
+  if (row.state !== 'uploading') return mapSnapshotTransferStatus(db, row);
+  if (!Number.isSafeInteger(partIndex) || partIndex < 0 || partIndex >= Number(row.total_parts)) throw new HttpError(400, 'invalid_part', 'Part index is outside the transfer manifest');
+  if (payload.length === 0) throw new HttpError(400, 'empty_part', 'Snapshot transfer parts must not be empty');
+  const digest = createHash('sha256').update(payload).digest('hex');
+  const existing = db.prepare('SELECT size,digest,payload FROM snapshot_transfer_parts WHERE transfer_id = ? AND part_index = ?').get(id, partIndex);
+  if (existing) {
+    if (existing.digest !== digest || Number(existing.size) !== payload.length || !Buffer.from(existing.payload).equals(payload)) throw new HttpError(409, 'part_conflict', 'This part index already contains different data');
+    return mapSnapshotTransferStatus(db, row);
+  }
+  if (Number(row.received_bytes) + payload.length > Number(row.total_bytes)) throw new HttpError(413, 'transfer_size_mismatch', 'Received parts exceed the declared transfer size');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('INSERT INTO snapshot_transfer_parts (transfer_id,part_index,size,digest,payload) VALUES (?,?,?,?,?)').run(id, partIndex, payload.length, digest, payload);
+    db.prepare('UPDATE snapshot_transfers SET received_bytes=received_bytes+?, updated_at=? WHERE id=?').run(payload.length, timestamp, id);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return mapSnapshotTransferStatus(db, db.prepare('SELECT * FROM snapshot_transfers WHERE id = ?').get(id));
+}
+
+function commitSnapshotTransfer(db, rawId, timestamp) {
+  const id = requireTransferId(rawId);
+  const row = db.prepare('SELECT * FROM snapshot_transfers WHERE id = ?').get(id);
+  if (!row) throw new HttpError(404, 'transfer_not_found', 'Snapshot transfer was not found or has expired');
+  if (row.state === 'committed') return mapSnapshotTransferStatus(db, row);
+  const parts = db.prepare('SELECT part_index,payload FROM snapshot_transfer_parts WHERE transfer_id=? ORDER BY part_index').all(id);
+  if (parts.length !== Number(row.total_parts) || parts.some((part, index) => Number(part.part_index) !== index)) throw new HttpError(409, 'parts_missing', 'Snapshot transfer is not complete');
+  const payload = Buffer.concat(parts.map((part) => Buffer.from(part.payload)));
+  if (payload.length !== Number(row.total_bytes)) throw new HttpError(409, 'transfer_size_mismatch', 'Snapshot transfer size does not match its manifest');
+  if (createHash('sha256').update(payload).digest('hex') !== row.digest) throw new HttpError(409, 'transfer_digest_mismatch', 'Snapshot transfer SHA-256 does not match its manifest');
+  let snapshot;
+  try { snapshot = JSON.parse(payload.toString('utf8')); } catch { throw new HttpError(400, 'invalid_json', 'Snapshot transfer is not valid JSON'); }
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) throw new HttpError(400, 'invalid_payload', 'Snapshot must be an object');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const current = db.prepare('SELECT * FROM snapshot_transfers WHERE id=?').get(id);
+    if (readSyncRevision(db) !== Number(current.base_revision)) throw new HttpError(409, 'revision_conflict', `Sync revision changed from ${current.base_revision} to ${readSyncRevision(db)}`);
+    mergeSnapshotInTransaction(db, snapshot);
+    const committedRevision = bumpSyncRevision(db);
+    const expiresAt = new Date(Date.parse(timestamp) + TRANSFER_RECEIPT_TTL_MS).toISOString();
+    db.prepare("UPDATE snapshot_transfers SET state='committed',updated_at=?,expires_at=?,committed_revision=? WHERE id=?").run(timestamp, expiresAt, committedRevision, id);
+    db.prepare('DELETE FROM snapshot_transfer_parts WHERE transfer_id=?').run(id);
+    db.exec('COMMIT');
+    return mapSnapshotTransferStatus(db, db.prepare('SELECT * FROM snapshot_transfers WHERE id=?').get(id));
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function mapSnapshotTransferStatus(db, row) {
+  return {
+    protocol: SNAPSHOT_TRANSFER_PROTOCOL, transferId: row.id, state: row.state, sha256: row.digest,
+    totalBytes: Number(row.total_bytes), totalParts: Number(row.total_parts), receivedBytes: Number(row.received_bytes),
+    receivedParts: row.state === 'committed' ? [] : db.prepare('SELECT part_index FROM snapshot_transfer_parts WHERE transfer_id=? ORDER BY part_index').all(row.id).map((part) => Number(part.part_index)),
+    baseRevision: Number(row.base_revision), committedRevision: row.committed_revision == null ? undefined : Number(row.committed_revision),
+    expiresAt: row.expires_at, updatedAt: row.updated_at,
+  };
+}
+
+function cleanupSnapshotTransfers(db, timestamp = new Date().toISOString()) {
+  db.prepare('DELETE FROM snapshot_transfers WHERE expires_at <= ?').run(timestamp);
+}
+
+function requireTransferId(value) {
+  const id = String(value ?? '').trim();
+  if (!id || id.length > 200) throw new HttpError(400, 'invalid_transfer_id', 'transferId is required and must not exceed 200 characters');
+  return id;
+}
+
+function requireSha256(value) {
+  const digest = String(value ?? '').trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/u.test(digest)) throw new HttpError(400, 'invalid_digest', 'sha256 must be a SHA-256 hex digest');
+  return digest;
+}
+
+function requirePositiveInteger(value, label) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number <= 0) throw new HttpError(400, 'invalid_manifest', `${label} must be a positive integer`);
+  return number;
+}
+
+function requireNonNegativeInteger(value, label) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0) throw new HttpError(400, 'invalid_manifest', `${label} must be a non-negative integer`);
+  return number;
 }
 
 export function readSnapshot(db) {
@@ -292,8 +515,8 @@ function upsertRoom(db, room) {
 
 function upsertMessage(db, message) {
   db.prepare(`
-    INSERT INTO messages (id, room_id, role, author_id, author_name, content, status, error, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, room_id, role, author_id, author_name, content, status, error, hermes_run_id, hermes_transport, hermes_run_status, recovery_attempts, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       room_id = excluded.room_id,
       role = excluded.role,
@@ -302,6 +525,10 @@ function upsertMessage(db, message) {
       content = excluded.content,
       status = excluded.status,
       error = excluded.error,
+      hermes_run_id = excluded.hermes_run_id,
+      hermes_transport = excluded.hermes_transport,
+      hermes_run_status = excluded.hermes_run_status,
+      recovery_attempts = excluded.recovery_attempts,
       created_at = excluded.created_at
   `).run(
     message.id,
@@ -312,6 +539,10 @@ function upsertMessage(db, message) {
     message.content,
     message.status,
     message.error ?? null,
+    message.hermesRunId ?? null,
+    message.hermesTransport ?? null,
+    message.hermesRunStatus ?? null,
+    message.recoveryAttempts ?? null,
     message.createdAt,
   );
   db.prepare('DELETE FROM attachments WHERE message_id = ?').run(message.id);
@@ -451,6 +682,10 @@ function readMessagesByRoom(db) {
       attachments: attachmentsByMessage.get(row.id) ?? undefined,
       status: row.status,
       error: row.error ?? undefined,
+      hermesRunId: row.hermes_run_id ?? undefined,
+      hermesTransport: row.hermes_transport ?? undefined,
+      hermesRunStatus: row.hermes_run_status ?? undefined,
+      recoveryAttempts: row.recovery_attempts ?? undefined,
       createdAt: row.created_at,
     };
     const current = messagesByRoom[row.room_id] ?? [];
@@ -498,10 +733,25 @@ function latestUpdatedAt(db) {
 }
 
 async function readJson(request) {
+  const text = (await readBody(request, MAX_JSON_BYTES)).toString('utf8');
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new HttpError(400, 'invalid_json', 'Request body is not valid JSON');
+  }
+}
+
+async function readBody(request, maxBytes) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
-  const text = Buffer.concat(chunks).toString('utf8');
-  return text ? JSON.parse(text) : {};
+  let size = 0;
+  const declaredLength = Number(request.headers['content-length']);
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new HttpError(413, 'payload_too_large', `Request body exceeds ${maxBytes} bytes`);
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > maxBytes) throw new HttpError(413, 'payload_too_large', `Request body exceeds ${maxBytes} bytes`);
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 function sendJson(response, status, payload) {

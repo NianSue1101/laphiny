@@ -161,7 +161,7 @@ export const MessageBubble = memo(function MessageBubble({
           {message.status === 'running' ? (
             <MiniButton icon="stop-circle-outline" label={stopping ? '停止中' : '停止'} onPress={() => onStopMessage(message.id)} />
           ) : message.origin !== 'proactive' ? (
-            <MiniButton icon="refresh-outline" label="重试" onPress={() => onRetryMessage(message)} />
+            <MiniButton icon="refresh-outline" label={message.status === 'interrupted' ? '恢复' : '重试'} onPress={() => onRetryMessage(message)} />
           ) : null}
         </View>
       ) : null}

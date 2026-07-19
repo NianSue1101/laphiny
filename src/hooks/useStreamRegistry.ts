@@ -66,7 +66,7 @@ export function useStreamRegistry(updateMessage: UpdateMessage) {
   function markStreamPhase(messageId: string, phase: AgentStreamPhase, error?: string) {
     return emitStreamEvent(messageId, {
       phase,
-      kind: phase === 'completed' || phase === 'cancelled' || phase === 'failed' ? 'terminal' : 'status',
+      kind: phase === 'completed' || phase === 'cancelled' || phase === 'failed' || phase === 'interrupted' ? 'terminal' : 'status',
       error,
     });
   }

@@ -36,11 +36,13 @@ export function MobileRoomPicker({
   return (
     <ScrollView style={styles.mobileRoomPicker} contentContainerStyle={styles.mobileRoomPickerContent}>
       <View style={styles.mobileRoomPickerHeader}>
-        <View>
+        <View style={styles.mobileRoomPickerHeaderCopy}>
           <Text style={[styles.sectionTitle, isDarkMode && styles.titleDark]}>选择房间</Text>
           <Text style={[styles.help, isDarkMode && styles.subtitleDark]}>点卡片或“进入”开始聊天；点“管理”会回到房间页原地管理，不再跳进聊天旧详情。</Text>
         </View>
-        <SecondaryButton icon="add-circle-outline" label="新房间" onPress={onCreateRoom} />
+        <View style={styles.mobileRoomPickerHeaderAction}>
+          <SecondaryButton icon="add-circle-outline" label="新房间" onPress={onCreateRoom} />
+        </View>
       </View>
       {rooms.length === 0 ? (
         <EmptyState
@@ -73,8 +75,8 @@ export function MobileRoomPicker({
               </Text>
             </TouchableOpacity>
             <View style={styles.mobileRoomCardFooter}>
-              <Text style={styles.help}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes · 上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
-              <View style={styles.buttonRowCompact}>
+              <Text style={[styles.help, styles.mobileRoomCardMeta]}>{room.kind === 'group' ? '群聊' : '单聊'} · {room.members.length} 位 Hermes · 上下文 {room.contextLimit ?? DEFAULT_CONTEXT_LIMIT}</Text>
+              <View style={[styles.buttonRowCompact, styles.mobileRoomCardActions]}>
                 <MiniButton icon="options-outline" label="管理" onPress={() => onManageRoom(room.id)} />
                 <MiniButton icon="chatbubble-ellipses-outline" label="进入" onPress={() => onOpenRoom(room.id)} />
               </View>

@@ -50,6 +50,29 @@ Returns the full app snapshot used for simple multi-device bootstrap.
 ### `PUT /v1/snapshot`
 
 Accepts the same snapshot shape and returns the merged snapshot stored by the backend.
+
+Legacy `GET`/`PUT` remain available for small snapshots. New clients inspect `GET /v1/health`; when
+`capabilities.snapshotTransfers.protocol` is `laphiny.snapshot-transfer.v1`, snapshots larger than the
+legacy request-body budget use the resumable transfer flow below. A server can advertise
+`maxPartBytes`, `maxTransferBytes`, `maxParts`, and `ttlMs` together with its monotonic
+`syncRevision`.
+
+### Resumable large snapshot upload
+
+1. `POST /v1/snapshot-transfers` initializes or resumes a client-generated stable `transferId` with
+   `sha256`, `totalBytes`, `totalParts`, and the `baseRevision` read from health.
+2. `PUT /v1/snapshot-transfers/:id/parts/:index` uploads one UTF-8 payload part. Repeating an identical
+   part is successful; reusing an index with different bytes returns `409 part_conflict`.
+3. `GET /v1/snapshot-transfers/:id` returns durable `receivedParts`, byte counts, expiry, state, and a
+   commit receipt so a client can recover after an ambiguous timeout or disconnect.
+4. `POST /v1/snapshot-transfers/:id/commit` verifies every part, the declared size and SHA-256, then
+   applies the complete JSON snapshot and advances the revision in one SQLite transaction. It returns
+   a small receipt rather than echoing the full snapshot. Repeating commit returns the same receipt.
+
+Commit returns `409 revision_conflict` if another legacy or transfer write advanced the server after
+initialization; no partial snapshot is applied. Incomplete transfers expire and are cleaned up, while
+committed receipts are retained longer for safe response-loss retries. Deployments should keep the
+SQLite volume persistent because transfer state and receipts live in the same database.
 The backend should merge by `id` for connections, rooms, messages, and square events.
 
 ### `GET /v1/events?since=<iso-date>`

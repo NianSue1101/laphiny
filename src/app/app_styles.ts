@@ -97,8 +97,18 @@ export const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 12,
   },
+  headerCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+  },
   brandBlock: {
     flex: 1,
+    minWidth: 120,
+  },
+  brandBlockCompact: {
+    flex: 0,
+    width: '100%',
   },
   title: {
     fontSize: 28,
@@ -110,6 +120,8 @@ export const styles = StyleSheet.create({
     color: '#6b7280',
   },
   headerStats: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
@@ -475,6 +487,14 @@ export const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
   },
+  mobileRoomPickerHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  mobileRoomPickerHeaderAction: {
+    flexShrink: 0,
+  },
   mobileRoomCard: {
     gap: 9,
     padding: 12,
@@ -491,9 +511,23 @@ export const styles = StyleSheet.create({
   },
   mobileRoomCardFooter: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  headerStatsCompact: {
+    flex: 0,
+    width: '100%',
+    justifyContent: 'flex-start',
+  },
+  mobileRoomCardMeta: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  mobileRoomCardActions: {
+    flexShrink: 0,
   },
   roomRail: {
     paddingHorizontal: 20,

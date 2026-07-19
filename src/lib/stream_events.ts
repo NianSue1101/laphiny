@@ -16,17 +16,18 @@ export type GlobalStreamSummary = {
   byPhase: Partial<Record<AgentStreamPhase, number>>;
 };
 
-const TERMINAL_PHASES = new Set<AgentStreamPhase>(['completed', 'cancelled', 'failed']);
+const TERMINAL_PHASES = new Set<AgentStreamPhase>(['completed', 'cancelled', 'failed', 'interrupted']);
 const ALLOWED_PHASES: Record<AgentStreamPhase, AgentStreamPhase[]> = {
-  queued: ['connecting', 'cancelled', 'failed'],
-  connecting: ['thinking', 'responding', 'delegating', 'reviewing', 'completed', 'cancelled', 'failed'],
-  thinking: ['responding', 'delegating', 'reviewing', 'completed', 'cancelled', 'failed'],
-  responding: ['thinking', 'delegating', 'reviewing', 'completed', 'cancelled', 'failed'],
-  delegating: ['responding', 'reviewing', 'completed', 'cancelled', 'failed'],
-  reviewing: ['responding', 'delegating', 'completed', 'cancelled', 'failed'],
+  queued: ['connecting', 'cancelled', 'failed', 'interrupted'],
+  connecting: ['thinking', 'responding', 'delegating', 'reviewing', 'completed', 'cancelled', 'failed', 'interrupted'],
+  thinking: ['responding', 'delegating', 'reviewing', 'completed', 'cancelled', 'failed', 'interrupted'],
+  responding: ['thinking', 'delegating', 'reviewing', 'completed', 'cancelled', 'failed', 'interrupted'],
+  delegating: ['responding', 'reviewing', 'completed', 'cancelled', 'failed', 'interrupted'],
+  reviewing: ['responding', 'delegating', 'completed', 'cancelled', 'failed', 'interrupted'],
   completed: [],
   cancelled: [],
   failed: [],
+  interrupted: [],
 };
 
 export type StreamEventInput = Omit<AgentStreamEvent, 'id' | 'sequence' | 'createdAt'> & {
@@ -99,6 +100,7 @@ export function getAgentStreamPhaseLabel(phase: AgentStreamPhase): string {
   if (phase === 'reviewing') return '审查中';
   if (phase === 'completed') return '已完成';
   if (phase === 'cancelled') return '已取消';
+  if (phase === 'interrupted') return '等待恢复';
   return '失败';
 }
 
@@ -153,11 +155,14 @@ export function normalizeInterruptedChatMessages(messages: ChatMessage[], now: s
     if (message.authorId === 'user' || !['queued', 'running'].includes(message.status)) return message;
     return {
       ...message,
-      content: message.content || '上次回复在应用退出时中断。',
-      status: 'stopped',
-      streamPhase: 'cancelled',
+      content: message.content || '回复因网络、后台或应用退出而中断，等待恢复。',
+      status: 'interrupted',
+      streamPhase: 'interrupted',
       streamUpdatedAt: now,
-      error: message.error || '上次运行已中断，可以安全重试。',
+      hermesRunStatus: message.hermesRunId ? 'reconnecting' : message.hermesRunStatus,
+      error: message.error || (message.hermesRunId
+        ? '正在重新连接 Hermes 运行并核对最终结果。'
+        : '旧版 Hermes 流已中断，需要发起一次新的续写请求。'),
     };
   });
 }

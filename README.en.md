@@ -12,6 +12,7 @@ Chinese documentation: [README.md](./README.md)
 
 - [Positioning](#positioning)
 - [Features](#features)
+- [What Is New In v0.35.1](#what-is-new-in-v0351)
 - [What Is New In v0.35.0](#what-is-new-in-v0350)
 - [What Is New In v0.34.0](#what-is-new-in-v0340)
 - [What Is New In v0.33.0](#what-is-new-in-v0330)
@@ -152,6 +153,16 @@ Laphiny does not overwrite an agent's private Hermes soul. Growth happens at the
 - Optional self-hosted `laphiny-sync` service for snapshots, settings, conflict preflight, events, and Agent-initiated replies to an exact room
 
 ---
+
+## What Is New In v0.35.1
+
+- **Disconnect recovery**: Laphiny now uses the Hermes Runs API when the Gateway explicitly advertises it. The `run_id` is persisted immediately, so the same server-side task can be reconciled after network loss, backgrounding, or screen lock without starting a duplicate Agent turn.
+- **Safe fallback for older Gateways**: classic Chat Completions and Responses SSE requests are cancelled by Hermes when their client disconnects. Laphiny now detects unexpected EOF, remote failure, and length truncation. It may start one clearly labelled continuation only when no tool or permission side effects were observed; otherwise it preserves the partial reply and asks for manual confirmation.
+- **Mobile layout fix**: prevents horizontal overflow in the room picker on narrow screens and with large fonts. Leaving a chat immediately invalidates queued scroll work, so a stale animation frame cannot scroll the wrong view.
+- **Large snapshot sync**: the updated sync server negotiates a resumable transfer protocol with UTF-8-safe parts, SHA-256 verification, idempotent retries, status queries, commit receipts, and `baseRevision` CAS. Small snapshots retain the legacy endpoint; a legacy server that returns 413 now produces an actionable upgrade message.
+- **Recovery state survives sync**: run IDs, transport, recovery attempts, and the `interrupted` status round-trip through snapshots without turning unfinished replies into successful ones.
+
+Limitation: reconnecting to the same server-side task requires a Gateway that explicitly supports the Runs API. Older SSE endpoints do not provide true resume semantics, and Laphiny will not infer hidden server state or automatically replay work that may have side effects.
 
 ## What Is New In v0.35.0
 
@@ -368,6 +379,14 @@ Always build web assets with:
 ```bash
 npm run web:build
 ```
+
+To rebuild, start a local production preview, and open it in the browser in one step, run:
+
+```bash
+npm run web:preview
+```
+
+On Windows, you can also double-click `打开Web预览.cmd` in the repository root. The preview opens `http://127.0.0.1:8080/laphiny/` by default, automatically tries following ports when needed, and prints the actual URL. Press `Ctrl+C` to stop it.
 
 Do not call `npx expo export --platform web` directly. This project is deployed under the `/laphiny/` subpath, and `npm run web:build` runs `scripts/fix-web-paths.mjs` after export so `/_expo`, `/assets`, and favicon references are rewritten correctly.
 

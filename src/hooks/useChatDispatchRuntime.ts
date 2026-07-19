@@ -7,6 +7,7 @@ import {
   buildChatHistory,
   buildChatHistoryForDelegation,
   buildChatHistoryForSequentialTurn,
+  buildInterruptedReplyContinuationHistory,
 } from '../app/chat_history';
 import {
   getErrorMessage,
@@ -27,17 +28,26 @@ import { stripRoomStatePatchBlocks } from '../lib/room_growth';
 import { getRoleplayTargets, isRoleplayUserTurn, makeDefaultRoleplayConfig, parseRoleplayCommand } from '../lib/roleplay';
 import { makeDefaultRoleplayArchive } from '../lib/stage4_plus';
 import { runHermesMemberCompletion } from '../lib/chat_runtime';
-import { HermesTransportError } from '../lib/hermes_client';
+import { HermesStreamTerminationError, HermesTransportError } from '../lib/hermes_client';
+import { getInterruptedRecoveryKind } from '../lib/stream_recovery';
 import type { Attachment, ChatMessage, RoleplayConfig, Room, RoomMember } from '../types';
 
 const MAX_GOAL_REVIEW_ROUNDS = 5;
 const MAX_GOAL_DELEGATIONS_PER_ROUND = 3;
+
+function isRecoverableClassicStreamError(error: unknown): boolean {
+  if (error instanceof HermesTransportError || error instanceof HermesStreamTerminationError) return true;
+  if (error instanceof TypeError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /network|fetch|connection|socket|stream|eof|timed?\s*out|offline|closed/iu.test(message);
+}
 
 export function useChatDispatchRuntime(options: any) {
   // Requests to the same Soul preserve order; different members remain concurrent.
   const localSchedulerRef = useRef(new AgentTaskScheduler());
   const schedulerRef = options.schedulerRef ?? localSchedulerRef;
   const {
+    activeStreamIds,
     appendCollaborationEvent,
     appendDiagnosticLog,
     appendMessagesToRoom,
@@ -115,7 +125,9 @@ export function useChatDispatchRuntime(options: any) {
     const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
 
     let streamedText = '';
-    updateMessageInRoom(room.id, placeholderId, { content: '', status: 'running', error: undefined });
+    let submittedRunId: string | undefined;
+    let selectedTransport: ChatMessage['hermesTransport'] = 'stream';
+    updateMessageInRoom(room.id, placeholderId, { content: '', status: 'running', error: undefined, recoveryAttempts: 0 });
 
     try {
       const reply = await runHermesMemberCompletion({
@@ -127,12 +139,23 @@ export function useChatDispatchRuntime(options: any) {
         sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
         timeoutMs: 120_000,
         signal: controller.signal,
+        onRunSubmitted: (runId) => {
+          submittedRunId = runId;
+          selectedTransport = 'runs';
+          updateMessageInRoom(room.id, placeholderId, {
+            hermesRunId: runId,
+            hermesTransport: 'runs',
+            hermesRunStatus: 'submitted',
+          });
+        },
         onProgress: (progress) => {
           streamedText = progress.content;
           queueStreamMessageUpdate(room.id, placeholderId, progress);
         },
       });
       streamedText = reply.rawText;
+      selectedTransport = reply.hermesTransport;
+      submittedRunId = reply.hermesRunId ?? submittedRunId;
 
       flushStreamMessage(room.id, placeholderId);
       const permissionRequest = applyAlwaysPermissionIfNeeded(member.connectionId, reply.permissionRequest);
@@ -151,6 +174,9 @@ export function useChatDispatchRuntime(options: any) {
         delegationAttemptId,
         permissionRequest,
         status: 'sent',
+        hermesRunId: submittedRunId,
+        hermesTransport: selectedTransport,
+        hermesRunStatus: selectedTransport === 'runs' ? 'completed' : undefined,
         createdAt: new Date().toISOString(),
       };
       updateMessageInRoom(room.id, placeholderId, {
@@ -162,6 +188,10 @@ export function useChatDispatchRuntime(options: any) {
         delegationAttemptId,
         permissionRequest,
         status: 'sent',
+        hermesRunId: submittedRunId,
+        hermesTransport: selectedTransport,
+        hermesRunStatus: selectedTransport === 'runs' ? 'completed' : undefined,
+        error: undefined,
       });
       markStreamPhase(placeholderId, 'completed');
       if (delegationTaskId && permissionRequest?.status === 'pending') {
@@ -189,6 +219,29 @@ export function useChatDispatchRuntime(options: any) {
           status: 'stopped',
         });
         transitionTask(delegationTaskId, delegationAttemptId, { status: 'cancelled', resultMessageId: placeholderId });
+        return;
+      }
+
+      if (submittedRunId || isRecoverableClassicStreamError(error)) {
+        const errorMessage = getErrorMessage(error);
+        markStreamPhase(placeholderId, 'interrupted', errorMessage);
+        updateMessageInRoom(room.id, placeholderId, {
+          status: 'interrupted',
+          streamPhase: 'interrupted',
+          error: submittedRunId
+            ? '与 Hermes 运行的连接已中断，将自动重新连接并核对最终结果。'
+            : '旧版 Hermes 流已中断，将发起一次安全续写。',
+          content: streamedText.trim() || '回复连接已中断，等待恢复。',
+          hermesRunId: submittedRunId,
+          hermesTransport: submittedRunId ? 'runs' : 'stream',
+          hermesRunStatus: submittedRunId ? 'reconnecting' : undefined,
+          recoveryAttempts: 0,
+        });
+        transitionTask(delegationTaskId, delegationAttemptId, {
+          status: submittedRunId ? 'outcome_unknown' : 'interrupted',
+          error: errorMessage,
+          resultMessageId: placeholderId,
+        });
         return;
       }
 
@@ -220,6 +273,165 @@ export function useChatDispatchRuntime(options: any) {
       return;
     }
     updateDelegationTask(taskId, patch);
+  }
+
+  async function resumeInterruptedReply(room: Room, message: ChatMessage): Promise<void> {
+    if (message.authorId === 'user' || message.authorId === 'system') return;
+    if (activeStreamIds?.[message.id]) return;
+    const recoveryKind = getInterruptedRecoveryKind(message);
+    if (recoveryKind === 'manual') return;
+    const member = room.members.find((item) => item.enabled && item.connectionId === message.authorId);
+    const connection = member ? connectionById.get(member.connectionId) : undefined;
+    if (!member || !connection) return;
+
+    await schedulerRef.current.schedule({ roomId: room.id, connectionId: member.connectionId }, async () => {
+      if (activeStreamIds?.[message.id]) return;
+      const controller = new AbortController();
+      const existingContent = message.content.trim();
+      const nextAttempt = (message.recoveryAttempts ?? 0) + 1;
+      let submittedRunId = message.hermesRunId;
+      let streamedContinuation = '';
+
+      startStream(message.id, room.id, member.connectionId);
+      registerStreamController(message.id, controller);
+      setStreamActive(message.id, true);
+      markStreamPhase(message.id, 'connecting');
+      updateMessageInRoom(room.id, message.id, {
+        status: 'running',
+        error: undefined,
+        recoveryAttempts: nextAttempt,
+        hermesRunStatus: recoveryKind === 'reattach' ? 'reconnecting' : message.hermesRunStatus,
+      });
+      transitionTask(message.delegationTaskId, message.delegationAttemptId, { status: 'running', resultMessageId: message.id });
+      const releaseBackgroundAgentTask = await beginBackgroundAgentTask();
+
+      try {
+        const history = recoveryKind === 'continue'
+          ? buildInterruptedReplyContinuationHistory(
+              messagesByRoom[room.id] ?? [],
+              room,
+              member,
+              message,
+              connections,
+              room.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
+            )
+          : [];
+        const reply = await runHermesMemberCompletion({
+          connection,
+          messages: history,
+          resumeRunId: recoveryKind === 'reattach' ? message.hermesRunId : undefined,
+          sessionId: room.sessionIds[connection.id],
+          sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
+          timeoutMs: 180_000,
+          signal: controller.signal,
+          onRunSubmitted: (runId) => {
+            submittedRunId = runId;
+            updateMessageInRoom(room.id, message.id, {
+              hermesRunId: runId,
+              hermesTransport: 'runs',
+              hermesRunStatus: 'reconnecting',
+            });
+          },
+          onProgress: (progress) => {
+            if (recoveryKind === 'continue') {
+              streamedContinuation = progress.content;
+              queueStreamMessageUpdate(room.id, message.id, {
+                ...progress,
+                content: [existingContent, streamedContinuation].filter(Boolean).join('\n'),
+              });
+            } else {
+              // Reattached event buffers are not guaranteed to start at byte
+              // zero. Keep the persisted prefix stable until GET status gives
+              // the authoritative full output.
+              queueStreamMessageUpdate(room.id, message.id, {
+                reasoning: progress.reasoning,
+                activityNotices: progress.activityNotices,
+              });
+            }
+          },
+        });
+
+        flushStreamMessage(room.id, message.id);
+        const permissionRequest = applyAlwaysPermissionIfNeeded(member.connectionId, reply.permissionRequest);
+        const recoveredContent = recoveryKind === 'continue'
+          ? [existingContent, permissionRequest ? reply.content || permissionRequest.body : reply.content].filter(Boolean).join('\n')
+          : permissionRequest ? reply.content || permissionRequest.body : reply.content;
+        const answer = stripRoomStatePatchBlocks(recoveredContent) || recoveredContent;
+        const completedMessage: ChatMessage = {
+          ...message,
+          content: answer,
+          attachments: reply.attachments.length ? reply.attachments : message.attachments,
+          reasoning: reply.reasoning,
+          activityNotices: reply.activityNotices,
+          permissionRequest,
+          status: 'sent',
+          error: undefined,
+          hermesRunId: reply.hermesRunId ?? submittedRunId,
+          hermesTransport: reply.hermesTransport,
+          hermesRunStatus: reply.hermesTransport === 'runs' ? 'completed' : undefined,
+          recoveryAttempts: nextAttempt,
+        };
+        updateMessageInRoom(room.id, message.id, completedMessage);
+        markStreamPhase(message.id, 'completed');
+        if (permissionRequest?.status === 'pending') {
+          transitionTask(message.delegationTaskId, message.delegationAttemptId, {
+            status: 'waiting_permission',
+            resultMessageId: message.id,
+            error: '等待用户确认 Agent 权限',
+          });
+        } else {
+          transitionTask(message.delegationTaskId, message.delegationAttemptId, {
+            status: 'done',
+            resultMessageId: message.id,
+            evidence: [answer.replace(/\s+/gu, ' ').trim().slice(0, 500)],
+          });
+          applyAgentRoomStatePatch(room.id, member.alias, recoveredContent, message.id);
+        }
+        if (permissionRequest?.status === 'always') {
+          void continueAgentAfterPermission(room, member, completedMessage, 'always');
+        }
+        void notifyAgentReplyFinished(room.id, completedMessage);
+      } catch (error) {
+        flushStreamMessage(room.id, message.id);
+        if (isAbortError(error)) {
+          markStreamPhase(message.id, 'cancelled');
+          updateMessageInRoom(room.id, message.id, {
+            status: 'stopped',
+            content: existingContent || '已停止生成',
+            error: undefined,
+            hermesRunStatus: submittedRunId ? 'cancelled' : undefined,
+          });
+          transitionTask(message.delegationTaskId, message.delegationAttemptId, { status: 'cancelled', resultMessageId: message.id });
+          return;
+        }
+
+        const errorMessage = getErrorMessage(error);
+        markStreamPhase(message.id, 'interrupted', errorMessage);
+        const canReattach = Boolean(submittedRunId);
+        updateMessageInRoom(room.id, message.id, {
+          status: 'interrupted',
+          streamPhase: 'interrupted',
+          content: recoveryKind === 'continue'
+            ? [existingContent, streamedContinuation].filter(Boolean).join('\n') || '续写连接已中断。'
+            : existingContent || '正在等待 Hermes 运行结果。',
+          error: canReattach
+            ? '恢复连接仍不可用，应用会继续后台核对该 Hermes 运行。'
+            : '兼容续写再次中断。为避免重复操作，请手动确认后重试。',
+          hermesRunId: submittedRunId,
+          hermesTransport: canReattach ? 'runs' : 'stream',
+          hermesRunStatus: canReattach ? 'reconnecting' : undefined,
+          recoveryAttempts: nextAttempt,
+        });
+        transitionTask(message.delegationTaskId, message.delegationAttemptId, {
+          status: canReattach ? 'outcome_unknown' : 'interrupted',
+          error: errorMessage,
+          resultMessageId: message.id,
+        });
+      } finally {
+        cleanupStream(message.id);
+        await releaseBackgroundAgentTask();
+      }
+    });
   }
 
   async function dispatchMessage(
@@ -465,6 +677,8 @@ export function useChatDispatchRuntime(options: any) {
       const startedAt = Date.now();
       let promptMessagesCount = 0;
       let accumulated = '';
+      let submittedRunId: string | undefined;
+      let selectedTransport: ChatMessage['hermesTransport'] = 'stream';
 
       if (reply.taskId) {
         transitionTask(reply.taskId, reply.delegationAttemptId, { status: 'running' });
@@ -547,6 +761,15 @@ export function useChatDispatchRuntime(options: any) {
           sessionKey: room.memberSessionKeys?.[connection.id] ?? room.sessionKey,
           timeoutMs: reply.goalMode ? 240_000 : 180_000,
           signal: controller.signal,
+          onRunSubmitted: (runId) => {
+            submittedRunId = runId;
+            selectedTransport = 'runs';
+            updateMessageInRoom(room.id, placeholder.id, {
+              hermesRunId: runId,
+              hermesTransport: 'runs',
+              hermesRunStatus: 'submitted',
+            });
+          },
           // New/imported connections may not have been probed yet. Try the
           // structured endpoint optimistically; chat_runtime falls back only
           // for explicit Responses compatibility failures. A recorded
@@ -558,6 +781,8 @@ export function useChatDispatchRuntime(options: any) {
           },
         });
         accumulated = replyResult.rawText;
+        submittedRunId = replyResult.hermesRunId ?? submittedRunId;
+        selectedTransport = replyResult.hermesTransport;
 
         flushStreamMessage(room.id, placeholder.id);
         const permissionRequest = applyAlwaysPermissionIfNeeded(reply.member.connectionId, replyResult.permissionRequest);
@@ -573,6 +798,9 @@ export function useChatDispatchRuntime(options: any) {
           delegationAttemptId: reply.delegationAttemptId,
           permissionRequest,
           status: 'sent',
+          hermesRunId: submittedRunId,
+          hermesTransport: selectedTransport,
+          hermesRunStatus: selectedTransport === 'runs' ? 'completed' : undefined,
         };
         if (reply.goalMode && reply.member.connectionId === goalLeadMember?.connectionId) {
           lastGoalTerminalMessage = completedMessage;
@@ -597,6 +825,10 @@ export function useChatDispatchRuntime(options: any) {
           delegationAttemptId: completedMessage.delegationAttemptId,
           permissionRequest,
           status: 'sent',
+          hermesRunId: submittedRunId,
+          hermesTransport: selectedTransport,
+          hermesRunStatus: selectedTransport === 'runs' ? 'completed' : undefined,
+          error: undefined,
         });
         if (permissionRequest?.status !== 'pending') {
           if (reply.goalMode && reply.member.connectionId === goalLeadMember?.connectionId) {
@@ -779,6 +1011,51 @@ export function useChatDispatchRuntime(options: any) {
           return;
         }
 
+        if (submittedRunId || isRecoverableClassicStreamError(error)) {
+          const errorMessage = getErrorMessage(error);
+          markStreamPhase(placeholder.id, 'interrupted', errorMessage);
+          const interruptedContent = accumulated.trim() || '回复连接已中断，等待恢复。';
+          const interruptedMessage: ChatMessage = {
+            ...placeholder,
+            content: interruptedContent,
+            status: 'interrupted',
+            streamPhase: 'interrupted',
+            error: submittedRunId
+              ? '与 Hermes 运行的连接已中断，将自动重新连接并核对最终结果。'
+              : '旧版 Hermes 流已中断，将发起一次安全续写。',
+            hermesRunId: submittedRunId,
+            hermesTransport: submittedRunId ? 'runs' : 'stream',
+            hermesRunStatus: submittedRunId ? 'reconnecting' : undefined,
+            recoveryAttempts: 0,
+          };
+          turnMessages.push(interruptedMessage);
+          updateMessageInRoom(room.id, placeholder.id, interruptedMessage);
+          transitionTask(reply.taskId, reply.delegationAttemptId, {
+            status: submittedRunId ? 'outcome_unknown' : 'interrupted',
+            error: errorMessage,
+            resultMessageId: placeholder.id,
+          });
+          if (reply.goalMode && reply.member.connectionId === goalLeadMember?.connectionId) {
+            lastGoalTerminalMessage = interruptedMessage;
+            goalPausedBySafety = true;
+            pauseActiveGoal(room.id, '主 Agent 的连接中断，正在等待恢复。', interruptedMessage.id);
+          }
+          appendDiagnosticLog({
+            level: 'warning',
+            category: 'chat',
+            title: 'Hermes 回复等待恢复',
+            message: errorMessage,
+            roomId: room.id,
+            roomName: room.name,
+            connectionId: connection.id,
+            connectionName: reply.member.alias,
+            requestId,
+            durationMs: Date.now() - startedAt,
+            meta: { transport: submittedRunId ? 'runs' : 'stream', receivedChars: accumulated.length },
+          });
+          return;
+        }
+
         const errorMessage = getErrorMessage(error);
         markStreamPhase(placeholder.id, 'failed', errorMessage);
         if (reply.goalMode && reply.member.connectionId === goalLeadMember?.connectionId) {
@@ -928,6 +1205,7 @@ export function useChatDispatchRuntime(options: any) {
 
   return {
     dispatchMessage,
+    resumeInterruptedReply,
     retryDelegationTask,
     streamHermesReply,
   };

@@ -114,6 +114,65 @@ export function buildChatHistory(
   ];
 }
 
+/**
+ * Builds a compatibility continuation request for gateways that do not expose
+ * durable runs. This is a new Agent turn, not transport-level replay, so the
+ * caller must avoid using it after tool activity that may have side effects.
+ */
+export function buildInterruptedReplyContinuationHistory(
+  previousMessages: ChatMessage[],
+  room: Room,
+  member: RoomMember,
+  interruptedMessage: ChatMessage,
+  connections: HermesConnection[],
+  contextLimit = DEFAULT_CONTEXT_LIMIT,
+): HermesChatMessage[] {
+  const interruptedIndex = previousMessages.findIndex((message) => message.id === interruptedMessage.id);
+  const priorMessages = interruptedIndex >= 0
+    ? previousMessages.slice(0, interruptedIndex)
+    : previousMessages;
+  const partialContent = interruptedMessage.content.trim();
+
+  const continuationInstruction = partialContent
+    ? '上一条回复因连接中断只传回了部分正文。请从中断处继续，不要重复已有正文，也不要重复已经完成的操作。'
+    : '上一条回复在正文传回前因连接中断。请基于上一条用户请求重新给出结果；不要声称继承了未返回的隐藏过程。';
+
+  if (room.kind === 'group') {
+    const sharedHistory = buildSharedGroupHistoryMessage(priorMessages, room, contextLimit);
+    return [
+      { role: 'system', content: buildGroupSystemPrompt(room, member, connections) },
+      ...(sharedHistory ? [sharedHistory] : []),
+      ...(partialContent ? [{ role: 'assistant' as const, content: partialContent }] : []),
+      { role: 'user', content: continuationInstruction },
+    ];
+  }
+
+  const directHistory = priorMessages
+    .filter((message) => message.status === 'sent' && (message.role === 'user' || message.role === 'assistant'))
+    .slice(-Math.max(1, contextLimit))
+    .map<HermesChatMessage>((message) => ({ role: message.role, content: message.content }));
+
+  return [
+    {
+      role: 'system',
+      content: [
+        buildAgentFilePromptAppendix(),
+        '',
+        '当前房间记忆胶囊：',
+        formatRoomMemoryForPrompt(room.memoryCapsule),
+        '',
+        '当前房间成长层：',
+        formatRoomGrowthForPrompt(room),
+        '',
+        formatRoomStatePatchProtocolPrompt(),
+      ].join('\n'),
+    },
+    ...directHistory,
+    ...(partialContent ? [{ role: 'assistant' as const, content: partialContent }] : []),
+    { role: 'user', content: continuationInstruction },
+  ];
+}
+
 export function buildChatHistoryForSequentialTurn(
   previousMessages: ChatMessage[],
   room: Room,

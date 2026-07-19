@@ -22,6 +22,7 @@ interface AppShellHeaderProps {
   enabledConnectionsCount: number;
   totalUnread: number;
   streamSummary: GlobalStreamSummary;
+  compact: boolean;
   isDarkMode: boolean;
   styles: Styles;
   TextComponent: ComponentType<TextProps>;
@@ -34,6 +35,7 @@ export function AppShellHeader({
   enabledConnectionsCount,
   totalUnread,
   streamSummary,
+  compact,
   isDarkMode,
   styles,
   TextComponent,
@@ -43,12 +45,12 @@ export function AppShellHeader({
 
   return (
     <>
-      <View style={[styles.header, isDarkMode && styles.headerDark]}>
-        <View style={styles.brandBlock}>
+      <View style={[styles.header, compact && styles.headerCompact, isDarkMode && styles.headerDark]}>
+        <View style={[styles.brandBlock, compact && styles.brandBlockCompact]}>
           <Text style={[styles.title, isDarkMode && styles.titleDark]}>Laphiny</Text>
           <Text style={[styles.subtitle, isDarkMode && styles.subtitleDark]}>多 Hermes 协作聊天</Text>
         </View>
-        <View style={styles.headerStats}>
+        <View style={[styles.headerStats, compact && styles.headerStatsCompact]}>
           <View style={styles.statPill}>
             <Ionicons name="chatbubbles-outline" size={14} color="#1f2937" />
             <Text style={styles.statText}>{roomsCount} 房间</Text>
