@@ -2,7 +2,7 @@ import { AgentProfileVersion, AppPreferences, ChatMessage, CollaborationEvent, D
 import { buildMessageSearchDocuments, findMessageSearchDocumentIds, type MessageSearchDocument } from '../lib/message_search';
 import { normalizeInterruptedChatMessages } from '../lib/stream_events';
 import { getDurableJson, getDurableString, migrateSecureStoreValueToDurable, removeDurableString, setDurableJson, getJson, setJson } from './kv';
-import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getInitialPageStartWithMinFill, getMessageRewriteStart, isMessagePagesIndex, MESSAGE_PAGE_SIZE, needsMessagePageRepack, splitMessagePages, type MessageHistoryInfo, type MessagePagesIndex, type MessageRoomPageIndex } from './message_pages';
+import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, isMessagePagesIndex, MESSAGE_PAGE_SIZE, needsMessagePageRepack, splitMessagePages, type MessageHistoryInfo, type MessagePagesIndex, type MessageRoomPageIndex } from './message_pages';
 
 const CONNECTIONS_KEY = 'laphiny.connections.v1';
 const ROOMS_KEY = 'laphiny.rooms.v1';
@@ -52,7 +52,7 @@ export async function loadMessages(): Promise<Record<string, ChatMessage[]>> {
   const now = new Date().toISOString();
 
   const entries = await Promise.all(Object.entries(index.rooms).map(async ([roomId, roomIndex]) => {
-    const start = getInitialPageStartWithMinFill(roomIndex);
+    const start = getInitialPageStart(roomIndex.pageCount);
     const pages = await Promise.all(Array.from({ length: roomIndex.pageCount - start }, (_, offset) => (
       readMessagePage(roomId, start + offset)
     )));
@@ -91,7 +91,7 @@ export async function loadMessageHistoryInfo(): Promise<Record<string, MessageHi
   await messageSaveChain;
   const index = await ensureMessagePagesIndex();
   return Object.fromEntries(Object.entries(index.rooms).map(([roomId, roomIndex]) => {
-    const initialStart = getInitialPageStartWithMinFill(roomIndex);
+    const initialStart = getInitialPageStart(roomIndex.pageCount);
     return [roomId, {
       totalCount: roomIndex.messageCount,
       nextOlderPage: initialStart - 1,

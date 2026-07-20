@@ -46,33 +46,6 @@ export function needsMessagePageRepack(index: MessagePagesIndex, pageSize = MESS
   return index.pageSize !== pageSize;
 }
 
-/**
- * Start page of the initial read window. Always covers whole pages and at
- * least `minFill` messages when available, so a room whose last page holds
- * only a few messages still opens with a usable window. Page lengths are
- * derived from the uniform page size, which is guaranteed after repack.
- */
-export function getInitialPageStartWithMinFill({
-  pageCount,
-  messageCount,
-  pageSize = MESSAGE_PAGE_SIZE,
-  minFill = MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT,
-}: {
-  pageCount: number;
-  messageCount: number;
-  pageSize?: number;
-  minFill?: number;
-}): number {
-  let start = getInitialPageStart(pageCount);
-  if (pageCount === 0 || start === 0) return start;
-  let filled = Math.max(0, messageCount - pageSize * (pageCount - 1));
-  while (filled < minFill && start > 0) {
-    start -= 1;
-    filled += pageSize;
-  }
-  return start;
-}
-
 export function getMessageRewriteStart(current: ChatMessage[], previousStart: number): number {
   return current.length === 0 ? 0 : previousStart;
 }

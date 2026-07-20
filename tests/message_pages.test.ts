@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getInitialPageStartWithMinFill, getMessageRewriteStart, isMessagePagesIndex, MESSAGE_PAGE_SIZE, needsMessagePageRepack, prependMessagePage, reconcileWindowedMessagesByRoom, splitMessagePages } from '../src/storage/message_pages';
+import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, isMessagePagesIndex, MESSAGE_PAGE_SIZE, needsMessagePageRepack, prependMessagePage, reconcileWindowedMessagesByRoom, splitMessagePages } from '../src/storage/message_pages';
 import type { ChatMessage } from '../src/types';
 
 function message(id: string): ChatMessage {
@@ -38,17 +38,19 @@ test('legacy pages re-split with the current page size keep every message', () =
   assert.equal(repacked.length, 25);
   assert.equal(repacked.flat().length, 500);
   assert.equal(repacked.at(-1)!.length, MESSAGE_PAGE_SIZE);
-  assert.equal(getInitialPageStartWithMinFill({ pageCount: repacked.length, messageCount: 500 }), 24);
+  assert.equal(getInitialPageStart(repacked.length), 24);
 });
 
-test('initial window fills up with whole pages when the last page is short', () => {
+test('initial window loads only the newest page even when it is short', () => {
+  // 179 messages = 8 full pages of 20 plus a 19-message tail page (page index 8).
+  assert.equal(getInitialPageStart(9), 8);
   // 502 messages = 25 full pages of 20 plus a 2-message tail page.
-  assert.equal(getInitialPageStartWithMinFill({ pageCount: 26, messageCount: 502 }), 24);
-  // A full last page needs no extra page.
-  assert.equal(getInitialPageStartWithMinFill({ pageCount: 25, messageCount: 500 }), 24);
+  assert.equal(getInitialPageStart(26), 25);
+  // A full last page maps to the last page.
+  assert.equal(getInitialPageStart(25), 24);
   // Small histories start at zero; empty rooms stay at zero.
-  assert.equal(getInitialPageStartWithMinFill({ pageCount: 1, messageCount: 7 }), 0);
-  assert.equal(getInitialPageStartWithMinFill({ pageCount: 0, messageCount: 0 }), 0);
+  assert.equal(getInitialPageStart(1), 0);
+  assert.equal(getInitialPageStart(0), 0);
 });
 
 test('does not rewrite history when the UI only prepends an older page', () => {
