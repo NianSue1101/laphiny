@@ -1,7 +1,7 @@
 import type { ChatMessage } from '../types';
 
-export const MESSAGE_PAGE_SIZE = 100;
-export const MESSAGE_INITIAL_PAGE_COUNT = 2;
+export const MESSAGE_PAGE_SIZE = 20;
+export const MESSAGE_INITIAL_PAGE_COUNT = 1;
 
 export type MessageRoomPageIndex = {
   pageCount: number;

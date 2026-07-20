@@ -55,9 +55,9 @@ test('jump-to-latest only appears when at least twenty messages are newer', () =
   assert.equal(shouldShowJumpToLatest({ messageCount: 0, lastVisibleIndex: -1 }), false);
 });
 
-test('large history keeps the initial read window fixed at two pages', () => {
+test('large history keeps the initial read window fixed at one page', () => {
   const pages = splitMessagePages(Array.from({ length: 50_000 }, (_, index) => message(String(index))), 100);
 
   assert.equal(pages.length, 500);
-  assert.equal(pages.length - getInitialPageStart(pages.length), 2);
+  assert.equal(pages.length - getInitialPageStart(pages.length), 1);
 });

@@ -17,11 +17,11 @@ function message(id: string): ChatMessage {
   };
 }
 
-test('splits long history and selects only the newest initial pages', () => {
+test('splits long history and selects only the newest initial page', () => {
   const pages = splitMessagePages(Array.from({ length: 205 }, (_, index) => message(String(index))), 100);
 
   assert.deepEqual(pages.map((page) => page.length), [100, 100, 5]);
-  assert.equal(getInitialPageStart(pages.length), 1);
+  assert.equal(getInitialPageStart(pages.length), 2);
 });
 
 test('does not rewrite history when the UI only prepends an older page', () => {
