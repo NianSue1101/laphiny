@@ -2,7 +2,7 @@ import { AgentProfileVersion, AppPreferences, ChatMessage, CollaborationEvent, D
 import { buildMessageSearchDocuments, findMessageSearchDocumentIds, type MessageSearchDocument } from '../lib/message_search';
 import { normalizeInterruptedChatMessages } from '../lib/stream_events';
 import { getDurableJson, getDurableString, migrateSecureStoreValueToDurable, removeDurableString, setDurableJson, getJson, setJson } from './kv';
-import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, isMessagePagesIndex, MESSAGE_INITIAL_PAGE_COUNT, MESSAGE_PAGE_SIZE, splitMessagePages, type MessageHistoryInfo, type MessagePagesIndex, type MessageRoomPageIndex } from './message_pages';
+import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getInitialPageStartWithMinFill, getMessageRewriteStart, isMessagePagesIndex, MESSAGE_PAGE_SIZE, needsMessagePageRepack, splitMessagePages, type MessageHistoryInfo, type MessagePagesIndex, type MessageRoomPageIndex } from './message_pages';
 
 const CONNECTIONS_KEY = 'laphiny.connections.v1';
 const ROOMS_KEY = 'laphiny.rooms.v1';
@@ -47,19 +47,17 @@ export class MessageHistoryStorageError extends Error {
 
 export async function loadMessages(): Promise<Record<string, ChatMessage[]>> {
   await migrateSecureStoreValueToDurable(MESSAGES_KEY);
+  await messageSaveChain;
   const index = await ensureMessagePagesIndex();
   const now = new Date().toISOString();
 
   const entries = await Promise.all(Object.entries(index.rooms).map(async ([roomId, roomIndex]) => {
-    const start = getInitialPageStart(roomIndex.pageCount);
+    const start = getInitialPageStartWithMinFill(roomIndex);
     const pages = await Promise.all(Array.from({ length: roomIndex.pageCount - start }, (_, offset) => (
       readMessagePage(roomId, start + offset)
     )));
     const flat = normalizeInterruptedChatMessages(pages.flat(), now);
-    const trimmed = flat.length > MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT
-      ? flat.slice(-MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT)
-      : flat;
-    return [roomId, trimmed] as const;
+    return [roomId, flat] as const;
   }));
   return Object.fromEntries(entries);
 }
@@ -93,7 +91,7 @@ export async function loadMessageHistoryInfo(): Promise<Record<string, MessageHi
   await messageSaveChain;
   const index = await ensureMessagePagesIndex();
   return Object.fromEntries(Object.entries(index.rooms).map(([roomId, roomIndex]) => {
-    const initialStart = getInitialPageStart(roomIndex.pageCount);
+    const initialStart = getInitialPageStartWithMinFill(roomIndex);
     return [roomId, {
       totalCount: roomIndex.messageCount,
       nextOlderPage: initialStart - 1,
@@ -197,6 +195,8 @@ async function writeChangedMessagePages(messagesByRoom: Record<string, ChatMessa
   await persistMessagePagesIndex({ version: 2, rooms });
 }
 
+let repackAttemptedThisSession = false;
+
 async function ensureMessagePagesIndex(): Promise<MessagePagesIndex> {
   const primaryRaw = await getDurableString(MESSAGE_PAGES_INDEX_KEY);
   const primary = parseJsonValue(primaryRaw);
@@ -214,11 +214,11 @@ async function ensureMessagePagesIndex(): Promise<MessagePagesIndex> {
 
   if (decision.source === 'primary') {
     if (!isMessagePagesIndex(backup)) await setDurableJson(MESSAGE_PAGES_INDEX_BACKUP_KEY, decision.index);
-    return decision.index;
+    return repackMessagePagesIfNeeded(decision.index);
   }
   if (decision.source === 'backup') {
     await setDurableJson(MESSAGE_PAGES_INDEX_KEY, decision.index);
-    return decision.index;
+    return repackMessagePagesIfNeeded(decision.index);
   }
   if (decision.source === 'legacy') {
     await writeAllMessagePages(decision.messages);
@@ -230,6 +230,35 @@ async function ensureMessagePagesIndex(): Promise<MessagePagesIndex> {
   }
 
   throw new MessageHistoryStorageError('消息分页索引损坏，且没有可用的备份索引；原始分页文件未被删除。');
+}
+
+/**
+ * Indexes written by older app versions used a different MESSAGE_PAGE_SIZE.
+ * Their pages must be re-split once, otherwise the windowed load/save logic
+ * would operate on mismatched page boundaries and could drop messages when
+ * the stored tail page is rewritten. On any read failure the original index
+ * is kept (windowed reads still work) and repack is not retried this session.
+ */
+async function repackMessagePagesIfNeeded(index: MessagePagesIndex): Promise<MessagePagesIndex> {
+  if (!needsMessagePageRepack(index) || repackAttemptedThisSession) return index;
+  repackAttemptedThisSession = true;
+  try {
+    const allMessages = await readAllStoredMessages(index);
+    await writeAllMessagePages(allMessages);
+  } catch {
+    return index;
+  }
+  return (await readMessagePagesIndex()) ?? index;
+}
+
+async function readAllStoredMessages(index: MessagePagesIndex): Promise<Record<string, ChatMessage[]>> {
+  const entries = await Promise.all(Object.entries(index.rooms).map(async ([roomId, roomIndex]) => {
+    const pages = await Promise.all(Array.from({ length: roomIndex.pageCount }, (_, pageIndex) => (
+      readMessagePage(roomId, pageIndex)
+    )));
+    return [roomId, pages.flat()] as const;
+  }));
+  return Object.fromEntries(entries);
 }
 
 function messagePageKey(roomId: string, pageIndex: number): string {
@@ -265,8 +294,9 @@ async function loadOrBuildSearchDocuments(roomId: string, pageIndex: number): Pr
 }
 
 async function persistMessagePagesIndex(index: MessagePagesIndex): Promise<void> {
-  await setDurableJson(MESSAGE_PAGES_INDEX_BACKUP_KEY, index);
-  await setDurableJson(MESSAGE_PAGES_INDEX_KEY, index);
+  const stamped: MessagePagesIndex = { ...index, pageSize: MESSAGE_PAGE_SIZE };
+  await setDurableJson(MESSAGE_PAGES_INDEX_BACKUP_KEY, stamped);
+  await setDurableJson(MESSAGE_PAGES_INDEX_KEY, stamped);
 }
 
 async function readMessagePagesIndex(): Promise<MessagePagesIndex | null> {

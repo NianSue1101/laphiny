@@ -10,6 +10,8 @@ export type MessageRoomPageIndex = {
 
 export type MessagePagesIndex = {
   version: 2;
+  /** Page size the stored pages were written with. Missing means a pre-0.36.1 index. */
+  pageSize?: number;
   rooms: Record<string, MessageRoomPageIndex>;
 };
 
@@ -36,6 +38,41 @@ export function getInitialPageStart(pageCount: number, initialPageCount = MESSAG
   return Math.max(0, pageCount - initialPageCount);
 }
 
+/**
+ * True when the stored pages were written with a different page size and must
+ * be re-split before the paged window logic can rely on uniform pages.
+ */
+export function needsMessagePageRepack(index: MessagePagesIndex, pageSize = MESSAGE_PAGE_SIZE): boolean {
+  return index.pageSize !== pageSize;
+}
+
+/**
+ * Start page of the initial read window. Always covers whole pages and at
+ * least `minFill` messages when available, so a room whose last page holds
+ * only a few messages still opens with a usable window. Page lengths are
+ * derived from the uniform page size, which is guaranteed after repack.
+ */
+export function getInitialPageStartWithMinFill({
+  pageCount,
+  messageCount,
+  pageSize = MESSAGE_PAGE_SIZE,
+  minFill = MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT,
+}: {
+  pageCount: number;
+  messageCount: number;
+  pageSize?: number;
+  minFill?: number;
+}): number {
+  let start = getInitialPageStart(pageCount);
+  if (pageCount === 0 || start === 0) return start;
+  let filled = Math.max(0, messageCount - pageSize * (pageCount - 1));
+  while (filled < minFill && start > 0) {
+    start -= 1;
+    filled += pageSize;
+  }
+  return start;
+}
+
 export function getMessageRewriteStart(current: ChatMessage[], previousStart: number): number {
   return current.length === 0 ? 0 : previousStart;
 }
@@ -45,10 +82,38 @@ export function prependMessagePage(current: ChatMessage[], olderPage: ChatMessag
   return [...olderPage.filter((message) => !currentIds.has(message.id)), ...current];
 }
 
+/**
+ * Applies a freshly reloaded paged window without clobbering local changes
+ * that happened while the window was being persisted and reloaded. Messages
+ * present in `latest` but not in `base` (e.g. a just-sent message) are kept;
+ * rooms cleared locally in the meantime stay cleared.
+ */
+export function reconcileWindowedMessagesByRoom({
+  latest,
+  base,
+  windowed,
+}: {
+  latest: Record<string, ChatMessage[]>;
+  base: Record<string, ChatMessage[]>;
+  windowed: Record<string, ChatMessage[]>;
+}): Record<string, ChatMessage[]> {
+  const result: Record<string, ChatMessage[]> = {};
+  for (const roomId of Object.keys(latest)) {
+    const baseIds = new Set((base[roomId] ?? []).map((message) => message.id));
+    const extras = (latest[roomId] ?? []).filter((message) => !baseIds.has(message.id));
+    const windowedMessages = windowed[roomId] ?? [];
+    result[roomId] = extras.length === 0
+      ? windowedMessages
+      : [...windowedMessages, ...extras].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+  return result;
+}
+
 export function isMessagePagesIndex(value: unknown): value is MessagePagesIndex {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
   if (record.version !== 2 || !record.rooms || typeof record.rooms !== 'object' || Array.isArray(record.rooms)) return false;
+  if (record.pageSize !== undefined && (!Number.isInteger(record.pageSize) || Number(record.pageSize) <= 0)) return false;
   return Object.values(record.rooms as Record<string, unknown>).every((roomValue) => {
     if (!roomValue || typeof roomValue !== 'object') return false;
     const room = roomValue as Record<string, unknown>;
