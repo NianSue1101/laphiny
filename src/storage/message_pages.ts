@@ -1,7 +1,7 @@
 import type { ChatMessage } from '../types';
 
-export const MESSAGE_PAGE_SIZE = 100;
-export const MESSAGE_INITIAL_PAGE_COUNT = 2;
+export const MESSAGE_PAGE_SIZE = 20;
+export const MESSAGE_INITIAL_PAGE_COUNT = 1;
 
 export type MessageRoomPageIndex = {
   pageCount: number;
@@ -10,6 +10,8 @@ export type MessageRoomPageIndex = {
 
 export type MessagePagesIndex = {
   version: 2;
+  /** Page size the stored pages were written with. Missing means a pre-0.36.1 index. */
+  pageSize?: number;
   rooms: Record<string, MessageRoomPageIndex>;
 };
 
@@ -36,6 +38,14 @@ export function getInitialPageStart(pageCount: number, initialPageCount = MESSAG
   return Math.max(0, pageCount - initialPageCount);
 }
 
+/**
+ * True when the stored pages were written with a different page size and must
+ * be re-split before the paged window logic can rely on uniform pages.
+ */
+export function needsMessagePageRepack(index: MessagePagesIndex, pageSize = MESSAGE_PAGE_SIZE): boolean {
+  return index.pageSize !== pageSize;
+}
+
 export function getMessageRewriteStart(current: ChatMessage[], previousStart: number): number {
   return current.length === 0 ? 0 : previousStart;
 }
@@ -45,10 +55,38 @@ export function prependMessagePage(current: ChatMessage[], olderPage: ChatMessag
   return [...olderPage.filter((message) => !currentIds.has(message.id)), ...current];
 }
 
+/**
+ * Applies a freshly reloaded paged window without clobbering local changes
+ * that happened while the window was being persisted and reloaded. Messages
+ * present in `latest` but not in `base` (e.g. a just-sent message) are kept;
+ * rooms cleared locally in the meantime stay cleared.
+ */
+export function reconcileWindowedMessagesByRoom({
+  latest,
+  base,
+  windowed,
+}: {
+  latest: Record<string, ChatMessage[]>;
+  base: Record<string, ChatMessage[]>;
+  windowed: Record<string, ChatMessage[]>;
+}): Record<string, ChatMessage[]> {
+  const result: Record<string, ChatMessage[]> = {};
+  for (const roomId of Object.keys(latest)) {
+    const baseIds = new Set((base[roomId] ?? []).map((message) => message.id));
+    const extras = (latest[roomId] ?? []).filter((message) => !baseIds.has(message.id));
+    const windowedMessages = windowed[roomId] ?? [];
+    result[roomId] = extras.length === 0
+      ? windowedMessages
+      : [...windowedMessages, ...extras].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+  return result;
+}
+
 export function isMessagePagesIndex(value: unknown): value is MessagePagesIndex {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
   if (record.version !== 2 || !record.rooms || typeof record.rooms !== 'object' || Array.isArray(record.rooms)) return false;
+  if (record.pageSize !== undefined && (!Number.isInteger(record.pageSize) || Number(record.pageSize) <= 0)) return false;
   return Object.values(record.rooms as Record<string, unknown>).every((roomValue) => {
     if (!roomValue || typeof roomValue !== 'object') return false;
     const room = roomValue as Record<string, unknown>;
