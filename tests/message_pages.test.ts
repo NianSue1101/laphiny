@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, isMessagePagesIndex, prependMessagePage, splitMessagePages } from '../src/storage/message_pages';
+import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, isMessagePagesIndex, MESSAGE_INITIAL_PAGE_COUNT, MESSAGE_PAGE_SIZE, prependMessagePage, splitMessagePages } from '../src/storage/message_pages';
 import type { ChatMessage } from '../src/types';
 
 function message(id: string): ChatMessage {
@@ -22,6 +22,22 @@ test('splits long history and selects only the newest initial page', () => {
 
   assert.deepEqual(pages.map((page) => page.length), [100, 100, 5]);
   assert.equal(getInitialPageStart(pages.length), 2);
+});
+
+test('legacy pages stored with larger page size are trimmed to the latest window on load', () => {
+  const legacyPages = splitMessagePages(Array.from({ length: 500 }, (_, index) => message(String(index))), 100);
+  const start = getInitialPageStart(legacyPages.length);
+  const loadedTail = legacyPages.slice(start).flat();
+  const trimmed = loadedTail.length > MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT
+    ? loadedTail.slice(-MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT)
+    : loadedTail;
+
+  assert.equal(legacyPages.length, 5);
+  assert.equal(start, 4);
+  assert.equal(loadedTail.length, 100);
+  assert.equal(trimmed.length, 20);
+  assert.equal(trimmed[0]!.id, '480');
+  assert.equal(trimmed[19]!.id, '499');
 });
 
 test('does not rewrite history when the UI only prepends an older page', () => {

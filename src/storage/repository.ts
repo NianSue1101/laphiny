@@ -55,7 +55,11 @@ export async function loadMessages(): Promise<Record<string, ChatMessage[]>> {
     const pages = await Promise.all(Array.from({ length: roomIndex.pageCount - start }, (_, offset) => (
       readMessagePage(roomId, start + offset)
     )));
-    return [roomId, normalizeInterruptedChatMessages(pages.flat(), now)] as const;
+    const flat = normalizeInterruptedChatMessages(pages.flat(), now);
+    const trimmed = flat.length > MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT
+      ? flat.slice(-MESSAGE_PAGE_SIZE * MESSAGE_INITIAL_PAGE_COUNT)
+      : flat;
+    return [roomId, trimmed] as const;
   }));
   return Object.fromEntries(entries);
 }
