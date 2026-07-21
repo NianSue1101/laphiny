@@ -34,8 +34,7 @@ import {
   requestConfirm,
   showNotice,
 } from './src/app/app_utils';
-import { reconcileWindowedMessagesByRoom } from './src/storage/message_pages';
-import { loadMessages, saveMessages } from './src/storage/repository';
+import { saveMessages } from './src/storage/repository';
 import type { MessageSearchResult, QuickCommand, ScheduledReply, StorageBackendInfo, Tab } from './src/app/app_types';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -1343,17 +1342,17 @@ export default function App() {
   }
 
   /**
-   * Merges pulled messages into paged storage first, then reloads only the
-   * latest window into memory. Applying the full remote history directly
-   * would defeat message pagination and load every message into the chat.
+   * Merges pulled messages into the in-memory room state at full resolution
+   * and persists the merged result to paged storage. The in-memory map must
+   * keep the full history so delegation and chat-history builders can read the
+   * real conversation tail; pagination is only used for storage and on-demand
+   * UI scroll-back, never for truncating the live messagesByRoom map.
    */
   function applySyncedMessagesByRoom(incoming: Record<string, ChatMessage[]> = {}) {
     setMessagesByRoom((current) => {
       const merged = mergeMessagesByRoom(current, incoming);
       void saveMessages(merged)
-        .then(() => loadMessages())
-        .then((windowed) => {
-          setMessagesByRoom((latest) => reconcileWindowedMessagesByRoom({ latest, base: merged, windowed }));
+        .then(() => {
           void messageHistoryRuntime.refreshMessageHistory();
         })
         .catch((error) => {
