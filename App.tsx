@@ -34,6 +34,7 @@ import {
   requestConfirm,
   showNotice,
 } from './src/app/app_utils';
+import { saveMessages } from './src/storage/repository';
 import type { MessageSearchResult, QuickCommand, ScheduledReply, StorageBackendInfo, Tab } from './src/app/app_types';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -1340,11 +1341,37 @@ export default function App() {
     return buildSyncSnapshotData(collectSyncSnapshotCollections());
   }
 
+  /**
+   * Merges pulled messages into the in-memory room state at full resolution
+   * and persists the merged result to paged storage. The in-memory map must
+   * keep the full history so delegation and chat-history builders can read the
+   * real conversation tail; pagination is only used for storage and on-demand
+   * UI scroll-back, never for truncating the live messagesByRoom map.
+   */
+  function applySyncedMessagesByRoom(incoming: Record<string, ChatMessage[]> = {}) {
+    setMessagesByRoom((current) => {
+      const merged = mergeMessagesByRoom(current, incoming);
+      void saveMessages(merged)
+        .then(() => {
+          void messageHistoryRuntime.refreshMessageHistory();
+        })
+        .catch((error) => {
+          appendDiagnosticLog({
+            level: 'warning',
+            category: 'sync',
+            title: '同步消息落盘失败',
+            message: getErrorMessage(error),
+          });
+        });
+      return merged;
+    });
+  }
+
   function applySyncSnapshot(snapshot: SyncSnapshot) {
     clearSyncConflictReport();
     setConnections((current) => mergeByUpdatedAt(current, snapshot.connections));
     setRooms((current) => mergeByUpdatedAt(current, snapshot.rooms));
-    setMessagesByRoom((current) => mergeMessagesByRoom(current, snapshot.messagesByRoom));
+    applySyncedMessagesByRoom(snapshot.messagesByRoom);
     setSquareEvents((current) => mergeSquareEvents([...current, ...(snapshot.squareEvents ?? [])]).slice(-300));
     if (snapshot.collaborationEvents?.length) setCollaborationEvents((current) => mergeCollaborationEvents([...current, ...(snapshot.collaborationEvents ?? [])]).slice(-500));
     if (snapshot.delegationTasks?.length) setDelegationTasks((current) => mergeDelegationTasks([...current, ...(snapshot.delegationTasks ?? [])]).slice(-200));

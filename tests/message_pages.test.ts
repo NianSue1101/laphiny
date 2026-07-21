@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, isMessagePagesIndex, prependMessagePage, splitMessagePages } from '../src/storage/message_pages';
+import { decideMessageIndexRecovery, getChangedMessageTail, getInitialPageStart, getMessageRewriteStart, isMessagePagesIndex, MESSAGE_PAGE_SIZE, needsMessagePageRepack, prependMessagePage, reconcileWindowedMessagesByRoom, splitMessagePages } from '../src/storage/message_pages';
 import type { ChatMessage } from '../src/types';
 
 function message(id: string): ChatMessage {
@@ -17,11 +17,40 @@ function message(id: string): ChatMessage {
   };
 }
 
-test('splits long history and selects only the newest initial pages', () => {
+test('splits long history and selects only the newest initial page', () => {
   const pages = splitMessagePages(Array.from({ length: 205 }, (_, index) => message(String(index))), 100);
 
   assert.deepEqual(pages.map((page) => page.length), [100, 100, 5]);
-  assert.equal(getInitialPageStart(pages.length), 1);
+  assert.equal(getInitialPageStart(pages.length), 2);
+});
+
+test('indexes written with a different page size are flagged for repack', () => {
+  assert.equal(needsMessagePageRepack({ version: 2, rooms: {} }), true);
+  assert.equal(needsMessagePageRepack({ version: 2, pageSize: 100, rooms: {} }), true);
+  assert.equal(needsMessagePageRepack({ version: 2, pageSize: MESSAGE_PAGE_SIZE, rooms: {} }), false);
+});
+
+test('legacy pages re-split with the current page size keep every message', () => {
+  const legacyPages = splitMessagePages(Array.from({ length: 500 }, (_, index) => message(String(index))), 100);
+  const repacked = splitMessagePages(legacyPages.flat());
+
+  assert.equal(legacyPages.length, 5);
+  assert.equal(repacked.length, 25);
+  assert.equal(repacked.flat().length, 500);
+  assert.equal(repacked.at(-1)!.length, MESSAGE_PAGE_SIZE);
+  assert.equal(getInitialPageStart(repacked.length), 24);
+});
+
+test('initial window loads only the newest page even when it is short', () => {
+  // 179 messages = 8 full pages of 20 plus a 19-message tail page (page index 8).
+  assert.equal(getInitialPageStart(9), 8);
+  // 502 messages = 25 full pages of 20 plus a 2-message tail page.
+  assert.equal(getInitialPageStart(26), 25);
+  // A full last page maps to the last page.
+  assert.equal(getInitialPageStart(25), 24);
+  // Small histories start at zero; empty rooms stay at zero.
+  assert.equal(getInitialPageStart(1), 0);
+  assert.equal(getInitialPageStart(0), 0);
 });
 
 test('does not rewrite history when the UI only prepends an older page', () => {
@@ -81,4 +110,37 @@ test('surfaces unrecoverable corruption instead of silently creating an empty in
   });
 
   assert.equal(decision.source, 'error');
+});
+
+test('page indexes reject invalid page size stamps', () => {
+  assert.equal(isMessagePagesIndex({ version: 2, pageSize: 20, rooms: {} }), true);
+  assert.equal(isMessagePagesIndex({ version: 2, pageSize: 0, rooms: {} }), false);
+  assert.equal(isMessagePagesIndex({ version: 2, pageSize: '20', rooms: {} }), false);
+});
+
+test('reloading a paged window keeps messages sent while reloading', () => {
+  const base = { room: [message('1'), message('2'), message('3')] };
+  const latest = { room: [...base.room, message('4')] };
+  const windowed = { room: [message('2'), message('3')] };
+
+  const reconciled = reconcileWindowedMessagesByRoom({ latest, base, windowed });
+  assert.deepEqual(reconciled.room!.map((item) => item.id), ['2', '3', '4']);
+});
+
+test('reloading a paged window applies cleanly when nothing changed locally', () => {
+  const base = { room: [message('1'), message('2')] };
+  const windowed = { room: [message('2')] };
+
+  const reconciled = reconcileWindowedMessagesByRoom({ latest: base, base, windowed });
+  assert.deepEqual(reconciled.room!.map((item) => item.id), ['2']);
+});
+
+test('reloading a paged window does not resurrect a room cleared while reloading', () => {
+  const base = { room: [message('1')], other: [message('9')] };
+  const latest = { other: [message('9')] };
+  const windowed = { room: [message('1')], other: [message('9')] };
+
+  const reconciled = reconcileWindowedMessagesByRoom({ latest, base, windowed });
+  assert.equal('room' in reconciled, false);
+  assert.deepEqual(reconciled.other!.map((item) => item.id), ['9']);
 });
